@@ -324,10 +324,15 @@ static void description(const WCHAR *ifname, WCHAR *out, size_t size)
     }
 }
 
-/* The networks in range and the saved ones, read again after 4 seconds
- * (NetworkManager scans first when its list is older than 30). */
+/* The networks in range and the saved ones, read again after 4 seconds.
+ * The list is NetworkManager's last scan, read at once; a scan older than 30
+ * seconds is made again in the background, as XP's Wireless Zero
+ * Configuration scans by itself (nmcli's "--rescan auto" waited for it: about
+ * 5 seconds before the dialog showed, past the 8 of capture() at times, and
+ * then with no networks). */
 static struct adapter *read_adapter(const WCHAR *ifname, BOOL description_only)
 {
+    static ULONGLONG scanned;
     char command[1024], ifname_utf8[64], *text, *line, *context;
     struct adapter *a = &cache;
     if (!lstrcmpW(a->ifname, ifname) && a->read && GetTickCount64() - a->read < 4000) return a;
@@ -341,8 +346,14 @@ static struct adapter *read_adapter(const WCHAR *ifname, BOOL description_only)
     WideCharToMultiByte(CP_UTF8, 0, ifname, -1, ifname_utf8, sizeof(ifname_utf8), NULL, NULL);
     a->network_count = a->saved_count = 0;
     a->connected = FALSE;
+    if (!scanned || GetTickCount64() - scanned > 30000)
+    {
+        snprintf(command, sizeof(command), "nmcli device wifi rescan ifname %s >/dev/null 2>&1", ifname_utf8);
+        spawn(command);
+        scanned = GetTickCount64();
+    }
     snprintf(command, sizeof(command),
-             "nmcli -t --escape yes -f SSID,BSSID,SIGNAL,SECURITY,IN-USE,FREQ dev wifi list ifname %s --rescan auto",
+             "nmcli -t --escape yes -f SSID,BSSID,SIGNAL,SECURITY,IN-USE,FREQ dev wifi list ifname %s --rescan no",
              ifname_utf8);
     if ((text = capture(command, 8000)))
     {
