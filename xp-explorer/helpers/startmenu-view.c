@@ -476,11 +476,13 @@ static LRESULT CALLBACK view_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM
     }
     case WM_MOUSELEAVE:
     {
-        /* A pin under the cursor takes the highlight; leaving the menu
-         * elsewhere keeps it, as in XP. */
+        /* The menu has one highlight: another part of it (a pin, All
+         * Programs, the right column) takes it; leaving the menu keeps it,
+         * as in XP. */
         POINT cursor;
         RECT bounds;
-        if (list_view && GetCursorPos(&cursor) && GetWindowRect(list_view, &bounds) && PtInRect(&bounds, cursor))
+        if (GetCursorPos(&cursor) && ((list_view && GetWindowRect(list_view, &bounds) && PtInRect(&bounds, cursor)) ||
+                                      (menu_window && GetWindowRect(menu_window, &bounds) && PtInRect(&bounds, cursor))))
             set_hover(-1);
         return 0;
     }
