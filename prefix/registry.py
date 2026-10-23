@@ -3,7 +3,7 @@ import os
 import pwd
 import struct
 
-VERSION = 28
+VERSION = 29
 FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\JapaneseXPLuna'
 # The classic fonts of a new prefix (prefix/theme-settings.c classic-initialize).
 CLASSIC_FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\XPClassic'
@@ -137,6 +137,11 @@ def install(run, exists, language='ja'):
     # the value XP fills the label background over the wallpaper.
     if not exists(advanced, 'ListviewShadow'):
         run('reg', 'add', advanced, '/v', 'ListviewShadow', '/t', 'REG_DWORD', '/d', '1', '/f')
+    # "Use a background image for each folder type", on for XP's default
+    # user: the watermarks in the corner of folder views (Search Results'
+    # magnifier). shell32 shows none without the value.
+    if not exists(advanced, 'ListviewWatermark'):
+        run('reg', 'add', advanced, '/v', 'ListviewWatermark', '/t', 'REG_DWORD', '/d', '1', '/f')
     # XP's default user profile starts with the taskbar locked: no grippers or
     # top sizing bar, 30px high at 96 DPI. Explorer writes this value when the
     # user changes the lock, so only an absent value is seeded.

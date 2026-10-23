@@ -205,6 +205,8 @@ def registry():
         for dll in ('shell32', 'shlwapi', 'comctl32', 'linkinfo', 'shdocvw', 'browseui'):
             r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll, 'native')
     r.add(advanced, 'ListviewShadow', '1', 'REG_DWORD')
+    # "Use a background image for each folder type": the folder watermarks.
+    r.add(advanced, 'ListviewWatermark', '1', 'REG_DWORD')
     r.add(advanced, 'TaskbarSizeMove', '0', 'REG_DWORD')
     # XP's task pane on the left of folder windows ("Use common tasks in folders").
     r.add(advanced, 'WebView', '1', 'REG_DWORD')
