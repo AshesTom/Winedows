@@ -30,7 +30,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '24'
+VERSION = '25'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -252,7 +252,8 @@ def themes(assets, prefix, wine):
     # made from the user's HIVEDEF.INF and themeui.dll (prefix/xp_schemes.py).
     hivedef, themeui = assets / 'inf/hivedef.inf', assets / 'cpl/themeui.dll'
     if hivedef.is_file() and themeui.is_file():
-        regedit(wine, prefix, xp_schemes.registry(xp_schemes.xpreg.read_inf(hivedef), themeui))
+        language = json.loads((prefix / 'xp-shell.json').read_text()).get('language', 'ja')
+        regedit(wine, prefix, xp_schemes.registry(xp_schemes.xpreg.read_inf(hivedef), themeui, language))
 
 
 def security_center(assets, prefix, wine, xpx):

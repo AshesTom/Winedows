@@ -16,13 +16,18 @@ the same values from the same files (the user's HIVEDEF.INF and themeui.dll):
   fonts (Font #0-#5) and 29 colors (Color #0-#28), and the menu highlight and
   menu bar colors (Color #29, #30) of the highlight and menu colors;
 - Contrast is 0, or for the High Contrast schemes (themeui's names 853-864)
-  1 on a dark window color and 2 on a light one; Flat Menus is 0.
+  1 on a dark window color and 2 on a light one; Flat Menus is 0;
+- the INF names Microsoft Sans Serif for most schemes, which has no bold face
+  (Wine makes the captions' bold up and blurs them); the classic theme's fonts
+  read on the reference machines are the language's classic font (English XP
+  Tahoma 8pt, Japanese XP MS UI Gothic 9pt, prefix/registry.py): the schemes
+  name it instead, at its height for their 8pt fonts.
 
 The Themes key's DefaultVisualStyleOn and DefaultVisualStyleOff are the
 visual style the Windows XP and Windows Classic themes turn on (Luna) and the
 classic scheme they turn to (the INF's current one, normal size).
 
-  xp_schemes.py HIVEDEF.INF THEMEUI.DLL      the .reg text, on stdout
+  xp_schemes.py HIVEDEF.INF THEMEUI.DLL [LANGUAGE]   the .reg text, on stdout
 """
 import struct
 import sys
@@ -30,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'xp-explorer/scripts'))
 import xpreg  # noqa: E402
+from registry import CLASSIC_FONTS  # noqa: E402
 
 SCHEMES = r'Control Panel\Appearance\Schemes'
 NAMES = range(850, 900)
@@ -42,6 +48,7 @@ LOGFONT = 92
 METRICS = ((8, 0), (12, 1), (16, 2), (20, 3), (24, 4), (120, 5), (124, 6), (220, 7), (224, 8))
 FONTS = (28, 128, 228, 504, 320, 412)
 COLORS = 596
+SANS_SERIF = ('Microsoft Sans Serif', 'MS Sans Serif')
 
 
 def strings(dll):
@@ -132,6 +139,18 @@ def hexes(data):
     return ','.join(f'{b:02x}' for b in data)
 
 
+def classic_font(font, language):
+    """A scheme's LOGFONTW with the language's classic face for Microsoft
+    Sans Serif, and its height for an 8pt (-11 pixel) font."""
+    face = font[28:].decode('utf-16le').split('\0', 1)[0]
+    if face not in SANS_SERIF:
+        return font
+    name, height = CLASSIC_FONTS.get(language, CLASSIC_FONTS['en'])
+    if struct.unpack_from('<i', font, 0)[0] != -11:
+        height = struct.unpack_from('<i', font, 0)[0]
+    return struct.pack('<i', height) + font[4:28] + name.encode('utf-16le').ljust(64, b'\0')
+
+
 def contrast(display, window):
     if display not in HIGH_CONTRAST:
         return 0
@@ -139,7 +158,7 @@ def contrast(display, window):
     return 2 if red + green + blue > 3 * 0x80 else 1
 
 
-def registry(inf_text, themeui):
+def registry(inf_text, themeui, language='en'):
     texts = strings(themeui)
     names = [(i, texts[i]) for i in NAMES if texts.get(i)]
     schemes = {}  # display ID -> [(size, legacy name, data)]
@@ -163,7 +182,7 @@ def registry(inf_text, themeui):
             values['DisplayName'] = f'"@themeui.dll,-{SIZES[size]}"'
             values['Flat Menus'] = 'dword:00000000'
             for i, at in enumerate(FONTS):
-                values[f'Font #{i}'] = 'hex:' + hexes(data[at:at + LOGFONT])
+                values[f'Font #{i}'] = 'hex:' + hexes(classic_font(data[at:at + LOGFONT], language))
             values['LegacyName'] = quote(legacy)
             for at, i in METRICS:
                 values[f'Size #{i}'] = 'hex(b):' + hexes(struct.pack('<q', struct.unpack_from('<i', data, at)[0]))
@@ -193,4 +212,4 @@ def xpreg_values(inf_text, key, name):
 
 
 if __name__ == '__main__':
-    sys.stdout.write(registry(xpreg.read_inf(sys.argv[1]), sys.argv[2]))
+    sys.stdout.write(registry(xpreg.read_inf(sys.argv[1]), sys.argv[2], *sys.argv[3:4]))

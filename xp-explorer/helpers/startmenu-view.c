@@ -48,6 +48,9 @@ static RECT overlay_rect;
 static BOOL overlay_positioned;
 static HINSTANCE instance;
 static HFONT item_font;
+/* The pinned list's background, which this view continues: the visual
+ * style's white, or the menu grey of Windows Classic. */
+static COLORREF list_background = CLR_NONE;
 
 /* A page in explorer's address space, for the list view messages that take
  * a pointer (item rectangles, item states). */
@@ -239,6 +242,9 @@ static void show_overlay(void)
         overlay_positioned = FALSE;
     }
     load_items();
+    DWORD_PTR background = CLR_NONE;
+    list_background = SendMessageTimeoutW(list_view, LVM_GETBKCOLOR, 0, 0, SMTO_ABORTIFHUNG, 200, &background)
+                      ? (COLORREF)background : CLR_NONE;
     top = pins_bottom();
     if (client.bottom - top < ROW_PITCH) return;
     RECT desired = { 0, top, client.right, client.bottom };
@@ -335,7 +341,14 @@ static RECT row_rect(const RECT *client, int index)
 
 static void draw_recent(HWND hwnd, HDC dc, const RECT *client)
 {
-    FillRect(dc, client, GetSysColorBrush(COLOR_WINDOW));
+    if (list_background == CLR_NONE)
+        FillRect(dc, client, GetSysColorBrush(COLOR_WINDOW));
+    else
+    {
+        HBRUSH background = CreateSolidBrush(list_background);
+        FillRect(dc, client, background);
+        DeleteObject(background);
+    }
     if (overlay_rect.top > 0) draw_separator(hwnd, dc, client->right, 0);
 
     HGDIOBJ old_font = SelectObject(dc, item_font);
