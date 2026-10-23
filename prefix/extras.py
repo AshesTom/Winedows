@@ -30,7 +30,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '25'
+VERSION = '26'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -43,6 +43,14 @@ LAYOUTS_KEY = r'System\CurrentControlSet\Control\Keyboard Layouts'
 # nusrmgr.cpl starts %SystemRoot%\system32\mshta.exe on its HTML
 # application, whose pages script shgina.dll's user objects.
 ACCOUNTS = ('nusrmgr.cpl', 'shgina.dll', 'mshta.exe')
+# XP's Add or Remove Programs (assets/appwiz) in syswow64 over Wine's
+# appwiz.cpl, native in the programs that start Control Panel items, and the
+# SP1 texts it loads. Its shell application manager enumerates the installed
+# programs; appwiz.cpl's REGINST registers it with these classes.
+APPWIZ = ('appwiz.cpl', 'xpsp1res.dll')
+APPWIZ_CLASSES = (('{352EC2B7-8B9A-11D1-B8AE-006008059382}', 'Shell Application Manager'),
+                  ('{0B124F8F-91F0-11D1-B8B5-006008059382}', 'Installed Apps Enumerator'),
+                  ('{CFCCC7A0-A282-11D1-9082-006008059382}', 'Darwin App Publisher'))
 # XP's Network Connections folder in syswow64: netshell.dll (assets/tray) and
 # the XP libraries it loads (assets/netcon), with ours for the dialogs it
 # loads that Wine has as stubs or not at all (.local/bridge/netcon), native in
@@ -86,6 +94,19 @@ def registry(xpx):
         r.add(r'HKCU\Software\Wine\AppDefaults\rundll32.exe\DllOverrides', dll, 'native,builtin')
     for dll in INTL_NATIVE:
         r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', dll, 'native')
+    # Add or Remove Programs, from the Control Panel (rundll32) and from Set
+    # Program Access and Defaults, which runs control.exe appwiz.cpl,,3 (Wine's
+    # control.exe, which loads the item in its own process).
+    r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', 'appwiz.cpl', 'native')
+    r.add(r'HKCU\Software\Wine\AppDefaults\rundll32.exe\DllOverrides', 'appwiz.cpl', 'native,builtin')
+    for dll in xpx.NATIVE + cpl + ('appwiz.cpl',):
+        r.add(r'HKCU\Software\Wine\AppDefaults\control.exe\DllOverrides', dll, 'native,builtin')
+    for clsid, name in APPWIZ_CLASSES:
+        r.add('HKCR\\CLSID\\' + clsid, None, name)
+        r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', None, r'%SystemRoot%\system32\appwiz.cpl',
+              'REG_EXPAND_SZ')
+        r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', 'ThreadingModel', 'Apartment')
+        r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved', clsid, name)
     # User Accounts: XP's mshta.exe instead of Wine's stub, with IE6's engine,
     # XP's shell32 (the account picture) and themeui (Theme.Manager, which
     # picks the Luna style sheet of its pages) native in it.
@@ -220,6 +241,9 @@ def copy_files(assets, prefix):
     if (assets / 'accounts/nusrmgr.cpl').is_file():
         for name in ACCOUNTS:
             shutil.copyfile(assets / 'accounts' / name, native / name)
+    if (assets / 'appwiz/appwiz.cpl').is_file():
+        for name in APPWIZ:
+            shutil.copyfile(assets / 'appwiz' / name, native / name)
     if (assets / 'netcon/wzcdlg.dll').is_file() and (assets / 'tray/netshell.dll').is_file():
         for name in NETCON:
             shutil.copyfile(assets / ('tray' if name == 'netshell.dll' else 'netcon') / name, native / name)
@@ -393,6 +417,15 @@ def start_menu_programs(assets, prefix, wine, xpx):
                         ('method', 'ShellExecute'), ('Param1', 'appwiz.cpl,,3'), ('Param2', 'control.exe')):
         r.add(bag, name, value)
     r.add(clsid + r'\ShellFolder', 'Attributes', '0', 'REG_DWORD')
+    # Its own context menu (shdocvw's automation menu above) gives the item
+    # its default command; without it the Start menu's click offered to
+    # create a shortcut instead ("Windows cannot create a shortcut here").
+    r.add(clsid + r'\shellex\ContextMenuHandlers\{2559a1f7-21d7-11d4-bdaf-00c04f60b9f0}', None, '')
+    r.add(clsid + r'\shellex\MayChangeDefaultMenu', None, '')
+    # The SP1 texts that shell.inf names, with XP's Add or Remove Programs.
+    if (assets / 'appwiz/xpsp1res.dll').is_file():
+        r.add(clsid, 'LocalizedString', '@xpsp1res.dll,-10077')
+        r.add(clsid, 'InfoTip', '@xpsp1res.dll,-10078')
     r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved',
           '{2559a1f7-21d7-11d4-bdaf-00c04f60b9f0}', 'Set Program Access and Defaults')
     r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion', 'SM_ConfigureProgramsName', 'Set Program Access and Defaults')
@@ -479,7 +512,7 @@ def stage(prefix, xpx=None):
             temporary.replace(target)
     system = prefix / 'drive_c/windows/syswow64'
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
-    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + (NETCON if netcon else ())]
+    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + (NETCON if netcon else ())]
     sources += [BRIDGE / 'netcon' / name for name in NETCON_BRIDGE] if netcon else []
     for source in sources:
         name, target = source.name, system / source.name
