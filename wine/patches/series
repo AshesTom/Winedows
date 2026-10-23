@@ -163,5 +163,6 @@
 0163-button-hide-access-keys.patch
 0164-win32u-external-foreign-child-flush.patch
 0165-win32u-external-font-smoothing-change.patch
-0166-win32u-external-xp-standard-v35-hinting.patch
-0167-user32-external-xp-messagebox-sounds.patch
+0166-win32u-external-sys-colors-metrics-change.patch
+0167-win32u-external-xp-standard-v35-hinting.patch
+0168-user32-external-xp-messagebox-sounds.patch

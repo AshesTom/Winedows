@@ -1,0 +1,128 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] win32u: apply new system colours and window metrics at once in the external shell
+
+Purpose: switching between Windows XP style and Windows Classic style in
+Display Properties changes the colours and the frames of every program's
+windows when it is applied, as on XP: the taskbar and the Start menu, the
+selection, the dialogs' background, the caption and its buttons.
+XP behavior: SetSysColors and SystemParametersInfo with
+SPI_SETNONCLIENTMETRICS apply to every program at once; the windows are
+drawn again with the new colours and framed again for the new borders,
+captions and caption buttons.
+Wine before: each process reads the system colours and the window metrics
+once and keeps them. Only the program that changed them (Display
+Properties) used the new ones: after Windows Classic style the taskbar,
+the Start menu and the folder windows kept Luna's colours, selection and
+large caption buttons; after Windows XP style they kept the classic grey.
+Change: with the opt-in, a window procedure's WM_SYSCOLORCHANGE (the
+broadcast that SetSysColors sends) makes its process read the system
+colours again, and WM_SETTINGCHANGE with SPI_SETNONCLIENTMETRICS the
+borders, captions, menus, scroll bars and their fonts; a top-level window
+with a frame or scroll bars is framed again (SWP_FRAMECHANGED).
+Evidence: in the nested X11 session, Windows Classic style turned the
+taskbar, the Start menu and its selection grey and navy and the caption
+buttons of an open folder window small; Windows XP style turned the Run
+dialog beige with Luna's blue selection again.
+Scope: WIN4WINE_EXTERNAL_SHELL.
+---
+ dlls/win32u/message.c        | 12 +++++++++
+ dlls/win32u/sysparams.c      | 49 ++++++++++++++++++++++++++++++++++++
+ dlls/win32u/win32u_private.h |  2 ++
+ 3 files changed, 63 insertions(+)
+
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+index 96e3f6a..e1929e1 100644
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -2387,6 +2387,18 @@ static LRESULT call_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
+          wparam == SPI_SETFONTSMOOTHINGCONTRAST || wparam == SPI_SETFONTSMOOTHINGORIENTATION))
+         font_smoothing_changed();
+ 
++    /* Display Properties changed the colours or the window metrics: XP draws
++     * every program's windows with them at once, and frames them again for
++     * the new borders and captions. */
++    if (msg == WM_SYSCOLORCHANGE && win4wine_external_shell()) sys_colors_changed();
++    if (msg == WM_SETTINGCHANGE && wparam == SPI_SETNONCLIENTMETRICS && win4wine_external_shell())
++    {
++        nonclient_metrics_changed();
++        if (get_window_long( hwnd, GWL_STYLE ) & (WS_CAPTION | WS_THICKFRAME | WS_VSCROLL | WS_HSCROLL))
++            NtUserSetWindowPos( hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
++                                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED );
++    }
++
+     /* A notify message's string (a broadcast WM_SETTINGCHANGE) was unpacked into a buffer of
+      * ours, which a 32-bit window procedure cannot reach: copy it as from another process. */
+     packed_size = user_message_size( hwnd, msg, wparam, lparam,
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 47e7138..3553d22 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -5973,6 +5973,55 @@ static BOOL update_desktop_wallpaper(void)
+     return TRUE;
+ }
+ 
++/* XP's Display Properties change the colours and the window metrics of every
++ * program at once, but each process reads them once: another program changed
++ * them (its broadcast WM_SYSCOLORCHANGE), read them again. */
++void sys_colors_changed(void)
++{
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE( system_colors ); i++)
++    {
++        union sysparam_all_entry *entry = (union sysparam_all_entry *)&system_colors[i];
++        COLORREF old = entry->rgb.val, color;
++        HBRUSH brush;
++        HPEN pen;
++
++        if (!entry->hdr.loaded) continue;
++        entry->hdr.loaded = FALSE;
++        get_entry( entry, 0, &color );
++        if (color == old) continue;
++        if ((brush = InterlockedExchangePointer( (void **)&entry->rgb.brush, 0 )))
++        {
++            make_gdi_object_system( brush, FALSE );
++            NtGdiDeleteObjectApp( brush );
++        }
++        if ((pen = InterlockedExchangePointer( (void **)&entry->rgb.pen, 0 )))
++        {
++            make_gdi_object_system( pen, FALSE );
++            NtGdiDeleteObjectApp( pen );
++        }
++    }
++}
++
++/* The same for the window metrics (WM_SETTINGCHANGE with
++ * SPI_SETNONCLIENTMETRICS): the borders, captions, caption buttons, menus,
++ * scroll bars and their fonts. */
++void nonclient_metrics_changed(void)
++{
++    static union sysparam_all_entry * const entries[] =
++    {
++        &entry_BORDER, &entry_PADDEDBORDERWIDTH, &entry_CAPTIONWIDTH, &entry_CAPTIONHEIGHT,
++        &entry_SMCAPTIONWIDTH, &entry_SMCAPTIONHEIGHT, &entry_MENUWIDTH, &entry_MENUHEIGHT,
++        &entry_SCROLLWIDTH, &entry_SCROLLHEIGHT, &entry_CAPTIONLOGFONT, &entry_SMCAPTIONLOGFONT,
++        &entry_MENULOGFONT, &entry_STATUSLOGFONT, &entry_MESSAGELOGFONT, &entry_ICONTITLELOGFONT,
++        &entry_USERPREFERENCESMASK,
++    };
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE( entries ); i++) entries[i]->hdr.loaded = FALSE;
++}
++
+ /***********************************************************************
+  *	     NtUserSystemParametersInfoForDpi   (win32u.@)
+  */
+diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
+index 9651f6f..3881e52 100644
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -188,6 +188,8 @@ extern HMONITOR monitor_from_window( HWND hwnd, UINT flags, UINT dpi );
+ extern MONITORINFO monitor_info_from_rect( RECT rect, UINT dpi );
+ extern MONITORINFO monitor_info_from_window( HWND hwnd, UINT flags );
+ extern UINT monitor_dpi_from_rect( RECT rect, UINT dpi, UINT *raw_dpi );
++extern void nonclient_metrics_changed(void);
++extern void sys_colors_changed(void);
+ extern BOOL update_display_cache( BOOL force );
+ extern void reset_monitor_update_serial(void);
+ extern void user_lock(void);

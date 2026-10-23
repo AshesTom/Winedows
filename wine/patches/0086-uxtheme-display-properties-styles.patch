@@ -5,28 +5,120 @@ Purpose: let XP's Display Properties (themeui.dll) preview and apply visual
 styles: Luna in its colours, other .msstyles files, and Windows Classic.
 XP behavior: themeui opens classes of a theme file that is not active yet
 (OpenThemeDataFromFile), draws its samples with DrawNCPreview and applies
-the choice with SetSystemVisualStyle.
+the choice with SetSystemVisualStyle. Before applying a style it reads the
+style's colours, sizes and fonts with GetThemeSysColor, GetThemeSysSize and
+GetThemeSysFont on such a class, and sets them with SetSysColors and
+SPI_SETNONCLIENTMETRICS after the style.
 Wine before: the first two were unimplemented stubs, which abort the
-program, and ordinal 65 did not exist.
+program, and ordinal 65 did not exist. The GetThemeSys* functions looked
+the metric up in the active theme whatever the handle: from the classic
+look they returned the classic colours and sizes, which themeui then set
+over the style's (Windows XP style kept the grey windows, the classic
+selection and the classic caption).
 Change: open a class from any opened theme file (its classes are read
 without touching the system metrics); SetSystemVisualStyle opens and
 applies the file, or the classic look without one; DrawNCPreview draws an
 inactive window, an active window and a message box with the style's WINDOW
 and BUTTON classes, or classic frames; GetThemeParseErrorInfo reports no
-details instead of aborting.
-Scope: every Wine application (these were stubs or missing).
+details instead of aborting; GetThemeSysBool, GetThemeSysColor,
+GetThemeSysFont, GetThemeSysInt, GetThemeSysSize and GetThemeSysString read
+the metrics of the theme file the class belongs to.
+Scope: every Wine application (these were stubs or missing; the metrics of
+a class of the active theme are the active theme's, as before).
 ---
- dlls/uxtheme/msstyles.c   |  35 +++++--
- dlls/uxtheme/msstyles.h   |   1 +
- dlls/uxtheme/system.c     | 257 ++++++++++++++++++++++++++++++++++++++++++++++
+ dlls/uxtheme/metric.c     |  12 +-
+ dlls/uxtheme/msstyles.c   |  51 ++++++--
+ dlls/uxtheme/msstyles.h   |   2 +
+ dlls/uxtheme/system.c     | 257 ++++++++++++++++++++++++++++++++++++++
  dlls/uxtheme/uxtheme.spec |   7 +-
- 4 files changed, 287 insertions(+), 13 deletions(-)
+ 5 files changed, 310 insertions(+), 19 deletions(-)
 
+diff --git a/dlls/uxtheme/metric.c b/dlls/uxtheme/metric.c
+index c2edc1f..7d02614 100644
+--- a/dlls/uxtheme/metric.c
++++ b/dlls/uxtheme/metric.c
+@@ -46,7 +46,7 @@ BOOL WINAPI GetThemeSysBool(HTHEME hTheme, int iBoolID)
+     TRACE("(%p, %d)\n", hTheme, iBoolID);
+     SetLastError(0);
+     if(hTheme) {
+-        if((tp = MSSTYLES_FindMetric(TMT_BOOL, iBoolID))) {
++        if((tp = MSSTYLES_FindThemeMetric(hTheme, TMT_BOOL, iBoolID))) {
+             hr = MSSTYLES_GetPropertyBool(tp, &ret);
+             if(SUCCEEDED(hr))
+                 return ret;
+@@ -77,7 +77,7 @@ COLORREF WINAPI GetThemeSysColor(HTHEME hTheme, int iColorID)
+     SetLastError(0);
+     if(hTheme) {
+         if(iColorID >= 0 && iColorID <= TMT_LASTCOLOR - TMT_FIRSTCOLOR
+-           && (tp = MSSTYLES_FindMetric(TMT_COLOR, TMT_FIRSTCOLOR + iColorID))) {
++           && (tp = MSSTYLES_FindThemeMetric(hTheme, TMT_COLOR, TMT_FIRSTCOLOR + iColorID))) {
+             COLORREF color;
+             hr = MSSTYLES_GetPropertyColor(tp, &color);
+             if(SUCCEEDED(hr))
+@@ -108,7 +108,7 @@ HRESULT WINAPI GetThemeSysFont(HTHEME hTheme, int iFontID, LOGFONTW *plf)
+ 
+     TRACE("(%p, %d)\n", hTheme, iFontID);
+     if(hTheme) {
+-        if((tp = MSSTYLES_FindMetric(TMT_FONT, iFontID))) {
++        if((tp = MSSTYLES_FindThemeMetric(hTheme, TMT_FONT, iFontID))) {
+             HDC hdc = GetDC(NULL);
+             hr = MSSTYLES_GetPropertyFont(tp, hdc, plf);
+             if (SUCCEEDED(hr)) UXTHEME_GetExternalFont(hTheme, hdc, iFontID, plf);
+@@ -155,7 +155,7 @@ HRESULT WINAPI GetThemeSysInt(HTHEME hTheme, int iIntID, int *piValue)
+         WARN("Unknown IntID: %d\n", iIntID);
+         return STG_E_INVALIDPARAMETER;
+     }
+-    if((tp = MSSTYLES_FindMetric(TMT_INT, iIntID)))
++    if((tp = MSSTYLES_FindThemeMetric(hTheme, TMT_INT, iIntID)))
+         return MSSTYLES_GetPropertyInt(tp, piValue);
+     return E_PROP_ID_UNSUPPORTED;
+ }
+@@ -189,7 +189,7 @@ int WINAPI GetThemeSysSize(HTHEME hTheme, int iSizeID)
+         }
+         SetLastError(0);
+         if(id != -1) {
+-            if((tp = MSSTYLES_FindMetric(TMT_SIZE, id))) {
++            if((tp = MSSTYLES_FindThemeMetric(hTheme, TMT_SIZE, id))) {
+                 if(SUCCEEDED(MSSTYLES_GetPropertyInt(tp, &i))) {
+                     return i;
+                 }
+@@ -219,7 +219,7 @@ HRESULT WINAPI GetThemeSysString(HTHEME hTheme, int iStringID,
+         WARN("Unknown StringID: %d\n", iStringID);
+         return STG_E_INVALIDPARAMETER;
+     }
+-    if((tp = MSSTYLES_FindMetric(TMT_STRING, iStringID)))
++    if((tp = MSSTYLES_FindThemeMetric(hTheme, TMT_STRING, iStringID)))
+         return MSSTYLES_GetPropertyString(tp, pszStringBuff, cchMaxStringChars);
+     return E_PROP_ID_UNSUPPORTED;
+ }
 diff --git a/dlls/uxtheme/msstyles.c b/dlls/uxtheme/msstyles.c
-index 601b3d2..1b469c2 100644
+index 601b3d2..d9f81cb 100644
 --- a/dlls/uxtheme/msstyles.c
 +++ b/dlls/uxtheme/msstyles.c
-@@ -1212,6 +1212,22 @@ static void parse_app_class_name(LPCWSTR name, LPWSTR app_name, LPWSTR class_nam
+@@ -647,6 +647,22 @@ PTHEME_PROPERTY MSSTYLES_FindMetric(int iPropertyPrimitive, int iPropertyId)
+     return MSSTYLES_FFindMetric(tfActiveTheme, iPropertyPrimitive, iPropertyId);
+ }
+ 
++/***********************************************************************
++ *      MSSTYLES_FindThemeMetric
++ *
++ * Find a metric property for the theme file of a class, which need not be
++ * the active theme: XP's Display Properties read the colours, sizes and
++ * fonts of a style they switch to from one opened with OpenThemeDataFromFile.
++ */
++PTHEME_PROPERTY MSSTYLES_FindThemeMetric(HTHEME hTheme, int iPropertyPrimitive, int iPropertyId)
++{
++    PTHEME_CLASS tc = (PTHEME_CLASS)hTheme;
++
++    if(tc && tc->signature == THEME_CLASS_SIGNATURE && tc->tf)
++        return MSSTYLES_FFindMetric(tc->tf, iPropertyPrimitive, iPropertyId);
++    return MSSTYLES_FindMetric(iPropertyPrimitive, iPropertyId);
++}
++
+ /***********************************************************************
+  *      MSSTYLES_AddProperty
+  *
+@@ -1212,6 +1228,22 @@ static void parse_app_class_name(LPCWSTR name, LPWSTR app_name, LPWSTR class_nam
   *     dpi                 DPI for theme parts
   */
  PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, UINT dpi)
@@ -49,7 +141,7 @@ index 601b3d2..1b469c2 100644
  {
      PTHEME_CLASS cls = NULL;
      WCHAR buf[MAX_THEME_APP_NAME + MAX_THEME_CLASS_NAME];
-@@ -1221,11 +1237,10 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
+@@ -1221,11 +1253,10 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
      LPCWSTR end;
      DWORD len;
  
@@ -65,7 +157,7 @@ index 601b3d2..1b469c2 100644
  	return NULL;
      }
  
-@@ -1241,9 +1256,9 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
+@@ -1241,9 +1272,9 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
          if (szAppName[0] && pszAppName)
              return NULL;
  
@@ -77,7 +169,7 @@ index 601b3d2..1b469c2 100644
  
          if(cls) break;
      }
-@@ -1254,13 +1269,13 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
+@@ -1254,13 +1285,13 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
          if (szAppName[0] && pszAppName)
              return NULL;
  
@@ -95,7 +187,7 @@ index 601b3d2..1b469c2 100644
          InterlockedIncrement(&cls->refcount);
          cls->dpi = dpi;
 diff --git a/dlls/uxtheme/msstyles.h b/dlls/uxtheme/msstyles.h
-index e0916bd..264014d 100644
+index e0916bd..4346f5b 100644
 --- a/dlls/uxtheme/msstyles.h
 +++ b/dlls/uxtheme/msstyles.h
 @@ -96,6 +96,7 @@ HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWST
@@ -106,6 +198,14 @@ index e0916bd..264014d 100644
  HRESULT MSSTYLES_CloseThemeClass(PTHEME_CLASS tc);
  BOOL MSSTYLES_LookupProperty(LPCWSTR pszPropertyName, int *dwPrimitive, int *dwId);
  BOOL MSSTYLES_LookupEnum(LPCWSTR pszValueName, int dwEnum, int *dwValue);
+@@ -110,6 +111,7 @@ PTHEME_PARTSTATE MSSTYLES_FindPart(PTHEME_CLASS tc, int iPartId);
+ PTHEME_PARTSTATE MSSTYLES_FindPartState(PTHEME_CLASS tc, int iPartId, int iStateId, PTHEME_CLASS *tcNext);
+ PTHEME_PROPERTY MSSTYLES_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId, int iPropertyPrimitive, int iPropertyId);
+ PTHEME_PROPERTY MSSTYLES_FindMetric(int iPropertyPrimitive, int iPropertyId);
++PTHEME_PROPERTY MSSTYLES_FindThemeMetric(HTHEME hTheme, int iPropertyPrimitive, int iPropertyId);
+ HBITMAP MSSTYLES_LoadBitmap(PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha, BOOL *hasDefaultTransparentColour);
+ 
+ HRESULT MSSTYLES_GetPropertyBool(PTHEME_PROPERTY tp, BOOL *pfVal);
 diff --git a/dlls/uxtheme/system.c b/dlls/uxtheme/system.c
 index 4eb7f9b..efaeca3 100644
 --- a/dlls/uxtheme/system.c
