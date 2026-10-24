@@ -30,7 +30,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '26'
+VERSION = '27'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -48,6 +48,10 @@ ACCOUNTS = ('nusrmgr.cpl', 'shgina.dll', 'mshta.exe')
 # SP1 texts it loads. Its shell application manager enumerates the installed
 # programs; appwiz.cpl's REGINST registers it with these classes.
 APPWIZ = ('appwiz.cpl', 'xpsp1res.dll')
+# Internet Options and Automatic Updates, the Control Panel items of the
+# Security Center's category (10) with Windows Firewall, which needs XP's
+# firewall service and is left out.
+SECURITY = ('inetcpl.cpl', 'inetcplc.dll', 'wuaucpl.cpl')
 APPWIZ_CLASSES = (('{352EC2B7-8B9A-11D1-B8AE-006008059382}', 'Shell Application Manager'),
                   ('{0B124F8F-91F0-11D1-B8B5-006008059382}', 'Installed Apps Enumerator'),
                   ('{CFCCC7A0-A282-11D1-9082-006008059382}', 'Darwin App Publisher'))
@@ -94,13 +98,12 @@ def registry(xpx):
         r.add(r'HKCU\Software\Wine\AppDefaults\rundll32.exe\DllOverrides', dll, 'native,builtin')
     for dll in INTL_NATIVE:
         r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', dll, 'native')
-    # Add or Remove Programs, from the Control Panel (rundll32) and from Set
-    # Program Access and Defaults, which runs control.exe appwiz.cpl,,3 (Wine's
-    # control.exe, which loads the item in its own process).
-    r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', 'appwiz.cpl', 'native')
-    r.add(r'HKCU\Software\Wine\AppDefaults\rundll32.exe\DllOverrides', 'appwiz.cpl', 'native,builtin')
-    for dll in xpx.NATIVE + cpl + ('appwiz.cpl',):
-        r.add(r'HKCU\Software\Wine\AppDefaults\control.exe\DllOverrides', dll, 'native,builtin')
+    # Add or Remove Programs and the Security Center's items, from the Control
+    # Panel and from control.exe, which hands them to rundll32 (Wine patch 0171).
+    for program in ('xp-explorer.exe', 'rundll32.exe'):
+        for dll in ('appwiz.cpl', 'inetcpl.cpl', 'inetcplc', 'wuaucpl.cpl'):
+            r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll,
+                  'native' if program == 'xp-explorer.exe' else 'native,builtin')
     for clsid, name in APPWIZ_CLASSES:
         r.add('HKCR\\CLSID\\' + clsid, None, name)
         r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', None, r'%SystemRoot%\system32\appwiz.cpl',
@@ -244,6 +247,9 @@ def copy_files(assets, prefix):
     if (assets / 'appwiz/appwiz.cpl').is_file():
         for name in APPWIZ:
             shutil.copyfile(assets / 'appwiz' / name, native / name)
+    if (assets / 'security/wuaucpl.cpl').is_file():
+        for name in SECURITY:
+            shutil.copyfile(assets / 'security' / name, native / name)
     if (assets / 'netcon/wzcdlg.dll').is_file() and (assets / 'tray/netshell.dll').is_file():
         for name in NETCON:
             shutil.copyfile(assets / ('tray' if name == 'netshell.dll' else 'netcon') / name, native / name)
@@ -319,6 +325,12 @@ def security_center(assets, prefix, wine, xpx):
     r.add(services + 'TermService', 'Start', '2', 'REG_DWORD')
     r.add(r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost', 'wscsvc',
           ['SharedAccess', 'wscsvc'], 'REG_MULTI_SZ')
+    # As XP's netsvcs group, which runs them there: its services' threads use
+    # COM (the Security Center asks Automatic Updates' settings through it).
+    r.add(r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost\wscsvc', 'CoInitializeSecurityParam', '1',
+          'REG_DWORD')
+    # XP's Automatic Updates service starts with the system.
+    r.add(services + 'wuauserv', 'Start', '2', 'REG_DWORD')
     for dll in ('hnetcfg', 'netshell'):
         r.add(r'HKCU\Software\Wine\AppDefaults\svchost.exe\DllOverrides', dll, 'native')
     regedit(wine, prefix, r.text())
@@ -328,6 +340,17 @@ def security_center(assets, prefix, wine, xpx):
     subprocess.run([wine, 'reg', 'add', r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost', '/v', 'wscsvc',
                     '/t', 'REG_MULTI_SZ', '/d', 'SharedAccess\\0wscsvc', '/f', '/reg:64'], env=env, check=True,
                    stdout=subprocess.DEVNULL)
+    subprocess.run([wine, 'reg', 'add', r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost\wscsvc', '/v',
+                    'CoInitializeSecurityParam', '/t', 'REG_DWORD', '/d', '1', '/f', '/reg:64'], env=env, check=True,
+                   stdout=subprocess.DEVNULL)
+    # Automatic Updates set to the recommended setting (Automatic), which XP's
+    # setup offers, unless chosen otherwise; the Windows Update Agent reads it
+    # from the 64-bit view.
+    auto_update = r'HKLM\Software\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update'
+    if subprocess.run([wine, 'reg', 'query', auto_update, '/v', 'AUOptions', '/reg:64'], env=env,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        subprocess.run([wine, 'reg', 'add', auto_update, '/v', 'AUOptions', '/t', 'REG_DWORD', '/d', '4', '/f',
+                        '/reg:64'], env=env, check=False, stdout=subprocess.DEVNULL)
 
 
 def user_accounts(prefix, wine):
@@ -466,7 +489,7 @@ def xp_user_defaults(prefix, wine):
 # Options, 7 Accessibility Options, 8 Add or Remove Programs, 9 User Accounts,
 # 10 Security Center. XP's shell32 knows its own applets' only under
 # %SystemRoot%\system32, which a 32-bit process here sees as syswow64.
-CPL_CATEGORIES = {'access.cpl': 7, 'appwiz.cpl': 8, 'desk.cpl': 1, 'hdwwiz.cpl': 2, 'inetcpl.cpl': 3,
+CPL_CATEGORIES = {'access.cpl': 7, 'appwiz.cpl': 8, 'desk.cpl': 1, 'hdwwiz.cpl': 2, 'inetcpl.cpl': '3,10',
                   'intl.cpl': 6, 'joy.cpl': 2, 'main.cpl': 2, 'mmsys.cpl': 4, 'ncpa.cpl': 3,
                   'nusrmgr.cpl': 9, 'powercfg.cpl': 5, 'sapi.cpl': 4, 'sysdm.cpl': 5, 'telephon.cpl': 2,
                   'timedate.cpl': 6, 'wuaucpl.cpl': 10, 'wscui.cpl': -1}
@@ -482,10 +505,19 @@ def control_panel(assets, prefix, wine, xpx):
     category = (r'HKLM\Software\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties'
                 r'\{305CA226-D286-468e-B848-2B2E8E697B74} 2')
     r = xpx.Reg()
+    # A list of categories is a string, as HIVESFT.INF has Windows Firewall's ("3,10").
     for name, number in CPL_CATEGORIES.items():
         for folder in ('system32', 'syswow64'):
-            r.add(category, rf'C:\windows\{folder}\{name}', str(number & 0xffffffff), 'REG_DWORD')
-    texts = [r.text()]
+            if isinstance(number, str):
+                r.add(category, rf'C:\windows\{folder}\{name}', number)
+            else:
+                r.add(category, rf'C:\windows\{folder}\{name}', str(number & 0xffffffff), 'REG_DWORD')
+    # XP's shell32 keeps the items' names in a cache, which it does not read
+    # again for items that changed (Wine's "Internet Settings" stayed).
+    texts_cache = 'Windows Registry Editor Version 5.00\r\n\r\n' \
+        '[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Controls Folder]\r\n' \
+        '"Presentation Cache"=-\r\n'
+    texts = [r.text(), texts_cache]
     text = xpreg.reginst(assets / 'system32/shell32.dll')
     module = {'_SYS_MOD_PATH': r'%SystemRoot%\system32\shell32.dll', '_MOD_PATH': r'%SystemRoot%\system32\shell32.dll'}
     namespace = r'Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel\NameSpace'
@@ -512,7 +544,8 @@ def stage(prefix, xpx=None):
             temporary.replace(target)
     system = prefix / 'drive_c/windows/syswow64'
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
-    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + (NETCON if netcon else ())]
+    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY +
+               (NETCON if netcon else ())]
     sources += [BRIDGE / 'netcon' / name for name in NETCON_BRIDGE] if netcon else []
     for source in sources:
         name, target = source.name, system / source.name

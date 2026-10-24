@@ -1,6 +1,6 @@
 # Wine のパッチ
 
-`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 168 本のパッチがあります。
+`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 171 本のパッチがあります。
 当てるのは `wine/build.sh` で、実際の適用は `wine/patch-state.py` が行います（途中まで当たったソースにも、足りない分だけを当てます）。
 
 番号の付け直しや、以前の番号との対応表は [history/patch-history.md](history/patch-history.md) にあります。
@@ -13,7 +13,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 
 - 判定は 0019 が加える `include/wine/win4wine.h` の `win4wine_external_shell()` に 1 つにまとめています。
   ntdll は Rtl の関数で、wow64.dll（0023）は ntdll の関数で同じ変数を読みます。
-- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163）、普通のアプリの見た目と動作を変えない 0025・0026、
+- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169）、普通のアプリの見た目と動作を変えない 0025・0026、
   Windows 7 のシェルが呼ぶ API と Wine の修正（0094〜0112）の多くと、版 4 のスタイルでだけ効くテーマの修正（0113〜0119）です。
 - 0024 は `WIN4WINE_SESSION_REQUEST` があるときだけ効きます。
 - 0090 は、さらに `WIN4WINE_FOLDER_SHELL` があるときだけ効きます（ReactOS のシェルのセッションだけが設定します）。
@@ -64,7 +64,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 | 0020 | explorer: シェルのウィンドウと endpoint を外部のシェルに任せる | あり |
 | 0021 | kernelbase: explorer.exe の名前を、名前を変えた XP のシェルに解決する | あり |
 | 0022 | ntdll: comctl32 を実行ファイルの隣から読ませる | あり |
-| 0023 | wow64: XP のシェルに WOW64 で動いていることを知らせない | あり（XP の explorer だけ） |
+| 0023 | wow64: XP のシェルに WOW64 で動いていることを知らせない（XP の explorer と、コントロール パネルの項目を動かす rundll32、ユーザー アカウントの mshta）。WOW64 では XP の shell32 がコントロール パネルの 32bit の項目を別の名前空間に置いて読み込まず、セキュリティ センターの「セキュリティ設定の管理」が空だった | あり（XP の explorer、rundll32、mshta だけ） |
 | 0024 | user32: ログオフ・終了の要求をセッションに知らせる | `WIN4WINE_SESSION_REQUEST` |
 
 ### bridge（WM と proxy）との連携、X11 の表示、日本語入力（0025〜0043）
@@ -243,7 +243,7 @@ Windows 7 SP1 の実機（参照用の VM）と画素で比べて合わせたも
 | 0136 | riched20: Windows 7 の検索欄（スタートメニュー、フォルダーウィンドウ。windowless の RichEdit）の文字。ホストが後から知らせる既定の書式（メイリオ 9pt）を使い（外部シェル全体）、複雑な文字（アラビア文字など）の無い段落を GDI で測って描き、フォントを DEFAULT_CHARSET で作る（英字はそのフォント、日本語はフォントのリンク。実機と同じ字形と位置）。日本語が四角や重なりになっていた | 一部あり（`WIN4WINE_SHELL=win7`） |
 | 0137 | comdlg32: Windows 7 のシェルのセッションの項目ダイアログ（IFileDialog）を Windows 7 の形に。上の段（戻る・進む、パンくずのアドレス、更新、検索）を新しい部品（navbar7.c）がテーマの部品と explorerframe.dll の画像・文字列で描く。640x478、メッセージ用のフォント、詳細・プレビュー ペインなし、サイズ グリップ、フォルダーの選択では「フォルダー:」「フォルダーの選択」。検索はフォルダー内の名前での絞り込み（Windows 7 は索引を検索する） | あり（`WIN4WINE_SHELL=win7`） |
 
-### XP と ReactOS のシェルの細部（0138〜0168）
+### XP と ReactOS のシェルの細部（0138〜0171）
 
 XP と ReactOS のシェルのための変更のうち、Windows 7 のシェルのために加えた仕組みを使うものです（0117 のテーマ付きのメニュー、0119 の TS_MIN、
 0126 の comctl32 の切り替え、0130 と 0131 のコントロールの判定、0132 のシステム アイコンの読み込み、0133 のメッセージ ボックスの配置）。
@@ -270,7 +270,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0153 | uxtheme: 画面のプロパティの見本（DrawNCPreview）を XP と同じに。themeui が渡すフラグの窓だけを描く（「テーマ」は作業中のウィンドウだけ、「デザイン」は 3 つ）。位置は XP SP3 で測ったもの（非アクティブは右 17・下 20 px 短く、アクティブは 10・22 px ずらして角まで、メッセージ ボックスは 150x101 で中央）。アクティブの窓に「ウィンドウの文字」とスクロール バー、枠はダイアログの 3 px、キャプションは 0069 のタイトルバーと同じ配置、字体と色は themeui が渡す配色のもの | なし |
 | 0154 | shcore: SHRegSetPath がパスを半分しか書いていなかった（大きさを文字数のまま渡していた）。バイト数で終端の NUL まで書き、環境変数に戻せるパスは REG_EXPAND_SZ にする（Windows と同じ）。XP の shimgvw.dll が登録する画像の種類のアイコン（JPEG、ビットマップ、GIF、PNG、TIFF）と「開く」のコマンドが正しくなる | なし |
 | 0155 | user32: 外部シェルのデスクトップの壁紙を、適用したときにすぐ変える。画面のプロパティは JPEG をいつも同じ Wallpaper1.bmp に変換するので、0049 のファイル名の比較だけでは前の絵のままだった。ファイルの時刻と WallpaperStyle・TileWallpaper の変化でも読み直し、壁紙を設定したら Progman（シェルのデスクトップ）を描き直す | あり |
-| 0156 | svchost: サービスの DLL が SvchostPushServiceGlobals を公開しているときに呼び、svchost の共通データ（よく使う SID、StartRpcServer・StopRpcServer、NetBIOS、XP SP2 からの RegisterStopCallback）を渡す。XP のセキュリティ センター（wscsvc.dll）が RegisterStopCallback を NULL から呼んで止まっていた | なし |
+| 0156 | svchost: サービスの DLL が SvchostPushServiceGlobals を公開しているときに呼び、svchost の共通データ（よく使う SID、StartRpcServer・StopRpcServer、NetBIOS、XP SP2 からの RegisterStopCallback）を渡す。XP のセキュリティ センター（wscsvc.dll）が RegisterStopCallback を NULL から呼んで止まっていた。CoInitializeSecurityParam のあるグループ（XP の netsvcs。セキュリティ センターのサービスを動かす）では COM（マルチスレッド アパートメントと CoInitializeSecurity）を初期化してからサービスを始める。サービスの RPC のスレッドが自動更新のオブジェクトを作れず、セキュリティ センターで自動更新が「未構成」になっていた | なし |
 | 0157 | rpcrt4: RpcServerInqDefaultPrincName が Negotiate と Kerberos でもアカウント名を返す（Windows と同じ）。wscsvc.dll が Negotiate の名前を求めて失敗し、止まっていた | なし |
 | 0158 | userenv: CreateEnvironmentBlock が呼び出し元の WIN4WINE_* の変数を引き継ぐ。サービスがセッションに起動するプログラム（wscsvc が起動するセキュリティ センターの通知 wscntfy.exe）も外部シェルの opt-in を持ち、通知領域のアイコンが XP の形式で届く（0034） | あり |
 | 0159 | ole32: DoDragDrop で、ドロップ先が元と同じプロセスにあり、許された効果で切ると何も残らないときは、ドロップ先の答えを残す。XP のシェルのビューは自分の項目を DROPEFFECT_MOVE で並べ替えるが、リンクしか許さない項目（デスクトップのごみ箱）は効果が NONE になり、Drop の代わりに DragLeave になって動かせなかった | あり |
@@ -283,6 +283,9 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0166 | win32u: 画面のプロパティで変えたシステムの色（SetSysColors）と窓の大きさ（SPI_SETNONCLIENTMETRICS。枠、タイトルバーとそのボタン、メニュー、スクロール バー、字体）を、XP と同じくすぐに全部のプログラムに反映する。WM_SYSCOLORCHANGE か、SPI_SETNONCLIENTMETRICS の WM_SETTINGCHANGE を受けたプロセスが読み直し、枠かスクロール バーのあるトップレベルの窓の枠を計算し直す（SWP_FRAMECHANGED）。各プロセスは最初に読んだ値のままで、Windows クラシック スタイルにしてもタスクバー、スタート メニュー、選択の色、開いている窓のタイトルバーのボタンが Luna のまま、Windows XP スタイルに戻すとクラシックの灰色のままだった | あり |
 | 0167 | win32u: XP のシェルでフォントの滑らかさが標準のときは、FreeType の v35 のインタプリタでヒンティングする（ClearType となしのときはシステムの FreeType のまま）。v40 は標準のスムージングを縦だけヒンティングして hdmx を使わないので、Tahoma 11px の y が 5px、i と l が 3px になり、デスクトップのアイコンの名前（「My Documents」「Recycle Bin」など）の字の間隔が XP（6・2・2）とずれていた。設定を変えると次の字から切り替わる（0165） | あり（XP のセッション） |
 | 0168 | user32: XP のセッションで、メッセージ ボックスがアイコンに合った XP のサウンド（AppEvents の SystemHand、SystemQuestion、SystemExclamation、SystemAsterisk、SystemDefault）を鳴らす。Wine の MessageBeep は Unix のドライバーのビープだけで、取り込んだ XP のサウンドが鳴らなかった。winmm は user32 を使うので、PlaySoundW は実行時に探す | あり（XP のセッション） |
+| 0169 | wuapi, wuaueng: 自動更新の設定（IAutomaticUpdatesSettings。通知のレベル、予定の曜日と時刻、ポリシーによる固定。Auto Update キーの AUOptions などを読み書きする）と、XP の自動更新の項目（wuaucpl.cpl）が読む wuaueng の GetAUOptionsEx（序数 1）。どちらも未実装で、セキュリティ センターの自動更新が「未構成」のまま有効にできず、自動更新の項目を開くと rundll32 が落ちた | なし |
+| 0170 | user32: 外部シェルで GetWindowLong(GWLP_WOWWORDS、-1) が窓のフラグ（WND と同じ並びの state、state2、ExStyle、style、hModule）へのポインターを返す。XP の comctl32 6 のボタンが WM_NCCREATE でこれからボタンの種類を読み、0 で作成に失敗していた（セキュリティ センターの「自動更新を有効にする」「推奨事項」や開閉のボタンが空だった） | あり |
+| 0171 | control: XP のセッションで、control.exe に渡された項目を XP の control.exe と同じく Windows フォルダーの rundll32（shell32 の Control_RunDLL）に渡す。セキュリティ センターの「インターネット オプション」が control.exe の中で開いてすぐ閉じていた | あり（XP のセッション） |
 
 
 ## 並び順の考え方

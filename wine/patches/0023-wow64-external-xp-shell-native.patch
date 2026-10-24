@@ -11,31 +11,41 @@ shell32.dll,-138, so the Start panel showed a folder (+relay of the
 documented calls, tests/folder-icons.c).
 Wine before: a 32-bit process of the WoW64 build is told that it runs under
 WOW64, as on 64-bit Windows.
-Change: in a process with the opt-in whose image is xp-explorer.exe, answer
-ProcessWow64Information for the current process with 0. IsWow64Process uses
+Under WOW64 XP's shell32 also keeps the Control Panel's 32-bit items in a
+namespace of their own whose applets it never loads: in rundll32, the
+Security Center found none of its category (Internet Options, Automatic
+Updates) for "Manage security settings for".
+Change: in a process with the opt-in whose image is xp-explorer.exe,
+rundll32.exe (which runs Control Panel items) or mshta.exe (User
+Accounts), answer ProcessWow64Information for the current process with 0. IsWow64Process uses
 the same query. Other processes, 64-bit processes and queries about other
 processes are unchanged; file system and registry redirection stay.
 Evidence: with the change the Start panel and the folder icons in the test
 VM match the 32-bit build.
-Scope: only with WIN4WINE_EXTERNAL_SHELL, and only in XP Explorer.
+Scope: only with WIN4WINE_EXTERNAL_SHELL, and only in XP Explorer, rundll32
+and mshta.
 ---
- dlls/wow64/process.c | 23 +++++++++++++++++++++++
- 1 file changed, 23 insertions(+)
+ dlls/wow64/process.c | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
 
 diff --git a/dlls/wow64/process.c b/dlls/wow64/process.c
-index 6172810..e0d2fb7 100644
+index 6172810..d299b0d 100644
 --- a/dlls/wow64/process.c
 +++ b/dlls/wow64/process.c
-@@ -554,6 +554,28 @@ NTSTATUS WINAPI wow64_NtOpenThread( UINT *args )
+@@ -554,6 +554,38 @@ NTSTATUS WINAPI wow64_NtOpenThread( UINT *args )
  }
  
  
 +/* The XP shell was made for 32-bit Windows. Under WOW64, XP's shlwapi and
-+ * shell32 take other paths, for example for the icons of shell folders, so
-+ * the renamed XP Explorer of the external shell is not told of WOW64. */
++ * shell32 take other paths, for example for the icons of shell folders and
++ * for the Control Panel (a separate namespace of 32-bit items, whose applets
++ * it never loads: the Security Center found none of its own), so the
++ * processes of the external shell that run XP's shell32 are not told of
++ * WOW64: the renamed XP Explorer, rundll32, which runs Control Panel items,
++ * and mshta, which runs User Accounts. */
 +static BOOL hide_wow64_from_xp_shell( HANDLE handle )
 +{
-+    static const WCHAR name[] = L"xp-explorer.exe";
++    static const WCHAR *names[] = { L"xp-explorer.exe", L"rundll32.exe", L"mshta.exe" };
 +    static int hide = -1;
 +
 +    if (handle != GetCurrentProcess()) return FALSE;
@@ -43,11 +53,17 @@ index 6172810..e0d2fb7 100644
 +    {
 +        UNICODE_STRING variable = RTL_CONSTANT_STRING( L"WIN4WINE_EXTERNAL_SHELL" ), value = { 0 };
 +        const UNICODE_STRING *image = &NtCurrentTeb()->Peb->ProcessParameters->ImagePathName;
-+        USHORT length = image->Length / sizeof(WCHAR), count = ARRAY_SIZE(name) - 1;
++        USHORT length = image->Length / sizeof(WCHAR);
++        unsigned int i;
 +
-+        hide = RtlQueryEnvironmentVariable_U( NULL, &variable, &value ) != STATUS_VARIABLE_NOT_FOUND &&
-+               length > count && image->Buffer[length - count - 1] == '\\' &&
-+               !wcsnicmp( image->Buffer + length - count, name, count );
++        hide = 0;
++        if (RtlQueryEnvironmentVariable_U( NULL, &variable, &value ) != STATUS_VARIABLE_NOT_FOUND)
++            for (i = 0; i < ARRAY_SIZE(names) && !hide; i++)
++            {
++                USHORT count = wcslen( names[i] );
++                hide = length > count && image->Buffer[length - count - 1] == '\\' &&
++                       !wcsnicmp( image->Buffer + length - count, names[i], count );
++            }
 +    }
 +    return hide;
 +}
@@ -55,7 +71,7 @@ index 6172810..e0d2fb7 100644
  /**********************************************************************
   *           wow64_NtQueryInformationProcess
   */
-@@ -655,6 +677,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
+@@ -655,6 +687,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
  
              if (!(status = NtQueryInformationProcess( handle, class, &data, sizeof(data), NULL )))
              {

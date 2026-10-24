@@ -1,0 +1,193 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] user32: GetWindowLong(GWLP_WOWWORDS) in the external shell
+
+Purpose: create the buttons of XP's Security Center (XP's common controls
+6, through ATL), and of other XP windows that use XP's own Button class.
+Windows behavior: GetWindowLong with index -1 (GWLP_WOWWORDS) returns a
+pointer to the window's flags as its WND holds them: state, state2 (with
+the compatibility flags), ExStyle, style and hModule. XP's comctl32 6
+Button keeps it at WM_NCCREATE and reads its type and BS_NOTIFY from it.
+Wine before: index -1 is an unknown offset and returns 0; the Button read
+through a NULL pointer at WM_NCCREATE, the creation failed, and the
+Security Center's sections (Turn on Automatic Updates, Recommendations,
+the arrows) stayed empty.
+Change: with the opt-in, a window of the calling process gets a block of
+that layout (state2 with WNDS2_WIN31COMPAT, WIN40COMPAT and WIN50COMPAT),
+filled again before each message reaches its window procedure and freed
+after WM_NCDESTROY.
+Scope: WIN4WINE_EXTERNAL_SHELL, 32-bit processes.
+---
+ dlls/user32/user_private.h |  1 +
+ dlls/user32/win.c          | 99 +++++++++++++++++++++++++++++
+ dlls/user32/winproc.c      |  3 +
+ 3 files changed, 103 insertions(+)
+
+diff --git a/dlls/user32/user_private.h b/dlls/user32/user_private.h
+index 3513e50..5ed8d75 100644
+--- a/dlls/user32/user_private.h
++++ b/dlls/user32/user_private.h
+@@ -79,6 +79,7 @@ extern INT_PTR WINPROC_CallDlgProcA( HWND hwnd, UINT msg, WPARAM wParam, LPARAM
+ extern INT_PTR WINPROC_CallDlgProcW( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam );
+ extern void winproc_init(void);
+ extern LRESULT dispatch_win_proc_params( struct win_proc_params *params );
++extern void wow_words_update( HWND hwnd, UINT msg, BOOL after );
+ 
+ extern DWORD get_app_version(void);
+ 
+diff --git a/dlls/user32/win.c b/dlls/user32/win.c
+index dd7618c..2864048 100644
+--- a/dlls/user32/win.c
++++ b/dlls/user32/win.c
+@@ -28,6 +28,7 @@
+ #include "wine/exception.h"
+ #include "wine/debug.h"
+ #include "wine/win4wine.h"
++#include "wine/list.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(win);
+ 
+@@ -39,6 +40,8 @@ static const char *debugstr_us( const UNICODE_STRING *us )
+     return debugstr_wn( us->Buffer, us->Length / sizeof(WCHAR) );
+ }
+ 
++static LONG_PTR get_wow_words( HWND hwnd );
++
+ #ifdef __i386__
+ /* Some apps pass a non-stdcall proc to EnumChildWindows,
+  * so we need a small assembly wrapper to call the proc.
+@@ -940,6 +943,7 @@ LONG WINAPI get_window_longA( HWND hwnd, INT offset )
+ LONG WINAPI DECLSPEC_HOTPATCH GetWindowLongA( HWND hwnd, INT offset )
+ #endif
+ {
++    if (offset == -1 && sizeof(void *) == sizeof(LONG)) return get_wow_words( hwnd );
+     switch (offset)
+     {
+ #ifdef _WIN64
+@@ -961,11 +965,106 @@ LONG WINAPI DECLSPEC_HOTPATCH GetWindowLongA( HWND hwnd, INT offset )
+ }
+ 
+ 
++/* GWLP_WOWWORDS (-1): Windows returns a pointer to the window's own flags,
++ * laid out as in its WND (state, state2, ExStyle, style, hModule), which
++ * XP's common controls 6 read their window styles from (its Button at
++ * WM_NCCREATE: without them it fails to create). Here each window that asks
++ * gets a copy, brought up to date before each message reaches its window
++ * procedure (wow_words_update) and freed after WM_NCDESTROY. */
++struct wow_words
++{
++    struct list entry;
++    HWND hwnd;
++    DWORD state;
++    DWORD state2;
++    DWORD ex_style;
++    DWORD style;
++    HINSTANCE instance;
++};
++
++#define WNDS2_WIN31COMPAT 0x0100
++#define WNDS2_WIN40COMPAT 0x0200
++#define WNDS2_WIN50COMPAT 0x0400
++
++static struct list wow_words_list = LIST_INIT( wow_words_list );
++static CRITICAL_SECTION wow_words_section;
++static CRITICAL_SECTION_DEBUG wow_words_section_debug =
++{
++    0, 0, &wow_words_section,
++    { &wow_words_section_debug.ProcessLocksList, &wow_words_section_debug.ProcessLocksList },
++      0, 0, { (DWORD_PTR)(__FILE__ ": wow_words_section") }
++};
++static CRITICAL_SECTION wow_words_section = { &wow_words_section_debug, -1, 0, 0, 0, 0 };
++static LONG wow_words_count;
++
++static void wow_words_fill( struct wow_words *words )
++{
++    words->ex_style = NtUserGetWindowLongW( words->hwnd, GWL_EXSTYLE );
++    words->style = NtUserGetWindowLongW( words->hwnd, GWL_STYLE );
++    words->instance = (HINSTANCE)NtUserGetWindowLongPtrW( words->hwnd, GWLP_HINSTANCE );
++}
++
++static struct wow_words *wow_words_find( HWND hwnd )
++{
++    struct wow_words *words;
++    LIST_FOR_EACH_ENTRY( words, &wow_words_list, struct wow_words, entry )
++        if (words->hwnd == hwnd) return words;
++    return NULL;
++}
++
++static LONG_PTR get_wow_words( HWND hwnd )
++{
++    struct wow_words *words;
++    DWORD pid = 0;
++
++    /* Only for the windows of this process, as Windows maps them. */
++    if (!win4wine_external_shell() || !GetWindowThreadProcessId( hwnd, &pid ) ||
++        pid != GetCurrentProcessId())
++    {
++        SetLastError( ERROR_INVALID_INDEX );
++        return 0;
++    }
++    hwnd = WIN_GetFullHandle( hwnd );
++    EnterCriticalSection( &wow_words_section );
++    if (!(words = wow_words_find( hwnd )) && (words = calloc( 1, sizeof(*words) )))
++    {
++        words->hwnd = hwnd;
++        words->state2 = WNDS2_WIN31COMPAT | WNDS2_WIN40COMPAT | WNDS2_WIN50COMPAT;
++        list_add_head( &wow_words_list, &words->entry );
++        InterlockedIncrement( &wow_words_count );
++    }
++    if (words) wow_words_fill( words );
++    LeaveCriticalSection( &wow_words_section );
++    return words ? (LONG_PTR)&words->state : 0;
++}
++
++/* Before a message reaches the window procedure, and after WM_NCDESTROY. */
++void wow_words_update( HWND hwnd, UINT msg, BOOL after )
++{
++    struct wow_words *words;
++
++    if (!ReadNoFence( &wow_words_count )) return;
++    EnterCriticalSection( &wow_words_section );
++    if ((words = wow_words_find( WIN_GetFullHandle( hwnd ) )))
++    {
++        if (!after) wow_words_fill( words );
++        else if (msg == WM_NCDESTROY)
++        {
++            list_remove( &words->entry );
++            InterlockedDecrement( &wow_words_count );
++            free( words );
++        }
++    }
++    LeaveCriticalSection( &wow_words_section );
++}
++
++
+ /**********************************************************************
+  *		GetWindowLongW (USER32.@)
+  */
+ LONG WINAPI GetWindowLongW( HWND hwnd, INT offset )
+ {
++    if (offset == -1 && sizeof(void *) == sizeof(LONG)) return get_wow_words( hwnd );
+     switch (offset)
+     {
+ #ifdef _WIN64
+diff --git a/dlls/user32/winproc.c b/dlls/user32/winproc.c
+index 14ad331..482800a 100644
+--- a/dlls/user32/winproc.c
++++ b/dlls/user32/winproc.c
+@@ -701,6 +701,8 @@ LRESULT dispatch_win_proc_params( struct win_proc_params *params )
+     DPI_AWARENESS_CONTEXT context = SetThreadDpiAwarenessContext( ULongToHandle( params->dpi_context ) );
+     LRESULT result = 0;
+ 
++    wow_words_update( params->hwnd, params->msg, FALSE );
++
+     if (!params->ansi)
+     {
+         if (params->procW == WINPROC_PROC16)
+@@ -726,6 +728,7 @@ LRESULT dispatch_win_proc_params( struct win_proc_params *params )
+                               &result, params->procA );
+     }
+ 
++    wow_words_update( params->hwnd, params->msg, TRUE );
+     SetThreadDpiAwarenessContext( context );
+     return result;
+ }

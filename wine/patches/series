@@ -166,3 +166,6 @@
 0166-win32u-external-sys-colors-metrics-change.patch
 0167-win32u-external-xp-standard-v35-hinting.patch
 0168-user32-external-xp-messagebox-sounds.patch
+0169-wuapi-automatic-updates-settings.patch
+0170-user32-external-wow-words.patch
+0171-control-external-xp-rundll32.patch

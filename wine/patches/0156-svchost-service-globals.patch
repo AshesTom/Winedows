@@ -6,26 +6,53 @@ Windows behavior: svchost calls a service DLL's SvchostPushServiceGlobals
 export with SVCHOST_GLOBAL_DATA (svcs.h of the Windows 2003 DDK): the
 well-known SIDs, StartRpcServer and StopRpcServer(Ex) on the process' RPC
 server, the NetBIOS helpers, and since XP SP2 RegisterStopCallback, a wait
-on the thread pool for the service's stop event.
+on the thread pool for the service's stop event. A group whose key under
+Svchost has CoInitializeSecurityParam (XP's netsvcs, where wscsvc runs) gets
+COM: svchost enters the multithreaded apartment and calls
+CoInitializeSecurity, so that the services' own threads (their RPC calls)
+use COM without initializing it.
 Wine before: a FIXME, and no globals; wscsvc calls RegisterStopCallback
-through the NULL pointer, catches the fault and stops.
+through the NULL pointer, catches the fault and stops. Without COM, wscsvc's
+RPC thread failed to create Automatic Updates' object (CO_E_NOTINITIALIZED)
+and the Security Center showed it as not configured.
 Change: call SvchostPushServiceGlobals with the SIDs, the RPC helpers
 (ncacn_np \pipe\NAME, listening once), empty NetBIOS helpers and
-RegisterStopCallback (RegisterWaitForSingleObject, once).
-Scope: service DLLs that export SvchostPushServiceGlobals.
+RegisterStopCallback (RegisterWaitForSingleObject, once); with
+CoInitializeSecurityParam, CoInitializeEx(COINIT_MULTITHREADED) and
+CoInitializeSecurity at the group's AuthenticationLevel (default packet).
+Scope: service DLLs that export SvchostPushServiceGlobals, and svchost groups
+with CoInitializeSecurityParam.
 ---
+ programs/svchost/Makefile.in |   2 +-
+ programs/svchost/svchost.c   | 134 +++++++++++++++++++++++++-
+ 2 files changed, 130 insertions(+), 6 deletions(-)
+
+diff --git a/programs/svchost/Makefile.in b/programs/svchost/Makefile.in
+index 53288b3..65dd5c6 100644
+--- a/programs/svchost/Makefile.in
++++ b/programs/svchost/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = svchost.exe
+-IMPORTS   = advapi32
++IMPORTS   = advapi32 ole32 rpcrt4
+ 
+ EXTRADLLFLAGS = -mwindows -municode
+ 
 diff --git a/programs/svchost/svchost.c b/programs/svchost/svchost.c
+index 618147a..9f93435 100644
 --- a/programs/svchost/svchost.c
 +++ b/programs/svchost/svchost.c
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,9 @@
  #include "winbase.h"
  #include "winreg.h"
  #include "winsvc.h"
 +#include "rpc.h"
++#include "objbase.h"
++#undef interface /* a parameter name below */
  #include "wine/debug.h"
  
  WINE_DEFAULT_DEBUG_CHANNEL(svchost);
-@@ -102,6 +103,102 @@
+@@ -102,6 +105,102 @@ static LPWSTR ExpandEnv(LPWSTR string)
      return expanded_string;
  }
  
@@ -128,7 +155,7 @@ diff --git a/programs/svchost/svchost.c b/programs/svchost/svchost.c
  /* Fill in service table entry for a specified service */
  static BOOL AddServiceElem(LPWSTR service_name,
          SERVICE_TABLE_ENTRYW *service_table_entry)
-@@ -114,6 +211,7 @@
+@@ -114,6 +213,7 @@ static BOOL AddServiceElem(LPWSTR service_name,
      LPSTR dll_service_main = NULL;
      HMODULE library = NULL;
      LPSERVICE_MAIN_FUNCTIONW service_main_func = NULL;
@@ -136,7 +163,7 @@ diff --git a/programs/svchost/svchost.c b/programs/svchost/svchost.c
      BOOL success = FALSE;
      DWORD reg_size;
      DWORD size;
-@@ -204,11 +302,8 @@
+@@ -204,11 +304,8 @@ static BOOL AddServiceElem(LPWSTR service_name,
          goto cleanup;
      }
  
@@ -150,13 +177,44 @@ diff --git a/programs/svchost/svchost.c b/programs/svchost/svchost.c
  
      /* Fill in the service table entry */
      service_table_entry->lpServiceName = service_name;
-diff --git a/programs/svchost/Makefile.in b/programs/svchost/Makefile.in
---- a/programs/svchost/Makefile.in
-+++ b/programs/svchost/Makefile.in
-@@ -1,5 +1,5 @@
- MODULE    = svchost.exe
--IMPORTS   = advapi32
-+IMPORTS   = advapi32 rpcrt4
+@@ -270,6 +367,32 @@ static BOOL StartGroupServices(LPWSTR services)
+     return ret;
+ }
  
- EXTRADLLFLAGS = -mwindows -municode
- 
++/* A group whose key has CoInitializeSecurityParam runs its services with
++ * COM: svchost enters the multithreaded apartment (which threads of the
++ * process that did not initialize COM themselves join, such as the RPC
++ * server threads of its services) and sets the process' COM security. XP's
++ * Security Center service creates Automatic Updates' objects on such a
++ * thread. */
++static void InitializeGroupCom(HKEY group_hkey, const WCHAR *group_name)
++{
++    DWORD param = 0, level = RPC_C_AUTHN_LEVEL_PKT, size = sizeof(param);
++    HKEY key;
++    HRESULT hr;
++
++    if (RegOpenKeyExW(group_hkey, group_name, 0, KEY_READ, &key)) return;
++    if (!RegQueryValueExW(key, L"CoInitializeSecurityParam", NULL, NULL, (BYTE *)&param, &size) && param)
++    {
++        size = sizeof(level);
++        RegQueryValueExW(key, L"AuthenticationLevel", NULL, NULL, (BYTE *)&level, &size);
++        hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
++        if (SUCCEEDED(hr))
++            hr = CoInitializeSecurity(NULL, -1, NULL, NULL, level, RPC_C_IMP_LEVEL_IDENTIFY, NULL,
++                                      EOAC_NONE, NULL);
++        WINE_TRACE("COM for group %s: %#lx\n", wine_dbgstr_w(group_name), hr);
++    }
++    RegCloseKey(key);
++}
++
+ /* Find the list of services associated with a group name and start those
+  * services */
+ static BOOL LoadGroup(PWCHAR group_name)
+@@ -290,6 +413,7 @@ static BOOL LoadGroup(PWCHAR group_name)
+         return FALSE;
+     }
+     services = GetRegValue(group_hkey, group_name);
++    if (services) InitializeGroupCom(group_hkey, group_name);
+     RegCloseKey(group_hkey);
+     if (!services)
+     {

@@ -75,8 +75,9 @@ and **XP Explorer** ([xp-explorer/](../../xp-explorer/README.md)), which opens X
   E-mail and the most used programs), User Accounts ("Change my picture" offers XP's 23 pictures and changes the
   Start menu's and the Linux user's), and XP's Network Connections folder (the Linux wired and wireless adapters and
   their state, opened from the notification area's network icon) with XP's "Choose a wireless network" (NetworkManager's
-  Wi-Fi networks, joined from it), and Add or Remove Programs (with the Start menu's Set Program Access and
-  Defaults), all from your own ISO's files (`prefix/extras.py`).
+  Wi-Fi networks, joined from it), Add or Remove Programs (with the Start menu's Set Program Access and
+  Defaults; the Linux applications are listed too, Remove goes to the package manager and the default programs become
+  the Linux defaults) and the Security Center (Automatic Updates, Internet Options), all from your own ISO's files (`prefix/extras.py`).
 - **Keyboard layout**: the Linux system's (`localectl`) at first. Add input languages or change the default in
   Control Panel, Regional and Language Options, Languages, Details (XP's own), and the session's layout (labwc on
   Wayland, setxkbmap on X11) follows at once; with two or more, Left Alt+Shift switches them as on XP

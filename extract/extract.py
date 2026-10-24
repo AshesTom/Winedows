@@ -73,6 +73,10 @@ FILES = {
     # texts that SP1 added to it, Set Program Access and Defaults among them
     # (xpsp1res.dll, which it loads beside xpsp2res.dll; prefix/extras.py).
     **dict.fromkeys(('appwiz.cpl', 'xpsp1res.dll'), 'appwiz'),
+    # The Control Panel items that the Security Center lists under "Manage
+    # security settings for": Internet Options (IE6's, its pages in
+    # inetcplc.dll) and Automatic Updates (prefix/extras.py).
+    **dict.fromkeys(('inetcpl.cpl', 'inetcplc.dll', 'wuaucpl.cpl'), 'security'),
     # XP's Network Connections folder (tray/netshell.dll) and what it loads
     # that Wine lacks: its tracing and wired 802.1X libraries, and the
     # wireless dialogs with their SP3 texts (prefix/extras.py).
@@ -117,7 +121,7 @@ LANGUAGE_FILES = {
 RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
-                'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz')
+                'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security')
 
 
 def setup_sources(paths):
@@ -263,7 +267,8 @@ def missing_groups(output):
               'themes': 'themes/Windows Classic.theme', 'srchasst': 'srchasst/srchui.dll',
               'wallpaper': 'wallpaper', 'wsc': 'wsc/wscsvc.dll',
               'programs': 'programs/tourstart.exe', 'tour': 'tour/mmTour/tour.exe',
-              'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl'}
+              'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
+              'security': 'security/wuaucpl.cpl'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 

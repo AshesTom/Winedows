@@ -1,0 +1,73 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] control: hand Control Panel items to rundll32 in the XP session
+
+Purpose: open XP's Control Panel items that XP's programs start with
+control.exe (the Security Center's Internet Options, Set Program Access
+and Defaults).
+XP behavior: XP's control.exe runs "rundll32.exe shell32.dll,Control_RunDLL
+ITEM" for an item and exits; the Windows folder's rundll32 is the one XP's
+shell32 runs items with.
+Wine before: control.exe loads the item itself in its activation context of
+Wine's common controls 6; XP's Internet Options opened and closed at once.
+Change: in the XP session, an item (any argument) goes to the Windows
+folder's rundll32 (the system one without it); control.exe without an
+argument is unchanged.
+Scope: WIN4WINE_EXTERNAL_SHELL with the XP shell.
+---
+ programs/control/control.c | 37 ++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/programs/control/control.c b/programs/control/control.c
+index 507abcc..c4fba7b 100644
+--- a/programs/control/control.c
++++ b/programs/control/control.c
+@@ -26,13 +26,48 @@
+ #include <windows.h>
+ #include <commctrl.h>
+ #include <shellapi.h>
++#include "wine/win4wine.h"
+ 
+ 
+ extern void WINAPI Control_RunDLLW(HWND hWnd, HINSTANCE hInst, LPCWSTR cmd, DWORD nCmdShow);
+ 
++/* XP's control.exe hands an item to rundll32 (shell32's Control_RunDLL) and
++ * exits; XP's own items, which the XP session runs, show their property
++ * sheets there, and not in this program's activation context of Wine's
++ * common controls (XP's Internet Options opened and closed at once). */
++static BOOL launch_xp(LPCWSTR what)
++{
++  STARTUPINFOW startup = {sizeof(startup)};
++  PROCESS_INFORMATION process;
++  WCHAR program[MAX_PATH], *line;
++  size_t size;
++  BOOL ret;
++
++  if (win4wine_shell() != WIN4WINE_SHELL_XP || !*what) return FALSE;
++  /* The one in the Windows folder, which XP's shell32 runs items with and
++   * the session gives XP's common controls 6 (Wine patch 0149). */
++  GetWindowsDirectoryW(program, MAX_PATH - 14);
++  lstrcatW(program, L"\\rundll32.exe");
++  if (GetFileAttributesW(program) == INVALID_FILE_ATTRIBUTES)
++  {
++    GetSystemDirectoryW(program, MAX_PATH - 14);
++    lstrcatW(program, L"\\rundll32.exe");
++  }
++  size = lstrlenW(program) + lstrlenW(what) + 40;
++  if (!(line = HeapAlloc(GetProcessHeap(), 0, size * sizeof(WCHAR)))) return FALSE;
++  swprintf(line, size, L"\"%s\" shell32.dll,Control_RunDLL %s", program, what);
++  ret = CreateProcessW(program, line, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process);
++  HeapFree(GetProcessHeap(), 0, line);
++  if (!ret) return FALSE;
++  CloseHandle(process.hThread);
++  CloseHandle(process.hProcess);
++  return TRUE;
++}
++
+ static void launch(LPCWSTR what)
+ {
+-  Control_RunDLLW(GetDesktopWindow(), 0, what, SW_SHOW);
++  if (!launch_xp(what))
++    Control_RunDLLW(GetDesktopWindow(), 0, what, SW_SHOW);
+   ExitProcess(0);
+ }
+ 

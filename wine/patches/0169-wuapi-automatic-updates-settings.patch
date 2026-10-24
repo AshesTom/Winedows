@@ -1,0 +1,354 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] wuapi, wuaueng: Automatic Updates' settings (IAutomaticUpdatesSettings, GetAUOptionsEx)
+
+Purpose: show and change Automatic Updates' settings in XP's Security
+Center and in XP's Automatic Updates item of the Control Panel.
+Windows behavior: IAutomaticUpdates::get_Settings returns the settings of
+Automatic Updates (NotificationLevel, the scheduled day and hour, ReadOnly
+and Required when a policy sets them; Refresh, Save), which Windows keeps
+under SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update
+(AUOptions, ScheduledInstallDay, ScheduledInstallTime) and the AU policy
+key. XP's wuaucpl.cpl reads them with wuaueng's ordinal 1, GetAUOptionsEx
+(the size of its structure, 0x2c or 0x54, and the structure: the option,
+the day and the hour first).
+Wine before: get_Settings returned E_NOTIMPL, so XP's Security Center
+service reported Automatic Updates as not configured and could not turn it
+on; GetAUOptionsEx was a stub, and opening Automatic Updates ended
+rundll32.
+Change: an IAutomaticUpdatesSettings that reads and writes those values
+(the 64-bit view); get_ServiceEnabled answers TRUE and EnableService
+succeeds; GetAUOptionsEx fills the option, day and hour.
+Scope: every Wine application (documented interface; a stub before).
+---
+ dlls/wuapi/updates.c      | 241 ++++++++++++++++++++++++++++-
+ dlls/wuaueng/Makefile.in  |   1 +
+ dlls/wuaueng/main.c       |  26 ++++
+ dlls/wuaueng/wuaueng.spec |   2 +-
+ 4 files changed, 265 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/wuapi/updates.c b/dlls/wuapi/updates.c
+index 249f07a..02dfb97 100644
+--- a/dlls/wuapi/updates.c
++++ b/dlls/wuapi/updates.c
+@@ -165,23 +165,256 @@ static HRESULT WINAPI automatic_updates_EnableService(
+     IAutomaticUpdates *This )
+ {
+     FIXME("\n");
+-    return E_NOTIMPL;
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI automatic_updates_get_ServiceEnabled(
+     IAutomaticUpdates *This,
+     VARIANT_BOOL *retval )
+ {
+-    FIXME("%p\n", retval);
++    TRACE("%p\n", retval);
++    if (!retval) return E_POINTER;
++    *retval = VARIANT_TRUE;
++    return S_OK;
++}
++
++/* IAutomaticUpdatesSettings: the settings of Automatic Updates, which Windows
++ * keeps under the Auto Update key (AUOptions, ScheduledInstallDay and
++ * ScheduledInstallTime) and a policy can set and lock (the AU policy key). */
++static const WCHAR auto_update_key[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update";
++static const WCHAR policy_key[] = L"Software\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU";
++
++typedef struct
++{
++    IAutomaticUpdatesSettings IAutomaticUpdatesSettings_iface;
++    LONG refs;
++    AutomaticUpdatesNotificationLevel level;
++    AutomaticUpdatesScheduledInstallationDay day;
++    LONG time;
++    BOOL policy;
++} automatic_updates_settings;
++
++static inline automatic_updates_settings *impl_from_IAutomaticUpdatesSettings( IAutomaticUpdatesSettings *iface )
++{
++    return CONTAINING_RECORD(iface, automatic_updates_settings, IAutomaticUpdatesSettings_iface);
++}
++
++static BOOL read_dword( const WCHAR *path, const WCHAR *name, DWORD *value )
++{
++    DWORD size = sizeof(*value);
++    return !RegGetValueW( HKEY_LOCAL_MACHINE, path, name, RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY,
++                          NULL, value, &size );
++}
++
++static HRESULT WINAPI settings_Refresh( IAutomaticUpdatesSettings *iface )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    DWORD value;
++
++    TRACE("%p\n", This);
++    This->policy = read_dword( policy_key, L"AUOptions", &value ) ||
++                   (read_dword( policy_key, L"NoAutoUpdate", &value ) && value);
++    if (This->policy && read_dword( policy_key, L"NoAutoUpdate", &value ) && value)
++        This->level = aunlDisabled;
++    else if (read_dword( This->policy ? policy_key : auto_update_key, L"AUOptions", &value ) &&
++             value >= aunlDisabled && value <= aunlScheduledInstallation)
++        This->level = value;
++    else
++        This->level = aunlNotConfigured;
++    This->day = read_dword( auto_update_key, L"ScheduledInstallDay", &value ) && value <= ausidEverySaturday
++                ? value : ausidEveryDay;
++    This->time = read_dword( auto_update_key, L"ScheduledInstallTime", &value ) && value < 24 ? value : 3;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_Save( IAutomaticUpdatesSettings *iface )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    DWORD value;
++    HKEY key;
++    LSTATUS status;
++
++    TRACE("%p\n", This);
++    if (This->policy) return HRESULT_FROM_WIN32( ERROR_ACCESS_DENIED );
++    if ((status = RegCreateKeyExW( HKEY_LOCAL_MACHINE, auto_update_key, 0, NULL, 0,
++                                   KEY_SET_VALUE | KEY_WOW64_64KEY, NULL, &key, NULL )))
++        return HRESULT_FROM_WIN32( status );
++    if (This->level == aunlNotConfigured) RegDeleteValueW( key, L"AUOptions" );
++    else
++    {
++        value = This->level;
++        RegSetValueExW( key, L"AUOptions", 0, REG_DWORD, (BYTE *)&value, sizeof(value) );
++    }
++    value = This->day;
++    RegSetValueExW( key, L"ScheduledInstallDay", 0, REG_DWORD, (BYTE *)&value, sizeof(value) );
++    value = This->time;
++    RegSetValueExW( key, L"ScheduledInstallTime", 0, REG_DWORD, (BYTE *)&value, sizeof(value) );
++    RegCloseKey( key );
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_QueryInterface( IAutomaticUpdatesSettings *iface, REFIID riid, void **ppv )
++{
++    TRACE("%p %s %p\n", iface, debugstr_guid( riid ), ppv );
++    if (IsEqualGUID( riid, &IID_IAutomaticUpdatesSettings ) || IsEqualGUID( riid, &IID_IDispatch ) ||
++        IsEqualGUID( riid, &IID_IUnknown ))
++    {
++        *ppv = iface;
++        IAutomaticUpdatesSettings_AddRef( iface );
++        return S_OK;
++    }
++    FIXME("interface %s not implemented\n", debugstr_guid( riid ));
++    *ppv = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI settings_AddRef( IAutomaticUpdatesSettings *iface )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    return InterlockedIncrement( &This->refs );
++}
++
++static ULONG WINAPI settings_Release( IAutomaticUpdatesSettings *iface )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    LONG refs = InterlockedDecrement( &This->refs );
++    if (!refs) HeapFree( GetProcessHeap(), 0, This );
++    return refs;
++}
++
++static HRESULT WINAPI settings_GetTypeInfoCount( IAutomaticUpdatesSettings *iface, UINT *count )
++{
++    FIXME("\n");
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI settings_GetTypeInfo( IAutomaticUpdatesSettings *iface, UINT index, LCID lcid,
++                                            ITypeInfo **info )
++{
++    FIXME("\n");
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI settings_GetIDsOfNames( IAutomaticUpdatesSettings *iface, REFIID riid, LPOLESTR *names,
++                                              UINT count, LCID lcid, DISPID *ids )
++{
++    FIXME("\n");
++    return E_NOTIMPL;
++}
++
++static HRESULT WINAPI settings_Invoke( IAutomaticUpdatesSettings *iface, DISPID id, REFIID riid, LCID lcid,
++                                       WORD flags, DISPPARAMS *params, VARIANT *result, EXCEPINFO *excep,
++                                       UINT *arg )
++{
++    FIXME("\n");
+     return E_NOTIMPL;
+ }
+ 
++static HRESULT WINAPI settings_get_NotificationLevel( IAutomaticUpdatesSettings *iface,
++                                                      AutomaticUpdatesNotificationLevel *retval )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    TRACE("%p %p\n", This, retval);
++    if (!retval) return E_POINTER;
++    *retval = This->level;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_put_NotificationLevel( IAutomaticUpdatesSettings *iface,
++                                                      AutomaticUpdatesNotificationLevel value )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    TRACE("%p %d\n", This, value);
++    if (value < aunlNotConfigured || value > aunlScheduledInstallation) return E_INVALIDARG;
++    This->level = value;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_get_ReadOnly( IAutomaticUpdatesSettings *iface, VARIANT_BOOL *retval )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    if (!retval) return E_POINTER;
++    *retval = This->policy ? VARIANT_TRUE : VARIANT_FALSE;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_get_Required( IAutomaticUpdatesSettings *iface, VARIANT_BOOL *retval )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    if (!retval) return E_POINTER;
++    *retval = This->policy ? VARIANT_TRUE : VARIANT_FALSE;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_get_ScheduledInstallationDay( IAutomaticUpdatesSettings *iface,
++                                                             AutomaticUpdatesScheduledInstallationDay *retval )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    if (!retval) return E_POINTER;
++    *retval = This->day;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_put_ScheduledInstallationDay( IAutomaticUpdatesSettings *iface,
++                                                             AutomaticUpdatesScheduledInstallationDay value )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    if (value < ausidEveryDay || value > ausidEverySaturday) return E_INVALIDARG;
++    This->day = value;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_get_ScheduledInstallationTime( IAutomaticUpdatesSettings *iface, LONG *retval )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    if (!retval) return E_POINTER;
++    *retval = This->time;
++    return S_OK;
++}
++
++static HRESULT WINAPI settings_put_ScheduledInstallationTime( IAutomaticUpdatesSettings *iface, LONG value )
++{
++    automatic_updates_settings *This = impl_from_IAutomaticUpdatesSettings( iface );
++    if (value < 0 || value > 23) return E_INVALIDARG;
++    This->time = value;
++    return S_OK;
++}
++
++static const struct IAutomaticUpdatesSettingsVtbl automatic_updates_settings_vtbl =
++{
++    settings_QueryInterface,
++    settings_AddRef,
++    settings_Release,
++    settings_GetTypeInfoCount,
++    settings_GetTypeInfo,
++    settings_GetIDsOfNames,
++    settings_Invoke,
++    settings_get_NotificationLevel,
++    settings_put_NotificationLevel,
++    settings_get_ReadOnly,
++    settings_get_Required,
++    settings_get_ScheduledInstallationDay,
++    settings_put_ScheduledInstallationDay,
++    settings_get_ScheduledInstallationTime,
++    settings_put_ScheduledInstallationTime,
++    settings_Refresh,
++    settings_Save
++};
++
+ static HRESULT WINAPI automatic_updates_get_Settings(
+     IAutomaticUpdates *This,
+     IAutomaticUpdatesSettings **retval )
+ {
+-    FIXME("%p\n", retval);
+-    return E_NOTIMPL;
++    automatic_updates_settings *settings;
++
++    TRACE("%p\n", retval);
++    if (!retval) return E_POINTER;
++    if (!(settings = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*settings) ))) return E_OUTOFMEMORY;
++    settings->IAutomaticUpdatesSettings_iface.lpVtbl = &automatic_updates_settings_vtbl;
++    settings->refs = 1;
++    settings_Refresh( &settings->IAutomaticUpdatesSettings_iface );
++    *retval = &settings->IAutomaticUpdatesSettings_iface;
++    return S_OK;
+ }
+ 
+ static const struct IAutomaticUpdatesVtbl automatic_updates_vtbl =
+diff --git a/dlls/wuaueng/Makefile.in b/dlls/wuaueng/Makefile.in
+index 8622bb4..0e7b299 100644
+--- a/dlls/wuaueng/Makefile.in
++++ b/dlls/wuaueng/Makefile.in
+@@ -1,4 +1,5 @@
+ MODULE    = wuaueng.dll
++IMPORTS   = advapi32
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+diff --git a/dlls/wuaueng/main.c b/dlls/wuaueng/main.c
+index 9783fe0..88dd323 100644
+--- a/dlls/wuaueng/main.c
++++ b/dlls/wuaueng/main.c
+@@ -20,6 +20,7 @@
+ 
+ #include "windef.h"
+ #include "winbase.h"
++#include "winreg.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(wuaueng);
+@@ -32,3 +33,28 @@ BOOL WINAPI WUCheckForUpdatesAtShutdown(DWORD flags)
+     TRACE("(%#lx)\n", flags);
+     return FALSE;
+ }
++
++/* The options of Automatic Updates as XP's Automatic Updates applet
++ * (wuaucpl.cpl) reads them: SIZE is that of the structure it passes (0x2c,
++ * or 0x54 for the larger one), which begins with the option (AUOptions),
++ * the day and the hour of the scheduled installation; the rest (whether a
++ * policy sets them, and its own fields) stays zero. */
++HRESULT WINAPI GetAUOptionsEx(DWORD size, DWORD *options)
++{
++    static const WCHAR key[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update";
++    DWORD value, length;
++
++    TRACE("(%#lx, %p)\n", size, options);
++    if (!options || (size != 0x2c && size != 0x54)) return E_INVALIDARG;
++    memset(options, 0, size);
++    length = sizeof(value);
++    options[0] = !RegGetValueW(HKEY_LOCAL_MACHINE, key, L"AUOptions", RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY,
++                               NULL, &value, &length) && value >= 1 && value <= 5 ? value : 2;
++    length = sizeof(value);
++    options[1] = !RegGetValueW(HKEY_LOCAL_MACHINE, key, L"ScheduledInstallDay", RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY,
++                               NULL, &value, &length) && value <= 7 ? value : 0;
++    length = sizeof(value);
++    options[2] = !RegGetValueW(HKEY_LOCAL_MACHINE, key, L"ScheduledInstallTime", RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY,
++                               NULL, &value, &length) && value < 24 ? value : 3;
++    return S_OK;
++}
+diff --git a/dlls/wuaueng/wuaueng.spec b/dlls/wuaueng/wuaueng.spec
+index dea3ee9..e58e388 100644
+--- a/dlls/wuaueng/wuaueng.spec
++++ b/dlls/wuaueng/wuaueng.spec
+@@ -1,4 +1,4 @@
+-1 stub GetAUOptionsEx
++1 stdcall GetAUOptionsEx(long ptr)
+ 2 stub DSRunStoreAsComServer
+ 3 stub UHRunRemoteHandlerServer
+ 4 stdcall WUCheckForUpdatesAtShutdown(long)
