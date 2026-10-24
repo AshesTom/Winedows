@@ -12,6 +12,9 @@ one. Icons are converted from the icon theme. Only shortcuts
 that this module made are changed or removed; their list is kept in
 C:\\xp\\linux-apps\\state.json. With --watch it follows changes to the
 application directories until it is stopped; --remove takes them all out.
+The same applications are listed in XP's Add or Remove Programs, with their
+package's version, size and web site; Remove opens a terminal that removes the
+package with the system's package manager (pacman, apt, dnf or Flatpak).
 """
 import argparse
 import hashlib
@@ -52,6 +55,31 @@ FOLDERS = (
     ('System', (r'アクセサリ\システム ツール', r'Accessories\System Tools')),
     ('Utility', ('アクセサリ', 'Accessories')),
 )
+UNINSTALL = r'HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+# What Remove runs in a terminal (the first one found): the package manager
+# asks before it removes anything, sudo for the password.
+REMOVE_SCRIPT = """#!/bin/sh
+# Add or Remove Programs: remove the package $2 ($1: pacman, apt, dnf or flatpak).
+case "$1" in
+pacman) command='sudo pacman -Rs "$1"' ;;
+apt) command='sudo apt remove "$1"' ;;
+dnf) command='sudo dnf remove "$1"' ;;
+flatpak) command='flatpak uninstall "$1"' ;;
+*) exit 1 ;;
+esac
+# In the terminal's shell, $1 is the package.
+script="$command; printf '\\nPress Enter to close this window. '; read answer"
+package=$2
+for terminal in konsole gnome-terminal xfce4-terminal alacritty kitty foot xterm; do
+    command -v "$terminal" >/dev/null || continue
+    case "$terminal" in
+    gnome-terminal) exec gnome-terminal -- sh -c "$script" sh "$package" ;;
+    kitty|foot) exec "$terminal" sh -c "$script" sh "$package" ;;
+    *) exec "$terminal" -e sh -c "$script" sh "$package" ;;
+    esac
+done
+exit 1
+"""
 INVALID = str.maketrans({c: '_' for c in '\\/:*?"<>|'} | {chr(c): None for c in range(32)})
 
 
@@ -412,6 +440,66 @@ def make_icon(name, target):
     return True
 
 
+def packages(paths):
+    """{desktop entry path: (manager, package, version, size in KiB, URL,
+    description)} from the system's package manager; Flatpak's exported
+    entries are named after the application."""
+    found = {}
+    env = dict(os.environ, LC_ALL='C')
+    rest = []
+    for path in paths:
+        if '/flatpak/exports/' in str(path):
+            found[path] = ('flatpak', path.name.removesuffix('.desktop'), '', 0, '', '')
+        else:
+            rest.append(path)
+
+    def run(*args):
+        try:
+            return subprocess.run(args, capture_output=True, text=True, env=env, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ''
+    if rest and shutil.which('pacman'):
+        owners = {}
+        for line in run('pacman', '-Qo', *map(str, rest)).splitlines():
+            match = re.match(r'(/.*) is owned by (\S+) ', line)
+            if match:
+                owners[Path(match.group(1))] = match.group(2)
+        info, current = {}, {}
+        for line in run('pacman', '-Qi', *sorted(set(owners.values()))).splitlines() + ['']:
+            key, _, value = line.partition(':')
+            if not line.strip():
+                if current.get('Name'):
+                    info[current['Name']] = current
+                current = {}
+            elif _:
+                current[key.strip()] = value.strip()
+        units = {'B': 1 / 1024, 'KiB': 1, 'MiB': 1024, 'GiB': 1024 * 1024}
+        for path, package in owners.items():
+            fields = info.get(package, {})
+            number, _, unit = fields.get('Installed Size', '0 KiB').partition(' ')
+            try:
+                size = int(float(number) * units.get(unit, 1))
+            except ValueError:
+                size = 0
+            found[path] = ('pacman', package, fields.get('Version', ''), size, fields.get('URL', ''),
+                           fields.get('Description', ''))
+    elif rest and shutil.which('dpkg-query'):
+        for path in rest:
+            package = run('dpkg-query', '-S', str(path)).partition(':')[0].strip()
+            if package and ' ' not in package:
+                fields = run('dpkg-query', '-W', '-f=${Version}\t${Installed-Size}\t${Homepage}\t${binary:Summary}',
+                             package).split('\t')
+                fields += [''] * (4 - len(fields))
+                found[path] = ('apt', package, fields[0], int(fields[1] or 0), fields[2], fields[3])
+    elif rest and shutil.which('rpm'):
+        for path in rest:
+            fields = run('rpm', '-qf', '--qf', '%{NAME}\t%{VERSION}-%{RELEASE}\t%{SIZE}\t%{URL}\t%{SUMMARY}',
+                         str(path)).split('\t')
+            if len(fields) == 5 and 'not owned' not in fields[0]:
+                found[path] = ('dnf', fields[0], fields[1], int(fields[2] or 0) // 1024, fields[3], fields[4])
+    return found
+
+
 def windows_path(prefix, path):
     return 'C:\\' + str(path.relative_to(prefix / 'drive_c')).replace('/', '\\')
 
@@ -601,7 +689,63 @@ class Menu:
                     del done[file_id]
         self.save(done, folders)
         self.save_relaunch(done)
+        self.save_programs(done)
         return len(lines), len(old.keys() - new.keys())
+
+    def save_programs(self, links):
+        """The applications in Add or Remove Programs (the 32-bit view, which
+        XP's appwiz.cpl reads), written again when they change."""
+        script = self.state_dir / 'remove.sh'
+        if not script.is_file() or script.read_text() != REMOVE_SCRIPT:
+            script.write_text(REMOVE_SCRIPT)
+        found = packages([Path(item['source']) for item in links.values()])
+        programs = {}
+        for file_id, item in sorted(links.items()):
+            manager, package, version, size, url, summary = found.get(Path(item['source']), ('',) * 3 + (0, '', ''))
+            icon = self.state_dir / 'icons' / f'{file_id}.ico'
+            values = {'DisplayName': Path(item['link'].replace('\\', '/')).stem,
+                      'Comments': item['description'] or summary, 'DisplayVersion': version, 'URLInfoAbout': url,
+                      'NoModify': 1, 'NoRepair': 1}
+            if icon.is_file():
+                values['DisplayIcon'] = windows_path(self.prefix, icon)
+            if size:
+                values['EstimatedSize'] = size
+            if manager:
+                values['UninstallString'] = f'"{WINDOWS_STATE}\\linux-launch.exe" sh {script} {manager} {package}'
+            else:
+                values['NoRemove'] = 1
+            programs['linux-' + file_id] = {k: v for k, v in values.items() if v != ''}
+        target = self.state_dir / 'programs.json'
+        try:
+            old = json.loads(target.read_text())
+        except (OSError, ValueError):
+            old = {}
+        if old == programs:
+            return
+        lines = ['Windows Registry Editor Version 5.00', '']
+        for key in old.keys() - programs.keys():
+            lines += [f'[-{UNINSTALL}\\{key}]', '']
+        for key, values in programs.items():
+            lines.append(f'[{UNINSTALL}\\{key}]')
+            for name, value in values.items():
+                if isinstance(value, int):
+                    lines.append(f'"{name}"=dword:{value:08x}')
+                else:
+                    text = str(value).replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+                    lines.append(f'"{name}"="{text}"')
+            lines.append('')
+        reg = self.state_dir / 'programs.reg'
+        reg.write_text('\r\n'.join(lines) + '\r\n', encoding='utf-16')
+        env = dict(os.environ, WINEPREFIX=str(self.prefix), WINEDEBUG='-all')
+        env.pop('WINEARCH', None)
+        # Not captured: the services that this may start keep its output open.
+        result = subprocess.run([self.wine, r'C:\windows\syswow64\regedit.exe', '/S', windows_path(self.prefix, reg)],
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        reg.unlink(missing_ok=True)
+        if result.returncode == 0:
+            temp = target.with_suffix('.tmp')
+            temp.write_text(json.dumps(programs, ensure_ascii=False, indent=1) + '\n')
+            temp.replace(target)
 
 
 IN_ATTRIB, IN_CLOSE_WRITE, IN_MOVED_FROM, IN_MOVED_TO = 0x4, 0x8, 0x40, 0x80
