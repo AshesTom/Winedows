@@ -184,6 +184,10 @@ Wayland のセッションでは、Linux のアプリは出力ごとの倍率（
 - 2026-10-13 より前の `setup.sh` は、新しい prefix の見た目の設定（`Setting the theme failed`）で失敗することがありました。
   更新してから `scripts/setup.sh --media ISO --theme luna`（または `classic`）を実行し直してください。
 - ようこそ画面が出ないときは `/var/log/lightdm/seat0-greeter.log` を見てください。必要なものが足りないと、通常の LightDM の画面に切り替わります。
+  LightDM は `/etc/lightdm/lightdm.conf` を最後に読むので、そこに `greeter-session=` があると `greeter/install.sh` の設定より優先されます
+  （`lightdm --show-config` でどのファイルの値かが分かります。`greeter/install.sh` もそのときは知らせます）。その行を消すかコメントにしてください。
+- ようこそ画面のユーザーの絵は AccountsService のものです（ようこそ画面は LightDM のユーザーで動くので、ホームの `~/.face` は読めません）。
+  `accountsservice` を入れてから XP のセッションに一度ログインすると、セッションが絵を AccountsService に渡します。
 
 ## 元に戻す
 

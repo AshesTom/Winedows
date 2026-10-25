@@ -15,6 +15,20 @@ root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 share=/usr/local/share/win4wine/greeter
 seat=/etc/lightdm/lightdm.conf.d/95-xp-greeter.conf
 sudo() { if [[ $EUID -eq 0 ]]; then "$@"; else command sudo "$@"; fi; }
+# LightDM reads /etc/lightdm/lightdm.conf after its conf.d directories, so a
+# greeter-session there (some distributions set lightdm-gtk-greeter) wins over
+# ours: say which file sets the greeter LightDM will start.
+check_greeter() {
+    command -v lightdm >/dev/null || return 0
+    local config greeter source
+    config=$(lightdm --show-config 2>/dev/null) || return 0
+    greeter=$(sed -n 's/^\([A-Z]\)  greeter-session=//p' <<<"$config" | head -1)
+    [[ -z $greeter || $greeter == "$1" ]] && return 0
+    source=$(sed -n 's/^\([A-Z]\)  greeter-session=.*/\1/p' <<<"$config" | head -1)
+    source=$(sed -n "s/^$source  //p" <<<"$config" | tail -1)
+    printf 'LightDM still starts %s: %s sets greeter-session after %s. Remove or comment out that line.\n' \
+        "$greeter" "${source:-another file}" "$seat" >&2
+}
 if [[ ${1:-} == --remove ]]; then
     sudo rm -f "$seat"
     printf 'Removed %s; LightDM uses its previous greeter after a restart.\n' "$seat"
@@ -37,6 +51,7 @@ if [[ ${1:-} == --reactos ]]; then
     sudo install -Dm644 "$root/greeter/reactos-greeter.desktop" /usr/share/xgreeters/reactos-greeter.desktop
     printf '[Seat:*]\ngreeter-session=reactos-greeter\nuser-session=%s\n' "${4:-reactos-shell}" | sudo install -Dm644 /dev/stdin "$seat"
     printf 'Installed the ReactOS logon screen as %s. Settings: /etc/win4wine/reactos-greeter.json\n' "$seat"
+    check_greeter reactos-greeter
     exit 0
 fi
 assets=${1:?Usage: greeter/install.sh ASSETS | --reactos ASSETS LANG | --remove}
@@ -83,3 +98,4 @@ sudo install -Dm644 "$root/greeter/xp-greeter.desktop" /usr/share/xgreeters/xp-g
 # The Welcome screen has no session menu: users without a last session get the XP shell.
 printf '[Seat:*]\ngreeter-session=xp-greeter\nuser-session=%s\n' "${2:-xp-shell}" | sudo install -Dm644 /dev/stdin "$seat"
 printf 'Installed the XP Welcome screen as %s. Settings: /etc/win4wine/greeter.json\n' "$seat"
+check_greeter xp-greeter

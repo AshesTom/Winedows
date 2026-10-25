@@ -10,6 +10,11 @@ in greeter/, KDE and GNOME) and ~/.face (older display managers).
 At the first start a picture the user already has in Linux is kept; only a
 change made in XP replaces it. The picture last taken is recorded in
 ~/.local/state/win4wine/user-picture.
+
+The login screen runs as LightDM's user, which can't read ~/.face in a
+private home: it shows AccountsService's icon. When AccountsService has none
+(it came after the picture was taken, or refused it then), the session gives
+it ~/.face at its start.
 """
 import argparse
 import os
@@ -96,6 +101,14 @@ def watch(prefix, interval):
         taken = state.read_text().strip()
     except OSError:
         taken = None
+    face = Path.home() / '.face'
+    if taken is not None and face.is_file() and not (ICONS / user).is_file():
+        with tempfile.TemporaryDirectory() as temp:
+            # AccountsService reads the file as root, but not through a symbolic link.
+            picture = Path(temp) / 'picture'
+            picture.write_bytes(face.read_bytes())
+            if accounts_service(user, picture):
+                print('Linux picture given to AccountsService', flush=True)
     while True:
         current = signature(source)
         if current and current != taken:

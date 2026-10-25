@@ -198,7 +198,8 @@ arch_packages() {
         packages+=(noto-fonts-cjk)
     fi
     if [[ $greeter == yes ]]; then
-        packages+=(lightdm lightdm-gtk-greeter gtk3 python-cairo)
+        # AccountsService: the users' pictures, which the greeter (not their owner) can read
+        packages+=(lightdm lightdm-gtk-greeter gtk3 python-cairo accountsservice)
     elif [[ -z $(arch_display_manager) ]]; then
         # No display manager yet: LightDM with its usual login screen.
         packages+=(lightdm lightdm-gtk-greeter)
@@ -252,7 +253,8 @@ else
         packages+=(fonts-noto-cjk)
     fi
     if [[ $greeter == yes ]]; then
-        packages+=(lightdm lightdm-gtk-greeter gir1.2-lightdm-1 gir1.2-gtk-3.0 python3-gi-cairo)
+        # AccountsService: the users' pictures, which the greeter (not their owner) can read
+        packages+=(lightdm lightdm-gtk-greeter gir1.2-lightdm-1 gir1.2-gtk-3.0 python3-gi-cairo accountsservice)
     elif [[ ! -e /etc/X11/default-display-manager ]]; then
         # No display manager yet: LightDM with its usual login screen.
         packages+=(lightdm lightdm-gtk-greeter)
