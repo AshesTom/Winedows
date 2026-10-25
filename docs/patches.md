@@ -243,7 +243,7 @@ Windows 7 SP1 の実機（参照用の VM）と画素で比べて合わせたも
 | 0136 | riched20: Windows 7 の検索欄（スタートメニュー、フォルダーウィンドウ。windowless の RichEdit）の文字。ホストが後から知らせる既定の書式（メイリオ 9pt）を使い（外部シェル全体）、複雑な文字（アラビア文字など）の無い段落を GDI で測って描き、フォントを DEFAULT_CHARSET で作る（英字はそのフォント、日本語はフォントのリンク。実機と同じ字形と位置）。日本語が四角や重なりになっていた | 一部あり（`WIN4WINE_SHELL=win7`） |
 | 0137 | comdlg32: Windows 7 のシェルのセッションの項目ダイアログ（IFileDialog）を Windows 7 の形に。上の段（戻る・進む、パンくずのアドレス、更新、検索）を新しい部品（navbar7.c）がテーマの部品と explorerframe.dll の画像・文字列で描く。640x478、メッセージ用のフォント、詳細・プレビュー ペインなし、サイズ グリップ、フォルダーの選択では「フォルダー:」「フォルダーの選択」。検索はフォルダー内の名前での絞り込み（Windows 7 は索引を検索する） | あり（`WIN4WINE_SHELL=win7`） |
 
-### XP と ReactOS のシェルの細部（0138〜0171）
+### XP と ReactOS のシェルの細部（0138〜0174）
 
 XP と ReactOS のシェルのための変更のうち、Windows 7 のシェルのために加えた仕組みを使うものです（0117 のテーマ付きのメニュー、0119 の TS_MIN、
 0126 の comctl32 の切り替え、0130 と 0131 のコントロールの判定、0132 のシステム アイコンの読み込み、0133 のメッセージ ボックスの配置）。
@@ -288,6 +288,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0171 | control: XP のセッションで、control.exe に渡された項目を XP の control.exe と同じく Windows フォルダーの rundll32（shell32 の Control_RunDLL）に渡す。セキュリティ センターの「インターネット オプション」が control.exe の中で開いてすぐ閉じていた | あり（XP のセッション） |
 | 0172 | advapi32: RegisterIdleTask・UnregisterIdleTask。XP のアイドル タスクのサービスは、マシンが使われていない間にタスクの開始のイベントを、また使われると停止のイベントを知らせる。Wine はアイドルの時間を見ないので、イベントを作るだけで開始は知らせない。どちらも無く、XP のヘルプとサポートのサービス（svchost の中の pchsvc.dll）が落ち、ヘルプとサポート センターがサービスにつながらなかった | なし |
 | 0173 | netapi32, advapi32: NetLocalGroupAdd が作るローカル グループを HKLM\Software\Wine\LocalGroups に残す（1001 からの相対 ID、コメント。同じ名前は ERROR_ALIAS_EXISTS）。NetLocalGroupDel が消し、LookupAccountNameW がその名前を S-1-5-21-0-0-0-ID（SidTypeAlias、コンピューター名のドメイン）に、LookupAccountSidW がその SID を名前にする。メンバーは持たない。XP の HelpSvc.exe /install2 が HelpServicesGroup を作ってからその SID をフォルダーの ACL に使おうとして失敗し（SetupProblems が SKU_INSTALL）、ヘルプのトピックが入らなかった | なし |
+| 0174 | winex11: 外部シェルで、リージョンで形を変えた窓には 0033 の影を描かない（リージョンを設定したら消す）。通知領域のバルーン（セキュリティ センターの「Your computer might be at risk」など）は CS_DROPSHADOW のクラスのツールチップだが、XP SP3 では影が無い。角の丸いバルーンの外接矩形の右と下に四角い影が出ていた | あり |
 
 
 ## 並び順の考え方

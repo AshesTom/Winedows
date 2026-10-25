@@ -1,0 +1,49 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] winex11: no drop shadow under a window shaped by a region in the external shell
+
+Purpose: draw the notification area's balloons as XP does.
+XP behavior: the balloons ("Your computer might be at risk") are tooltips
+of a CS_DROPSHADOW class shaped by a window region (rounded corners and the
+stem); XP draws no shadow under them (screenshot of XP SP3 with the
+Security Center's balloon).
+Wine before (patch 0033): a rectangular shadow was drawn right of and below
+the balloon's bounding rectangle, away from its rounded edge.
+Change: a window with a region gets no shadow; setting a region removes the
+shadow of a window that has one.
+Scope: only with WIN4WINE_EXTERNAL_SHELL (0033's shadows).
+---
+ dlls/winex11.drv/window.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
+index f2f241b..4ec9bd2 100644
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -1435,9 +1435,17 @@ static const float shadow_corner[5] = { 0.882f, 0.665f, 0.337f, 0.118f, 0.018f }
+ static BOOL may_drop_shadow( struct x11drv_win_data *data )
+ {
+     DWORD style = NtUserGetWindowLongW( data->hwnd, GWL_STYLE );
++    HRGN region;
++    BOOL shaped;
+ 
+     if (data->embedded || !win4wine_external_shell()) return FALSE;
+-    return !(style & (WS_CHILD | WS_THICKFRAME)) && (style & WS_CAPTION) != WS_CAPTION;
++    if ((style & (WS_CHILD | WS_THICKFRAME)) || (style & WS_CAPTION) == WS_CAPTION) return FALSE;
++    /* XP draws none under a window shaped by a region, such as the
++     * notification area's balloons (tooltips of the shadowed class) */
++    if (!(region = NtGdiCreateRectRgn( 0, 0, 0, 0 ))) return TRUE;
++    shaped = NtUserGetWindowRgnEx( data->hwnd, region, 0 ) != ERROR;
++    NtGdiDeleteObjectApp( region );
++    return !shaped;
+ }
+ 
+ static BOOL wants_drop_shadow( struct x11drv_win_data *data )
+@@ -3681,6 +3689,8 @@ void X11DRV_SetWindowRgn( HWND hwnd, HRGN hrgn, BOOL redraw )
+     if ((data = get_win_data( hwnd )))
+     {
+         sync_window_region( data, hrgn );
++        /* no shadow under a shaped window (may_drop_shadow) */
++        if (hrgn) destroy_drop_shadow( data );
+         release_win_data( data );
+     }
+     else if (X11DRV_get_whole_window( hwnd ))

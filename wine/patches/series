@@ -171,3 +171,4 @@
 0171-control-external-xp-rundll32.patch
 0172-advapi32-idle-tasks.patch
 0173-netapi32-local-groups.patch
+0174-winex11-external-no-shadow-under-regions.patch
