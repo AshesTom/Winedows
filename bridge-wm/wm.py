@@ -418,9 +418,27 @@ class Manager:
         temporary.replace(self.ipc / 'shellkeys.tsv')
 
     def raise_overlays(self):
+        # The unmanaged (override-redirect) windows that are shown stay above the
+        # managed ones, in their order: XP's menus and the Start menu's All
+        # Programs cascade (popups of its own), their drop shadows, tooltips and
+        # balloons are topmost on XP. Raising the Start menu when it takes the
+        # focus back from a closed submenu covered All Programs.
+        try:
+            children = self.root.query_tree().children
+        except error.XError:
+            children = []
+        for w in children:
+            if w.id == self.support.id:
+                continue
+            try:
+                attrs = w.get_attributes()
+                if attrs.override_redirect and attrs.map_state == X.IsViewable:
+                    w.configure(stack_mode=X.Above)
+            except error.XError:
+                pass
         # Windows 7's Start button over the taskbar and the user picture over the
-        # Start menu are unmanaged (override-redirect) windows of their own;
-        # raising the taskbar or the menu must not cover them.
+        # Start menu are unmanaged windows of their own; raising the taskbar or
+        # the menu must not cover them.
         for w in list(self.overlays.values()):
             try:
                 w.configure(stack_mode=X.Above)
