@@ -7,7 +7,10 @@
  * process) and follows it as XP's own list would: the visual style's
  * separator under the pins, the system highlight colours for the hot item,
  * one selection across both lists, and a frame drawn as soon as the menu
- * opens (a WinEvent hook, the timer only as a fallback). */
+ * opens (a WinEvent hook, the timer only as a fallback).
+ *
+ * It also opens folders with the Folders tree under Windows Classic
+ * (follow_theme). */
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -515,11 +518,34 @@ static void CALLBACK menu_event(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG
     refresh_overlay();
 }
 
+/* Under Windows Classic, folders open with the Folders tree on the left
+ * (Folder's default verb is Explore) instead of the task pane, whose Luna
+ * look this theme does not change; with the XP style, XP's default (Open).
+ * HKCR is the machine's Classes key: Wine's shell does not merge the user's. */
+static void follow_theme(void)
+{
+    static int classic = -1;
+    HKEY key;
+    if (classic == !IsThemeActive()) return;
+    classic = !IsThemeActive();
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Classes\\Folder\\shell", 0, NULL, 0, KEY_SET_VALUE,
+                        NULL, &key, NULL))
+        return;
+    if (classic) RegSetValueExW(key, NULL, 0, REG_SZ, (const BYTE *)L"explore", sizeof(L"explore"));
+    else RegDeleteValueW(key, NULL);
+    RegCloseKey(key);
+}
+
 static LRESULT CALLBACK host_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
     if (message == WM_TIMER)
     {
         refresh_overlay();
+        return 0;
+    }
+    if (message == WM_THEMECHANGED)
+    {
+        follow_theme();
         return 0;
     }
     if (message == WM_DESTROY)
@@ -561,6 +587,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE previous, WCHAR *command_line, int 
     HWND host = CreateWindowExW(0, HOST_CLASS, L"", 0, 0, 0, 0, 0,
                                 NULL, NULL, app, NULL);
     if (!host) return 1;
+    follow_theme();
     load_items();
     SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SELECTION, NULL, menu_event, 0, 0,
                     WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
