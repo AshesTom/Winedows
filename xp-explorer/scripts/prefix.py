@@ -67,11 +67,9 @@ SERVERS = [(c, 'browseui.dll') for c in (
     '{3F6953F0-5359-47FC-BD99-9F2CB95A62FD}', '{6D5313C0-8C62-11D1-B2CD-006097DF8C11}',
     '{1EBDCF80-A200-11D0-A3A4-00C04FD706EC}', '{3FC0B520-68A9-11D0-8D77-00C04FD70822}',
     '{7487CD30-F71A-11D0-9EA7-00805F714772}')] + [
-    # Found with DllGetClassObject on the XP DLLs, as win4wine does: the folder
-    # task pane (browseui) and Display Properties' pages (themeui).
+    # The folder task pane (browseui) and Display Properties' pages (themeui).
     ('{3F4EEF80-BFE8-11D0-A3A5-00C04FD706EC}', 'browseui.dll')] + [(c, 'themeui.dll') for c in (
-    '{8B4A02DB-97BB-4C1B-BE75-8827A7358CD0}', '{B12AE898-D056-4378-A844-6D393FE37956}',
-    '{DD522ACC-F821-461A-A407-50B198B896DC}', '{4C892621-6757-4FE0-AD8C-A6301BE7FBA2}',
+    '{B12AE898-D056-4378-A844-6D393FE37956}', '{4C892621-6757-4FE0-AD8C-A6301BE7FBA2}',
     '{ADB9F5A4-E73E-49B8-99B6-2FA317EF9DBC}', '{B7BBD408-F09C-4AA8-B65E-A00B8FE0F0B9}')]
 
 SHELL32 = r'@%SystemRoot%\system32\SHELL32.dll,'
