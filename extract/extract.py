@@ -113,6 +113,10 @@ FILES = {
                      'ieuinit.inf', 'netrass.inf', 'ie.inf'), 'apps/inf'),
     # XP's registry defaults (sounds, Explorer settings), read by prefix/extras.py.
     **dict.fromkeys(('hivedef.inf', 'hivesft.inf'), 'inf'),
+    # XP's file types, their names and icons (prefix/extras.py file_types):
+    # HIVECLS.INF's, the Compressed (zipped) Folders of zipfldr.dll, and
+    # msiexec.exe, whose icon Windows Installer packages show.
+    **dict.fromkeys(('hivecls.inf', 'zipfldr.dll', 'msiexec.exe'), 'filetypes'),
     # Image thumbnails and previews in folder windows (and Windows Picture and Fax Viewer).
     'shimgvw.dll': 'shell',
     # XP's Windows Classic theme for Display Properties (CLASSIC.THE_ on the CD).
@@ -148,7 +152,7 @@ RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
                 'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
-                'help', 'apps')
+                'help', 'apps', 'filetypes')
 
 
 def setup_sources(paths):
@@ -338,7 +342,7 @@ def missing_groups(output):
               'programs': 'programs/tourstart.exe', 'tour': 'tour/mmTour/tour.exe',
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
               'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help',
-              'apps': 'apps/programs/Messenger/msmsgs.exe'}
+              'apps': 'apps/programs/Messenger/msmsgs.exe', 'filetypes': 'filetypes/hivecls.inf'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 

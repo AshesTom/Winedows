@@ -20,6 +20,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -31,7 +32,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '30'
+VERSION = '31'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -70,6 +71,9 @@ NETCON_NATIVE = ('rtutils', 'rasdlg')
 # connection objects.
 NETCON_CLASSES = ('{BA126AD1-2166-11D1-B1D0-00805FC1270E}', '{BA126AE5-2166-11D1-B1D0-00805FC1270E}',
                   '{BA126ADB-2166-11D1-B1D0-00805FC1270E}')
+# XP's Compressed (zipped) Folders in syswow64 (Wine has no zipfldr.dll):
+# .zip files with its icon, opened as folders, and Send To.
+FILE_TYPES = ('zipfldr.dll',)
 
 
 def xp_explorer():
@@ -254,9 +258,116 @@ def copy_files(assets, prefix):
     if (assets / 'netcon/wzcdlg.dll').is_file() and (assets / 'tray/netshell.dll').is_file():
         for name in NETCON:
             shutil.copyfile(assets / ('tray' if name == 'netshell.dll' else 'netcon') / name, native / name)
+    if (assets / 'filetypes/hivecls.inf').is_file():
+        for name in FILE_TYPES:
+            shutil.copyfile(assets / 'filetypes' / name, native / name)
+        # Only its icon: Windows Installer packages show msiexec.exe's, and
+        # Wine's msiexec.exe stays the one that installs them.
+        (xp / 'res').mkdir(exist_ok=True)
+        shutil.copyfile(assets / 'filetypes/msiexec.exe', xp / 'res/msiexec.exe')
     # Ours, so that XP Explorer's stage() keeps the common controls 6 assembly
     # in winsxs and puts XP's comctl32 beside rundll32 (Wine patch 0149).
     (prefix / '.patched-wine').write_text('1\n')
+
+
+def file_types(assets, prefix):
+    """XP's file types as its setup registers them, as .reg texts: HIVECLS.INF's
+    extensions and their types (names, icons, verbs), the Compressed (zipped)
+    Folders of zipfldr.dll's REGINST, and the icon that msi.dll gives Windows
+    Installer packages and patches (msiexec.exe's first). A verb or an icon
+    whose program the prefix does not have is left out."""
+    import xpreg
+    source = assets / 'filetypes'
+    if not (source / 'hivecls.inf').is_file():
+        return []
+    text = xpreg.read_inf(source / 'hivecls.inf')
+    windows = prefix / 'drive_c/windows'
+
+    def program(command):
+        """The file of the program (or rundll32's DLL) that COMMAND names, or None."""
+        command = command.strip().lstrip('@')
+        if command.startswith('"'):
+            name, _, rest = command[1:].partition('"')
+        else:
+            name, _, rest = command.partition(' ')
+        name = name.split(',')[0].strip()
+        if name.lower().endswith('rundll32.exe') and rest.strip():
+            name = rest.strip().split(',')[0].strip('"')
+        path = re.sub(r'%+(SystemRoot|windir)%+', r'C:\\windows', name, flags=re.IGNORECASE)
+        if not re.match(r'^[A-Za-z]:\\', path):
+            folders = ('', 'syswow64', 'system32')
+            candidates = [Path(f) / path for f in folders]
+            candidates += [Path(f) / (path + '.dll') for f in folders if '.' not in path]
+            root = windows
+        elif path[3:].lower().startswith('windows\\'):
+            relative = path[len('C:\\windows\\'):]
+            candidates = [Path(relative.replace('\\', '/'))]
+            if relative.lower().startswith('system32\\'):
+                # The 32-bit XP shell reads syswow64 for system32.
+                candidates.insert(0, Path('syswow64') / relative[len('system32\\'):].replace('\\', '/'))
+            root = windows
+        else:
+            candidates, root = [Path(path[3:].replace('\\', '/'))], prefix / 'drive_c'
+        return next((f for f in (find_nocase(root, c) for c in candidates) if f), None)
+
+    def xp_file(command):
+        """Whether COMMAND's file is XP's: icons and strings are found by
+        number, which Wine's own files number otherwise."""
+        path = program(command)
+        if not path:
+            return False
+        with open(path, 'rb') as stream:
+            return b'Wine builtin DLL' not in stream.read(256)
+
+    # The extensions and the types they name.
+    extensions, types = [], set()
+    for line in text.splitlines():
+        parts = xpreg.fields(line)
+        if len(parts) >= 5 and parts[0].upper() == 'HKCR' and re.fullmatch(r'\.[^\\]+', parts[1]) and not parts[2]:
+            extensions.append(parts[1])
+            types.add(parts[4].lower())
+    excluded, lines = [], []
+    for line in text.splitlines():
+        parts = xpreg.fields(line)
+        if len(parts) >= 5 and parts[0].upper() == 'HKCR' and parts[1].split('\\')[0].lower() in types:
+            key, value = parts[1], parts[4]
+            if value.startswith('@') and not xp_file(value.rsplit(',', 1)[0]):
+                continue  # a name or verb from one of Wine's files: the plain one stays
+            if re.search(r'\\shell\\[^\\]+\\command$', key, re.IGNORECASE) and not parts[2] and \
+                    not value.lstrip('"').startswith('%1') and not program(value):
+                excluded.append(key.rsplit('\\', 1)[0])
+            elif key.lower().endswith('\\defaulticon') and not parts[2] and \
+                    not value.startswith('%1') and not xp_file(value.rsplit(',', 1)[0]):
+                excluded.append(key)
+        lines.append(line)
+    text = '\n'.join(lines)
+    prefixes = tuple(extensions) + tuple(t for t in types if t)
+    texts = [xpreg.hive_entries(text, 'HKCR', prefixes, exclude=tuple(excluded))]
+    if (source / 'zipfldr.dll').is_file():
+        zip_reginst = xpreg.reginst(source / 'zipfldr.dll')
+        texts.append(xpreg.hive_entries(zip_reginst, 'HKCR', ('',), extra={
+            '_SYS_MOD_PATH': r'C:\windows\system32\zipfldr.dll', '25': r'C:\windows'},
+            install=('RegAlways', 'RegTakeDefault')))
+        texts.append(xpreg.hive_entries(zip_reginst, 'HKLM', ('',), extra={
+            '_SYS_MOD_PATH': r'C:\windows\system32\zipfldr.dll'}, install=('RegAlways', 'RegTakeDefault')))
+    r = xp_explorer().Reg()
+    for package, name in (('Msi.Package', 'Windows Installer Package'), ('Msi.Patch', 'Windows Installer Patch')):
+        r.add('HKCR\\' + package, None, name)
+        r.add('HKCR\\' + package + '\\DefaultIcon', None, r'C:\xp\res\msiexec.exe,0')
+    texts.append(r.text())
+    return texts
+
+
+def find_nocase(root, relative):
+    """RELATIVE under ROOT in any case (Windows names on Linux), or None."""
+    path = root
+    for part in Path(relative).parts:
+        if not path.is_dir():
+            return None
+        path = next((p for p in path.iterdir() if p.name.lower() == part.lower()), None)
+        if path is None:
+            return None
+    return path if path.is_file() else None
 
 
 def themes(assets, prefix, wine):
@@ -811,7 +922,7 @@ def stage(prefix, xpx=None):
             temporary.replace(target)
     system = prefix / 'drive_c/windows/syswow64'
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
-    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY +
+    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY + FILE_TYPES +
                (NETCON if netcon else ())]
     sources += [BRIDGE / 'netcon' / name for name in NETCON_BRIDGE] if netcon else []
     for source in sources:
@@ -854,6 +965,10 @@ def apply(prefix, wine):
     print('* XP Explorer additions: registry', flush=True)
     regedit(wine, prefix, registry(xpx).text())
     regedit(wine, prefix, xpx.xp_registrations(assets))
+    # Before IE6, Windows Media Player and XP's programs, which register
+    # their own types over these, as on XP.
+    for text in file_types(assets, prefix):
+        regedit(wine, prefix, text)
     if (assets / 'intl/input.dll').is_file():
         for text in keyboard_layouts(assets):
             regedit(wine, prefix, text)

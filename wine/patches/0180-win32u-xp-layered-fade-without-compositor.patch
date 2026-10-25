@@ -16,37 +16,23 @@ or UpdateLayeredWindow's ULW_ALPHA without per-pixel alpha) is flushed
 blended with what this process's windows below it show there, read from
 their surfaces at each flush, so their new pixels show through as they draw.
 UpdateLayeredWindow calls that only change the alpha flush the window again.
+A window whose alpha SetLayeredWindowAttributes changes draws again (at once
+in its own thread), as AnimateWindow's frames do: XP's tooltips and
+notification balloons fade in with a timer that only sets the alpha
+(comctl32's tooltips.cpp, TTT_FADESHOW), and a blended flush leaves its
+pixels in the window's bits where they are the X11 driver's image, so the
+balloons ended as a copy of what was below them when they appeared.
 Evidence: XP source at Source/XPSP1/NT/shell/shell32/menuband/fadetsk.cpp
-and menubar.cpp; the Start menu's All Programs fades over the Start menu in
-an Xvfb test session, frame by frame.
+and menubar.cpp, shell/comctl32/v6/tooltips.cpp (TTHandleTimer); the
+Start menu's All Programs fades over the Start menu, and the Security
+Center's balloon over a folder window, in an Xvfb test session.
 Scope: the XP session (WIN4WINE_SHELL=xp) without WIN4WINE_COMPOSITED.
 ---
-diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
---- a/dlls/win32u/ntuser_private.h
-+++ b/dlls/win32u/ntuser_private.h
-@@ -76,6 +76,7 @@
-     int                clip_clients;  /* Has client surfaces that needs to be clipped out */
-     int                cbWndExtra;    /* class cbWndExtra at window creation */
-     DWORD_PTR          userdata;      /* User private data */
-+    UINT               fade_alpha;    /* win4wine: UpdateLayeredWindow's constant alpha + 1 without per-pixel alpha */
-     DWORD              wExtra[1];     /* Window extra bytes */
- } WND;
- 
-diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
---- a/dlls/win32u/win32u_private.h
-+++ b/dlls/win32u/win32u_private.h
-@@ -274,6 +274,7 @@
- extern MINMAXINFO get_min_max_info( HWND hwnd );
- extern HWND get_window_relative( HWND hwnd, UINT rel );
- extern BOOL have_shell_overlays(void);
-+extern DWORD *get_layered_background( struct window_surface *surface, BYTE *alpha );
- extern void blend_shell_overlays( struct window_surface *owner );
- extern DWORD get_window_thread( HWND hwnd, DWORD *process );
- extern HWND is_current_process_window( HWND hwnd );
 diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
+index 89cf491..c458930 100644
 --- a/dlls/win32u/dce.c
 +++ b/dlls/win32u/dce.c
-@@ -617,7 +617,13 @@
+@@ -617,7 +617,13 @@ W32KAPI void window_surface_flush( struct window_surface *surface )
      BITMAPINFO *shape_info = (BITMAPINFO *)shape_buf;
      RECT dirty = surface->rect, bounds;
      BOOL flushed = FALSE;
@@ -61,7 +47,7 @@ diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
  
      window_surface_lock( surface );
  
-@@ -637,6 +643,35 @@
+@@ -637,6 +643,35 @@ W32KAPI void window_surface_flush( struct window_surface *surface )
          TRACE( "Flushing hwnd %p, surface %p %s, bounds %s, dirty %s\n", surface->hwnd, surface,
                 wine_dbgstr_rect( &surface->rect ), wine_dbgstr_rect( &surface->bounds ), wine_dbgstr_rect( &dirty ) );
  
@@ -97,7 +83,7 @@ diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
          if (surface->funcs->flush( surface, &surface->rect, &dirty, color_info, color_bits,
                                     shape_changed, shape_info, shape_bits ))
              reset_bounds( &surface->bounds );
-@@ -644,6 +679,8 @@
+@@ -644,6 +679,8 @@ W32KAPI void window_surface_flush( struct window_surface *surface )
      }
  
      window_surface_unlock( surface );
@@ -106,10 +92,59 @@ diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
      /* Windows 7's shell: layered windows over this one blend with its new pixels */
      if (flushed && have_shell_overlays()) blend_shell_overlays( surface );
  }
+diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
+index b05f7ab..f851d97 100644
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -76,6 +76,7 @@ typedef struct tagWND
+     int                clip_clients;  /* Has client surfaces that needs to be clipped out */
+     int                cbWndExtra;    /* class cbWndExtra at window creation */
+     DWORD_PTR          userdata;      /* User private data */
++    UINT               fade_alpha;    /* win4wine: UpdateLayeredWindow's constant alpha + 1 without per-pixel alpha */
+     DWORD              wExtra[1];     /* Window extra bytes */
+ } WND;
+ 
+diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
+index bc37c19..8a4f36e 100644
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -274,6 +274,7 @@ extern UINT get_window_dpi_awareness_context( HWND hwnd );
+ extern MINMAXINFO get_min_max_info( HWND hwnd );
+ extern HWND get_window_relative( HWND hwnd, UINT rel );
+ extern BOOL have_shell_overlays(void);
++extern DWORD *get_layered_background( struct window_surface *surface, BYTE *alpha );
+ extern void blend_shell_overlays( struct window_surface *owner );
+ extern DWORD get_window_thread( HWND hwnd, DWORD *process );
+ extern HWND is_current_process_window( HWND hwnd );
 diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+index b7710ba..3efd483 100644
 --- a/dlls/win32u/window.c
 +++ b/dlls/win32u/window.c
-@@ -2869,6 +2869,105 @@
+@@ -2621,6 +2621,8 @@ BOOL WINAPI NtUserGetLayeredWindowAttributes( HWND hwnd, COLORREF *key, BYTE *al
+ /*****************************************************************************
+  *           NtUserSetLayeredWindowAttributes (win32u.@)
+  */
++static BOOL fades_layered( HWND hwnd );
++
+ BOOL WINAPI NtUserSetLayeredWindowAttributes( HWND hwnd, COLORREF key, BYTE alpha, DWORD flags )
+ {
+     BOOL ret;
+@@ -2641,6 +2643,14 @@ BOOL WINAPI NtUserSetLayeredWindowAttributes( HWND hwnd, COLORREF key, BYTE alph
+     {
+         user_driver->pSetLayeredWindowAttributes( hwnd, key, alpha, flags );
+         update_window_state( hwnd );
++        /* XP's tooltips and balloons fade with this call alone (a timer, no
++         * redraw): the window draws again, as AnimateWindow's frames do, and
++         * its next flush blends it with the new alpha. A blended flush leaves
++         * its pixels in the window's bits where they are the driver's image
++         * (X11), so a flush alone would blend that blend again. */
++        if (fades_layered( hwnd ))
++            NtUserRedrawWindow( hwnd, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN |
++                                (get_window_thread( hwnd, NULL ) == GetCurrentThreadId() ? RDW_UPDATENOW : 0) );
+     }
+ 
+     return ret;
+@@ -2869,6 +2879,105 @@ BOOL have_shell_overlays(void)
  /*****************************************************************************
   *           UpdateLayeredWindow (win32u.@)
   */
@@ -215,7 +250,7 @@ diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
  BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_dst, const SIZE *size,
                                         HDC hdc_src, const POINT *pts_src, COLORREF key,
                                         const BLENDFUNCTION *blend, DWORD flags, const RECT *dirty )
-@@ -2936,9 +3035,31 @@
+@@ -2936,9 +3045,31 @@ BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_
          apply_window_pos( hwnd, 0, swp_flags, surface, &new_rects, NULL );
      if (!surface) return FALSE;
  

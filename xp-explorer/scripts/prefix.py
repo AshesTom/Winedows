@@ -834,15 +834,20 @@ def register_search(wine, env):
     subprocess.run([wine, regsvr32, '/s', r'C:\windows\system32\msxml3.dll'], env=env)
 
 
+# With the decoders that XP registers: the Windows Media Audio and Video DMOs,
+# without which the player asked for the codec of format tag 0x161 and played
+# no WMA.
 WMP_REGISTER = ('wmp.dll', 'wmpdxm.dll', 'wmpshell.dll', 'wmpasf.dll', 'mpvis.dll', 'wmpcore.dll',
-                'qasf.dll', 'wmvcore.dll')
+                'qasf.dll', 'wmvcore.dll', 'wmadmod.dll', 'wmvdmod.dll', 'wmv8dmod.dll', 'wmspdmod.dll',
+                'mp43dmod.dll')
 
 
 def install_wmp(assets, prefix, wine, env):
     """Windows Media Player 9 from the user's ISO, beside its wmplayer.exe, with
     what XP's setup did: wmp.inf's registry (InstallWMP7 and the per user
-    PerUserStub), its DLLs' self-registration, Open With and Play verbs, and a
-    Start menu shortcut. Wine's own DirectShow (quartz, with GStreamer) plays
+    PerUserStub), its DLLs' self-registration, its file types (unregmp2.exe
+    /RegExts: .mp3, .wma, .wav and the rest open in the player, with its
+    icons), Open With and Play verbs, and a Start menu shortcut. Wine's own DirectShow (quartz, with GStreamer) plays
     the media."""
     import xpreg
     source = assets / 'wmp'
@@ -856,6 +861,11 @@ def install_wmp(assets, prefix, wine, env):
         # Made by earlier versions, whose unexpanded paths the player took
         # for a folder of its own.
         shutil.rmtree(target / '%ProgramFiles%', ignore_errors=True)
+    # XP's setup puts its helper in the INF folder (%17%), where wmp.inf's
+    # commands and the file types' names (@...\inf\unregmp2.exe,-9925) find it.
+    inf_folder = prefix / 'drive_c/windows/inf'
+    inf_folder.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source / 'unregmp2.exe', inf_folder / 'unregmp2.exe')
     r = Reg()
     natives = [p.stem for p in source.glob('*.dll')]
     r.add(r'HKCU\Software\Wine\DllOverrides', 'wmplayer.exe', 'native')
@@ -876,7 +886,7 @@ def install_wmp(assets, prefix, wine, env):
     folder = r'C:\Program Files\Windows Media Player'
     # wmp.inf's system32 files are beside wmplayer.exe here.
     dirs = {'11': folder, '16422': r'C:\Program Files', '49001': r'C:\Program Files', '49301': folder,
-            '24': 'C:', '10': r'C:\windows'}
+            '24': 'C:', '10': r'C:\windows', '17': r'C:\windows\inf'}
     runonce = (r'Software\Microsoft\Windows\CurrentVersion\RunOnce',)
     for root in ('HKLM', 'HKCR', 'HKCU'):
         texts.append(xpreg.hive_entries(inf, root, ('',), runonce, extra=dirs, install=('InstallWMP7', 'PerUserStub')))
@@ -889,6 +899,10 @@ def install_wmp(assets, prefix, wine, env):
     for dll in WMP_REGISTER:
         subprocess.run([wine, r'C:\windows\syswow64\regsvr32.exe', '/s',
                         rf'C:\Program Files (x86)\Windows Media Player\{dll}'], env=env)
+    # What XP's first start runs after them (wmp.inf's WMPDelay.Actions,
+    # OE_WMPWMP7_Install_20): the media file types, from the player's list of
+    # extensions that wmp.inf wrote.
+    subprocess.run([wine, r'C:\windows\inf\unregmp2.exe', '/Shortcuts', '/RegExts'], env=env)
     r = Reg()
     player = r'"%ProgramFiles%\Windows Media Player\wmplayer.exe"'
     r.add(r'HKCR\Applications\wmplayer.exe\shell\open\command', None, player + r' /Open "%1"',
@@ -916,11 +930,11 @@ def install_wmp(assets, prefix, wine, env):
 def wine_build(wine):
     """An identifier of the Wine build: win4wine's patch digest, or the version."""
     install = Path(shutil.which(wine) or wine).resolve().parents[1]
-    # "+media4": IE6, Windows Media Player 9 and its Start menu integration,
-    # and the Search Companion.
+    # "+media5": IE6, Windows Media Player 9 (with its decoders and file types)
+    # and its Start menu integration, and the Search Companion.
     if (install / 'win4wine-patches').is_file():
-        return (install / 'win4wine-patches').read_text().strip() + '+media4'
-    return subprocess.run([wine, '--version'], capture_output=True, text=True).stdout.strip() + '+media4'
+        return (install / 'win4wine-patches').read_text().strip() + '+media5'
+    return subprocess.run([wine, '--version'], capture_output=True, text=True).stdout.strip() + '+media5'
 
 
 def wallpaper(assets, prefix, size=None):

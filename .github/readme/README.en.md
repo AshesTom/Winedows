@@ -78,7 +78,9 @@ and **XP Explorer** ([xp-explorer/](../../xp-explorer/README.md)), which opens X
   Wi-Fi networks, joined from it), Add or Remove Programs (with the Start menu's Set Program Access and
   Defaults; the Linux applications are listed too, Remove goes to the package manager and the default programs become
   the Linux defaults), the Security Center (Automatic Updates, Internet Options) and the Help and Support Center (XP's help
-  topics and their service, opened from the Start menu's Help and Support), all from your own ISO's files (`prefix/extras.py`).
+  topics and their service, opened from the Start menu's Help and Support), and XP's file types (HIVECLS.INF's names and
+  icons, .zip Compressed Folders, Windows Installer packages, Windows Media Player's music and video types), all from
+  your own ISO's files (`prefix/extras.py`).
 - **XP's own programs and All Programs**: XP's Calculator, Notepad, Paint, WordPad, Command Prompt, Task Manager,
   Registry Editor, Character Map, Sound Recorder, Volume Control, Magnifier, On-Screen Keyboard, HyperTerminal,
   Remote Desktop Connection, the games (FreeCell, Hearts, Minesweeper, Pinball, Solitaire, Spider Solitaire) and
@@ -138,7 +140,7 @@ and **XP Explorer** ([xp-explorer/](../../xp-explorer/README.md)), which opens X
 ```text
 LightDM ─ XP Welcome greeter (greeter/)
    └─ XP Shell session (session/supervisor.py)
-        ├─ Wine 11.0 + 181 patches (wine/patches/)
+        ├─ Wine 11.0 + 182 patches (wine/patches/)
         │    └─ XP's explorer.exe, shell32.dll, … (extracted from the ISO; ReactOS's or Windows 7's in their sessions)
         ├─ bridge-wm: an X11 WM + Win32 proxy windows (bridge-wm/)
         │    (Wayland session: a patched labwc instead of the WM, wayland/)

@@ -1,6 +1,6 @@
 # Wine のパッチ
 
-`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 181 本のパッチがあります。
+`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 182 本のパッチがあります。
 当てるのは `wine/build.sh` で、実際の適用は `wine/patch-state.py` が行います（途中まで当たったソースにも、足りない分だけを当てます）。
 
 番号の付け直しや、以前の番号との対応表は [history/patch-history.md](history/patch-history.md) にあります。
@@ -13,7 +13,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 
 - 判定は 0019 が加える `include/wine/win4wine.h` の `win4wine_external_shell()` に 1 つにまとめています。
   ntdll は Rtl の関数で、wow64.dll（0023）は ntdll の関数で同じ変数を読みます。
-- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173、0176、0177）、普通のアプリの見た目と動作を変えない 0025・0026、
+- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173、0176、0177、0182）、普通のアプリの見た目と動作を変えない 0025・0026、
   Windows 7 のシェルが呼ぶ API と Wine の修正（0094〜0112）の多くと、版 4 のスタイルでだけ効くテーマの修正（0113〜0119）です。
 - 0024 は `WIN4WINE_SESSION_REQUEST` があるときだけ効きます。
 - 0090 は、さらに `WIN4WINE_FOLDER_SHELL` があるときだけ効きます（ReactOS のシェルのセッションだけが設定します）。
@@ -103,7 +103,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 | 0049 | user32: 拡大の壁紙を描く（ReactOS のシェルの「合わせる」「塗りつぶす」も） | あり |
 | 0050 | win32u: 「クリック後にメニュー項目をフェードアウトする」を無効と答える（窓の不透明度を出せないので、選んだ項目がログオフの灰色の画面に残った） | あり |
 | 0051 | win32u: ほかのプロセスの窓の SetWindowPlacement（窓のスレッドに送って設定させる）。XP と Windows 7 の「デスクトップの表示」（タスクバー、右端のボタン、クイック起動、Win+D）が、最小化した窓を 2 回目に元に戻す。呼んだ側のプロセスが前面なら、戻した窓を前面にする（Windows では呼んだ側が前面の権利で戻す。Wayland のセッションでスタート ボタンが前面に残っていた）（実機で確認） | あり |
-| 0052 | user32, win32u: XP の最小化・最大化・元に戻すときのタイトルバーのアニメーション（DrawAnimatedRects の IDANI_CAPTION、タスク バンドとの間を 200 ms で動く）。SPI_GETANIMATION と SPI_SETANIMATION は WindowMetrics\MinAnimate を読み書きする（Windows と同じく既定はオン。Wine 全体）（AshesTom） | あり（XP のセッション） |
+| 0052 | user32, win32u: XP の最小化・最大化・元に戻すときのタイトルバーのアニメーション（DrawAnimatedRects の IDANI_CAPTION）。XP の xxxAnimateCaption と同じく、DrawCaptionTemp のクラシックのアクティブなタイトルバー（グラデーション、アイコン、タイトル。ビジュアル スタイルのものではない）を SM_CYCAPTION より 1 画素低い帯として一度だけ描き、250 ms で左上の角を動かして幅を変え、帯の左の部分を見せる。窓の前後の矩形（キャプションより高い矩形は枠の分を除く）と、最小化と元に戻すときは 0182 の WM_KLUDGEMINRECT でタスクバーに聞いたボタンの矩形の間を動く（ボタンが無い窓は動かさない）。SPI_GETANIMATION と SPI_SETANIMATION は WindowMetrics\MinAnimate を読み書きする（Windows と同じく既定はオン。Wine 全体）（AshesTom） | あり（XP のセッション） |
 
 ### 文字と GDI の画素（0053〜0064）
 
@@ -291,7 +291,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0174 | winex11: 外部シェルで、リージョンで形を変えた窓には 0033 の影を描かない（リージョンを設定したら消す）。通知領域のバルーン（セキュリティ センターの「Your computer might be at risk」など）は CS_DROPSHADOW のクラスのツールチップだが、XP SP3 では影が無い。角の丸いバルーンの外接矩形の右と下に四角い影が出ていた | あり |
 | 0175 | dlls: XP のセッションでメニューとコンテキスト メニューをアニメーション表示する。MenuFade が有効なら約 175 ms でフェードし、そうでなければ開く方向から約 150 ms で展開する。合成マネージャーが無い場合、メニューは覆う画面のコピーに重ねて描いてフェードし、Wayland はレイヤー付きサーフェスで透明度と領域を描く。AnimateWindow の AW_BLEND・AW_SLIDE も実装 | あり（XP のセッション） |
 
-### XP のソースとの照合で見つけた API の修正（0176〜0181）
+### XP のソースとの照合で見つけた API の修正（0176〜0182）
 
 | 番号 | 内容 | opt-in |
 |---|---|---|
@@ -299,8 +299,9 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0177 | shell32: rename の通知を移動元と移動先の両方を監視する登録へ届け、NewDelivery の共有メモリーを PIDL の整列分も確保する。XP の scnotify.cpp は二つの PIDL を照合していた | なし |
 | 0178 | user32: XP の AnimateWindow と同じく、未知のフラグやモードのない要求を拒否し、子ウィンドウの AW_BLEND を拒否する。Wine は AW_SLIDE だけの要求を両方向に展開し、無効な AW_BLEND でもウィンドウの状態を変えることがあった | あり（XP のセッション） |
 | 0179 | win32u, user32: XP のセッションで MessageBeep が XP の win32k の xxxMessageBeep と同じく種類のアイコンのイベント（SystemHand、SystemQuestion、SystemExclamation、SystemAsterisk、それ以外と 0xFFFFFFFF は「一般の警告音」の .Default）をサウンド設定から鳴らす（user32 への PlayMessageBeep のコールバックで winmm の PlaySound。32 ビットのプログラムは wow64win を通る）。Wine はドライバーのビープ（XBell）を鳴らしていて、デスクトップで何もしないキーを押すとハードウェアのビープが鳴った。アイコンの無いメッセージ ボックスも XP のスキームに無い SystemDefault ではなく .Default を鳴らす | あり（XP のセッション） |
-| 0180 | win32u: XP のセッションで合成マネージャーが無いとき（`WIN4WINE_COMPOSITED` が無い）、一定の透明度のレイヤー付きウィンドウ（SetLayeredWindowAttributes の LWA_ALPHA、ピクセルごとのアルファの無い UpdateLayeredWindow の ULW_ALPHA）を、同じプロセスの下のウィンドウのサーフェスと混ぜて画面に送る（送るたびに読み直すので、下で描き直された画素も透ける）。スタートメニューの「すべてのプログラム」の AnimateWindow(AW_BLEND) と選択項目の SysFader が、X11 の不透明度の無視（0175 ではディザの穴）ではなく XP と同じくなめらかにフェードする | あり（XP のセッション） |
+| 0180 | win32u: XP のセッションで合成マネージャーが無いとき（`WIN4WINE_COMPOSITED` が無い）、一定の透明度のレイヤー付きウィンドウ（SetLayeredWindowAttributes の LWA_ALPHA、ピクセルごとのアルファの無い UpdateLayeredWindow の ULW_ALPHA）を、同じプロセスの下のウィンドウのサーフェスと混ぜて画面に送る（送るたびに読み直すので、下で描き直された画素も透ける）。スタートメニューの「すべてのプログラム」の AnimateWindow(AW_BLEND) と選択項目の SysFader が、X11 の不透明度の無視（0175 ではディザの穴）ではなく XP と同じくなめらかにフェードする。SetLayeredWindowAttributes で透明度が変わった窓は描き直す（自分のスレッドならすぐ）。XP のツールチップと通知領域のバルーンはタイマーで透明度だけを変えてフェードし、混ぜた画素が X11 の窓の画像（窓自身の画素）に残るので、バルーンが出たときの下の画面の写しのままだった | あり（XP のセッション） |
 | 0181 | uxtheme: XP のセッションで、ビジュアル スタイルが名前を挙げないシステム カラーを XP の uxtheme の既定値（loader.cpp の DefaultColors。ツールチップは 255 255 225 の地に黒、リンクは 0 0 128 など）にする。XP は 31 色をすべて設定するが、Wine はスタイルの色だけを設定し、前の配色の色が残った（Eggplant の後、Luna のツールチップが白地に紫の文字だった）。0160 のリンクの色もこの一つ | あり（XP のセッション） |
+| 0182 | win32u, user32: XP の xxxSendMinRectMessages が shell hook の窓に送る WM_KLUDGEMINRECT（0x008B）の RECT を、WM_SIZING と同じくプロセスの間で行きと帰りに渡す（wow64win の 32 ビットの受け手も）。DefWindowProcA/W は XP の user32（clmsg.c）と同じく、RECT を二つの POINTS にした SHELLHOOKINFO で窓自身に "SHELLHOOK" の HSHELL_GETMINRECT を送り、シェルが書いた矩形を戻す。XP のタスク バンドはその窓のタスクバーのボタン（まとめたときはグループのボタン）の矩形を答える。0052 のアニメーションがこれでボタンへ飛ぶ（以前はタスク バンドの左端 160 画素に向かっていた） | なし |
 
 
 ## 並び順の考え方

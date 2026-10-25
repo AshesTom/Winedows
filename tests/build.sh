@@ -20,7 +20,7 @@ compile() {
 }
 # The reference probe can stay open while a new version is built.
 # Publish a new inode instead of truncating a PE mapped by Wine.
-for name in shellhook title-change wine-restore exit-windows shell-activation shell-layout-sync wine-maximize workarea no-redraw button-size system-menu rebar print-window foreign-icons mono-advance text-vcenter taskbar-fonts nc-context-menu marlett-caption frame-control default-position ui-state screen-capture text-mask; do
+for name in shellhook title-change wine-restore exit-windows shell-activation shell-layout-sync wine-maximize workarea no-redraw button-size system-menu rebar print-window foreign-icons mono-advance text-vcenter taskbar-fonts nc-context-menu marlett-caption frame-control default-position ui-state screen-capture text-mask min-rect; do
     compile "$out/$name-test.exe" -municode "$root/tests/$name.c" -luser32 -lgdi32
 done
 compile "$out/size-move-snap-test.exe" "$root/tests/size-move-snap.c" -luser32

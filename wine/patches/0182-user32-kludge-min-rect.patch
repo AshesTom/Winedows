@@ -1,0 +1,175 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] win32u, user32: WM_KLUDGEMINRECT asks the shell for a taskbar button
+
+Purpose: let a window ask XP's taskbar where its button is, for the caption
+animation of a minimize or a restore (0052).
+XP behavior: win32k's xxxSendMinRectMessages sends WM_KLUDGEMINRECT (0x008B)
+with a RECT to every window registered with RegisterShellHookWindow, and
+marshals the RECT both ways across processes. The receiver's user32 answers
+it in DefWindowProc: it sends the window the "SHELLHOOK" message with
+HSHELL_GETMINRECT and a SHELLHOOKINFO whose rectangle is packed as two
+POINTS, and unpacks what the shell wrote. XP's task band answers with the
+rectangle of the window's button (or its group's button) in screen
+coordinates, and leaves it alone for a window without a button.
+Wine before: WM_KLUDGEMINRECT was not marshalled, so its RECT pointer was
+meaningless in the shell's process, and DefWindowProc ignored it.
+Change: marshal WM_KLUDGEMINRECT's RECT as in and out like WM_SIZING
+(including 32-bit receivers through wow64win), answer it in DefWindowProcA/W
+as XP's user32 does.
+Evidence: XP source at Source/XPSP1/NT/windows/core/ntuser/kernel/rare.c
+(xxxSendMinRectMessages), inc/messages.h (IMSG_INOUTLPRECT for 0x008B),
+client/clmsg.c (WM_KLUDGEMINRECT) and shell/explorer/taskband.cpp
+(_HandleGetMinRect).
+Scope: all programs (an internal message that only the shell hook windows
+receive).
+---
+ dlls/user32/defwnd.c  | 33 +++++++++++++++++++++++++++++++++
+ dlls/win32u/message.c |  8 +++++++-
+ dlls/wow64win/user.c  |  1 +
+ include/ntuser.h      |  2 ++
+ 4 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/user32/defwnd.c b/dlls/user32/defwnd.c
+index b1204db..01b5d32 100644
+--- a/dlls/user32/defwnd.c
++++ b/dlls/user32/defwnd.c
+@@ -367,6 +367,31 @@ static LRESULT external_shell_print( HWND hwnd, HDC dc, LPARAM flags )
+ }
+ 
+ /* The external shell's frames after DefWindowProc's own handling of MSG. */
++/* XP's user32 answers WM_KLUDGEMINRECT, which win32k sends to the windows
++ * registered with RegisterShellHookWindow for a window's taskbar button, by
++ * sending the window the shell hook message HSHELL_GETMINRECT with a
++ * SHELLHOOKINFO that holds the rectangle as two POINTS. */
++typedef struct
++{
++    HWND hwnd;
++    RECT rc;
++} SHELLHOOKINFO;
++
++static void kludge_min_rect( HWND hwnd, WPARAM wparam, RECT *rect, BOOL ansi )
++{
++    SHELLHOOKINFO info = {.hwnd = (HWND)wparam};
++    UINT message = RegisterWindowMessageW( L"SHELLHOOK" );
++
++    info.rc.left = MAKELONG( rect->left, rect->top );
++    info.rc.top = MAKELONG( rect->right, rect->bottom );
++    if (!message || !(ansi ? SendMessageA : SendMessageW)( hwnd, message, HSHELL_GETMINRECT, (LPARAM)&info ))
++        return;
++    rect->left = (SHORT)LOWORD( info.rc.left );
++    rect->top = (SHORT)HIWORD( info.rc.left );
++    rect->right = (SHORT)LOWORD( info.rc.top );
++    rect->bottom = (SHORT)HIWORD( info.rc.top );
++}
++
+ static LRESULT external_shell_defwnd( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT result )
+ {
+     switch (msg)
+@@ -444,6 +469,10 @@ LRESULT WINAPI DefWindowProcA( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
+         result = NC_HandleSysCommand( hwnd, wParam, lParam );
+         break;
+ 
++    case WM_KLUDGEMINRECT:
++        if (lParam) kludge_min_rect( hwnd, wParam, (RECT *)lParam, TRUE );
++        break;
++
+     case WM_IME_CHAR:
+         if (HIBYTE(wParam)) PostMessageA( hwnd, WM_CHAR, HIBYTE(wParam), lParam );
+         PostMessageA( hwnd, WM_CHAR, LOBYTE(wParam), lParam );
+@@ -522,6 +551,10 @@ LRESULT WINAPI DefWindowProcW(
+         result = NC_HandleSysCommand( hwnd, wParam, lParam );
+         break;
+ 
++    case WM_KLUDGEMINRECT:
++        if (lParam) kludge_min_rect( hwnd, wParam, (RECT *)lParam, FALSE );
++        break;
++
+     case WM_IME_CHAR:
+         PostMessageW( hwnd, WM_CHAR, wParam, lParam );
+         break;
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+index 3440cfb..1ef1fbf 100644
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -357,7 +357,7 @@ static const unsigned int message_pointer_flags[] =
+     /* 0x60 - 0x7f */
+     SET(WM_STYLECHANGING) | SET(WM_STYLECHANGED),
+     /* 0x80 - 0x9f */
+-    SET(WM_NCCREATE) | SET(WM_NCCALCSIZE) | SET(WM_GETDLGCODE),
++    SET(WM_NCCREATE) | SET(WM_NCCALCSIZE) | SET(WM_GETDLGCODE) | SET(WM_KLUDGEMINRECT),
+     /* 0xa0 - 0xbf */
+     SET(EM_GETSEL) | SET(EM_GETRECT) | SET(EM_SETRECT) | SET(EM_SETRECTNP),
+     /* 0xc0 - 0xdf */
+@@ -862,6 +862,7 @@ static BOOL unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lpa
+     }
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+         minsize = sizeof(RECT);
+         if (!get_buffer_space( buffer, sizeof(RECT), buffer_size )) return FALSE;
+         break;
+@@ -1252,6 +1253,7 @@ static size_t pack_message( HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
+     }
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+         push_data( data, (RECT *)lparam, sizeof(RECT) );
+         return sizeof(RECT);
+     case WM_MDICREATE:
+@@ -1428,6 +1430,7 @@ static void pack_reply( HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
+     case CB_GETDROPPEDCONTROLRECT:
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+         push_data( data, (RECT *)lparam, sizeof(RECT) );
+         break;
+     case EM_GETLINE:
+@@ -1571,6 +1574,7 @@ static void unpack_reply( HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
+     case LB_GETITEMRECT:
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+         memcpy( (RECT *)lparam, buffer, min( sizeof(RECT), size ));
+         break;
+     case EM_GETLINE:
+@@ -1781,6 +1785,7 @@ size_t user_message_size( HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
+         break;
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+     case EM_GETRECT:
+     case LB_GETITEMRECT:
+     case CB_GETDROPPEDCONTROLRECT:
+@@ -2070,6 +2075,7 @@ static void copy_user_result( void *buffer, size_t size, LRESULT result, UINT me
+         }
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+     case EM_GETRECT:
+     case EM_SETRECT:
+     case EM_SETRECTNP:
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index 75e42cd..a262f04 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -933,6 +933,7 @@ static size_t packed_result_32to64( UINT message, WPARAM wparam, const void *par
+     case LB_GETSELITEMS:
+     case WM_SIZING:
+     case WM_MOVING:
++    case WM_KLUDGEMINRECT:
+     case WM_MDIGETACTIVE:
+         break;
+ 
+diff --git a/include/ntuser.h b/include/ntuser.h
+index b2dee6b..9263789 100644
+--- a/include/ntuser.h
++++ b/include/ntuser.h
+@@ -756,6 +756,8 @@ struct ntuser_name_list
+ };
+ 
+ #define WM_SYSTIMER  0x0118
++/* win32k asks the shell hook windows for a taskbar button with it */
++#define WM_KLUDGEMINRECT  0x008b
+ 
+ /* NtUserQueryWindow info classes */
+ typedef enum _WINDOWINFOCLASS

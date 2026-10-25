@@ -51,7 +51,8 @@ Linux のデスクトップの窓の中で XP を動かす **XP Explorer**（[xp
   XP の「ワイヤレス ネットワークの選択」（NetworkManager の Wi-Fi の一覧と接続）、プログラムの追加と削除（スタートメニューの
   「プログラムのアクセスと既定の設定」も。Linux のアプリも並び、削除はパッケージ マネージャーで、既定のプログラムは Linux の既定に
   なります）、セキュリティ センター（自動更新、インターネット オプション）、ヘルプとサポート センター（XP のヘルプのトピックと
-  そのサービス。スタートメニューの「ヘルプとサポート」から開きます）。
+  そのサービス。スタートメニューの「ヘルプとサポート」から開きます）、XP のファイルの種類（HIVECLS.INF の名前とアイコン、
+  .zip の圧縮フォルダ、Windows Installer パッケージ、Windows Media Player の音楽と動画の種類）。
   どれもお手元の ISO のファイルで動きます（`prefix/extras.py`）。
 - **XP 自身のプログラムと「すべてのプログラム」**: XP の電卓、メモ帳、ペイント、ワードパッド、コマンド プロンプト、タスク マネージャ、
   レジストリ エディタ、文字コード表、サウンド レコーダー、ボリューム コントロール、拡大鏡、スクリーン キーボード、ハイパーターミナル、
@@ -136,7 +137,7 @@ scripts/setup.sh --shell reactos --lang ja   # 英語なら --lang en
 ```text
 LightDM ─ XP のようこそ画面 (greeter/)
    └─ XP Shell セッション (session/supervisor.py)
-        ├─ Wine 11.0 + 181 本のパッチ (wine/patches/)
+        ├─ Wine 11.0 + 182 本のパッチ (wine/patches/)
         │    └─ XP の explorer.exe, shell32.dll, …（ISO から取り出したもの。ReactOS や Windows 7 のシェルではそれらのもの）
         ├─ bridge-wm: X11 のウィンドウマネージャー + Win32 の代理ウィンドウ (bridge-wm/)
         │    （Wayland のセッションでは、ウィンドウマネージャーの代わりにパッチを当てた labwc。wayland/）

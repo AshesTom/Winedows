@@ -8,28 +8,39 @@ Windows behavior: minimizing draws the window's caption flying to its
 taskbar button (DrawAnimatedRects, IDANI_CAPTION), and restoring or
 maximizing draws it flying back before the window appears.
 SPI_GETANIMATION/SPI_SETANIMATION read and write WindowMetrics\MinAnimate.
+XP's xxxAnimateCaption draws the caption once with DrawCaptionTemp (the
+classic active caption with its gradient, the icon and the title, never the
+visual style's), one pixel shorter than SM_CYCAPTION, and for 250 ms
+(CMS_ANIMATION) moves its top left corner and stretches its width between
+the two rectangles, showing the left part of the strip; a rectangle taller
+than a caption loses the window's borders (GetWindowBorders). xxxMinMaximize
+passes the window's rectangles before and after, and for a minimize or a
+restore from the taskbar the button's rectangle that the shell hook windows
+give (xxxSendMinRectMessages); without one there is no animation.
 Wine before: DrawAnimatedRects was a stub, SPI_GETANIMATION always answered
 "disabled" and SPI_SETANIMATION was ignored.
 Change: SPI_[GS]ETANIMATION use WindowMetrics\MinAnimate (default on, as
-Windows). In the XP shell's session, DrawAnimatedRects(IDANI_CAPTION)
-moves a caption (the visual style's, or the classic gradient) with the
-window's icon and title from one rectangle to the other in 200 ms, and
-DefWindowProc's SC_MINIMIZE, SC_MAXIMIZE and SC_RESTORE call it, between the
-window's caption and its place on XP's task band.
-Scope: the XP shell's session (measured on XP; the Windows 7 and ReactOS
-sessions are not animated); elsewhere DrawAnimatedRects does nothing, as
-before. SPI_GETANIMATION answers from the registry everywhere.
+Windows). In the XP shell's session, DrawAnimatedRects(IDANI_CAPTION) moves
+XP's caption strip as above, and DefWindowProc's SC_MINIMIZE, SC_MAXIMIZE and
+SC_RESTORE call it with the window's rectangles and its taskbar button, asked
+with WM_KLUDGEMINRECT from the shell hook windows under the taskbar (0182).
+Evidence: XP source at Source/XPSP1/NT/windows/core/ntuser/kernel/minmax.c
+(xxxAnimateCaption, xxxDrawAnimatedRects, xxxMinMaximize), rare.c
+(xxxSendMinRectMessages) and rtl/winmgr.c (GetWindowBorders).
+Scope: the XP shell's session (the Windows 7 and ReactOS sessions are not
+animated); elsewhere DrawAnimatedRects does nothing, as before.
+SPI_GETANIMATION answers from the registry everywhere.
 ---
- dlls/user32/nonclient.c |  76 +++++++++++++++++++++++++++++++++
- dlls/user32/uitools.c   | 109 +++++++++++++++++++++++++++++++++++++++++++++++-
+ dlls/user32/nonclient.c |  98 ++++++++++++++++++++++++++++++++++++++++
+ dlls/user32/uitools.c   | 116 +++++++++++++++++++++++++++++++++++++++++++++++-
  dlls/win32u/sysparams.c |  20 ++++++---
- 3 files changed, 198 insertions(+), 7 deletions(-)
+ 3 files changed, 227 insertions(+), 7 deletions(-)
 
 diff --git a/dlls/user32/nonclient.c b/dlls/user32/nonclient.c
-index d65e7c9..473c0bc 100644
+index d65e7c9..c798132 100644
 --- a/dlls/user32/nonclient.c
 +++ b/dlls/user32/nonclient.c
-@@ -21,6 +21,11 @@
+@@ -21,6 +21,14 @@
  #include "user_private.h"
  #include "controls.h"
  #include "wine/debug.h"
@@ -38,40 +49,61 @@ index d65e7c9..473c0bc 100644
 +#ifndef IDANI_CAPTION
 +#define IDANI_CAPTION 3
 +#endif
++#ifndef WM_KLUDGEMINRECT
++#define WM_KLUDGEMINRECT 0x008b
++#endif
  
  
  #define SC_ABOUTWINE            (SC_SCREENSAVE+1)
-@@ -63,10 +68,81 @@ BOOL WINAPI DrawCaptionTempA (HWND hwnd, HDC hdc, const RECT *rect, HFONT hFont,
+@@ -63,10 +71,100 @@ BOOL WINAPI DrawCaptionTempA (HWND hwnd, HDC hdc, const RECT *rect, HFONT hFont,
   *
   * Handle a WM_SYSCOMMAND message. Called from DefWindowProc().
   */
-+/* The caption's rectangle in a window rectangle. */
-+static RECT caption_rect( const RECT *window )
++/* The rectangle of HWND's button on the taskbar, as XP's
++ * xxxSendMinRectMessages asks for it: WM_KLUDGEMINRECT to the windows
++ * registered with RegisterShellHookWindow (the Win4WineShellHook property,
++ * XP's task switcher, a child of the taskbar), which answer
++ * HSHELL_GETMINRECT. Empty when the window has no button. */
++struct min_rect_query
 +{
-+    RECT rect = *window;
-+    rect.bottom = rect.top + GetSystemMetrics( SM_CYCAPTION ) + GetSystemMetrics( SM_CYFRAME );
-+    return rect;
++    HWND hwnd;
++    RECT rect;
++};
++
++static BOOL CALLBACK query_min_rect( HWND hook, LPARAM lparam )
++{
++    struct min_rect_query *query = (struct min_rect_query *)lparam;
++    DWORD_PTR result;
++
++    if (GetPropW( hook, L"Win4WineShellHook" ))
++        SendMessageTimeoutW( hook, WM_KLUDGEMINRECT, (WPARAM)query->hwnd, (LPARAM)&query->rect,
++                             SMTO_NORMAL, 100, &result );
++    return IsRectEmpty( &query->rect );
++}
++
++static BOOL get_min_rect( HWND hwnd, RECT *rect )
++{
++    struct min_rect_query query = {.hwnd = hwnd};
++    HWND tray = FindWindowW( L"Shell_TrayWnd", NULL );
++
++    if (tray) EnumChildWindows( tray, query_min_rect, (LPARAM)&query );
++    *rect = query.rect;
++    return !IsRectEmpty( rect );
 +}
 +
 +/* Where XP's caption animation starts and ends for a minimize, maximize or
-+ * restore of HWND, in the XP shell's session: its caption and its place on the
-+ * taskbar (the task band; XP's shell is not asked for the button itself). */
++ * restore of HWND, in the XP shell's session, as XP's xxxMinMaximize: the
++ * window's rectangles before and after, and its taskbar button when it is
++ * minimized or comes back from it (no animation for a window without one). */
 +static BOOL min_max_animation( HWND hwnd, UINT command, RECT *from, RECT *to )
 +{
 +    WINDOWPLACEMENT placement = {.length = sizeof(placement)};
-+    HWND tray, band;
 +    RECT window, task, work;
 +    DWORD style = GetWindowLongW( hwnd, GWL_STYLE );
 +
 +    if (win4wine_shell() != WIN4WINE_SHELL_XP || (style & WS_CHILD) || (style & WS_CAPTION) != WS_CAPTION ||
 +        !(style & WS_VISIBLE) || !GetWindowRect( hwnd, &window ) || !NtUserGetWindowPlacement( hwnd, &placement ))
 +        return FALSE;
-+    if (!(tray = FindWindowW( L"Shell_TrayWnd", NULL )) ||
-+        !(band = FindWindowExW( tray, NULL, L"ReBarWindow32", NULL )) ||
-+        !(band = FindWindowExW( band, NULL, L"MSTaskSwWClass", NULL )) || !GetWindowRect( band, &task ))
-+        return FALSE;
-+    task.right = min( task.right, task.left + 160 );
-+    InflateRect( &task, 0, -2 );
 +    SystemParametersInfoW( SPI_GETWORKAREA, 0, &work, 0 );
 +    InflateRect( &work, GetSystemMetrics( SM_CXFRAME ), GetSystemMetrics( SM_CYFRAME ) );
 +    OffsetRect( &placement.rcNormalPosition, work.left + GetSystemMetrics( SM_CXFRAME ),
@@ -80,25 +112,26 @@ index d65e7c9..473c0bc 100644
 +    switch (command)
 +    {
 +    case SC_MINIMIZE:
-+        if (style & WS_MINIMIZE) return FALSE;
-+        *from = caption_rect( &window );
++        if ((style & WS_MINIMIZE) || !get_min_rect( hwnd, &task )) return FALSE;
++        *from = window;
 +        *to = task;
 +        return TRUE;
 +    case SC_MAXIMIZE:
 +        if (style & WS_MAXIMIZE) return FALSE;
-+        *from = (style & WS_MINIMIZE) ? task : caption_rect( &window );
-+        *to = caption_rect( &work );
++        if (!(style & WS_MINIMIZE)) *from = window;
++        else if (!get_min_rect( hwnd, from )) return FALSE;
++        *to = work;
 +        return TRUE;
 +    case SC_RESTORE:
 +        if (style & WS_MINIMIZE)
 +        {
-+            *from = task;
-+            *to = caption_rect( (placement.flags & WPF_RESTORETOMAXIMIZED) ? &work : &placement.rcNormalPosition );
++            if (!get_min_rect( hwnd, from )) return FALSE;
++            *to = (placement.flags & WPF_RESTORETOMAXIMIZED) ? work : placement.rcNormalPosition;
 +            return TRUE;
 +        }
 +        if (!(style & WS_MAXIMIZE)) return FALSE;
-+        *from = caption_rect( &window );
-+        *to = caption_rect( &placement.rcNormalPosition );
++        *from = window;
++        *to = placement.rcNormalPosition;
 +        return TRUE;
 +    }
 +    return FALSE;
@@ -124,15 +157,10 @@ index d65e7c9..473c0bc 100644
      switch (wParam & 0xfff0)
      {
 diff --git a/dlls/user32/uitools.c b/dlls/user32/uitools.c
-index d4b51a9..79ceaf8 100644
+index d4b51a9..6579662 100644
 --- a/dlls/user32/uitools.c
 +++ b/dlls/user32/uitools.c
-@@ -27,10 +27,15 @@
- #include "wingdi.h"
- #include "winuser.h"
- #include "user_private.h"
-+#include "uxtheme.h"
- #include "controls.h"
+@@ -31,6 +31,10 @@
  #include "wine/debug.h"
  #include "wine/win4wine.h"
  
@@ -143,7 +171,7 @@ index d4b51a9..79ceaf8 100644
  WINE_DEFAULT_DEBUG_CHANNEL(graphics);
  
  /* These tables are used in:
-@@ -1518,9 +1523,111 @@ BOOL WINAPI DrawFocusRect( HDC hdc, const RECT* rc )
+@@ -1518,9 +1522,119 @@ BOOL WINAPI DrawFocusRect( HDC hdc, const RECT* rc )
  /**********************************************************************
   *		DrawAnimatedRects (USER32.@)
   */
@@ -153,78 +181,36 @@ index d4b51a9..79ceaf8 100644
 +    return DefWindowProcW( hwnd, msg, wparam, lparam );
 +}
 +
-+/* Draws one frame of the caption that flies between two rectangles: the
-+ * window's own caption (Luna's when a visual style is active), icon and title. */
-+static void draw_animation_frame( HWND window, HWND popup, const RECT *rect )
++/* The borders XP's GetWindowBorders counts around a window, which its
++ * caption animation leaves out of a window's rectangle. */
++static int window_borders( HWND hwnd )
 +{
-+    HTHEME (WINAPI *open_theme)( HWND, LPCWSTR );
-+    HRESULT (WINAPI *draw_theme)( HTHEME, HDC, int, int, const RECT *, const RECT * );
-+    HRESULT (WINAPI *close_theme)( HTHEME );
-+    HMODULE uxtheme = GetModuleHandleW( L"uxtheme.dll" );
-+    HTHEME theme = NULL;
-+    RECT client = {0, 0, rect->right - rect->left, rect->bottom - rect->top};
-+    NONCLIENTMETRICSW metrics = {.cbSize = sizeof(metrics)};
-+    WCHAR title[256];
-+    HFONT font = NULL, old_font;
-+    HICON icon;
-+    HDC dc;
++    DWORD style = GetWindowLongW( hwnd, GWL_STYLE ), ex_style = GetWindowLongW( hwnd, GWL_EXSTYLE );
++    int borders = 0, border = 1;
 +
-+    NtUserSetWindowPos( popup, HWND_TOPMOST, rect->left, rect->top, client.right, client.bottom,
-+                  SWP_NOACTIVATE | SWP_SHOWWINDOW );
-+    if (!(dc = NtUserGetDCEx( popup, 0, DCX_WINDOW | DCX_CACHE ))) return;
-+    if (uxtheme && (open_theme = (void *)GetProcAddress( uxtheme, "OpenThemeData" )) &&
-+        (draw_theme = (void *)GetProcAddress( uxtheme, "DrawThemeBackground" )) &&
-+        (close_theme = (void *)GetProcAddress( uxtheme, "CloseThemeData" )))
-+        theme = open_theme( window, L"WINDOW" );
-+    if (theme)
-+    {
-+        draw_theme( theme, dc, 1 /* WP_CAPTION */, 1 /* CS_ACTIVE */, &client, NULL );
-+        close_theme( theme );
-+    }
-+    else
-+    {
-+        TRIVERTEX vertices[2] = {{0, 0}, {client.right, client.bottom}};
-+        GRADIENT_RECT gradient = {0, 1};
-+        COLORREF left = GetSysColor( COLOR_ACTIVECAPTION ), right = GetSysColor( COLOR_GRADIENTACTIVECAPTION );
-+        vertices[0].Red = GetRValue( left ) << 8; vertices[0].Green = GetGValue( left ) << 8;
-+        vertices[0].Blue = GetBValue( left ) << 8; vertices[1].Red = GetRValue( right ) << 8;
-+        vertices[1].Green = GetGValue( right ) << 8; vertices[1].Blue = GetBValue( right ) << 8;
-+        GdiGradientFill( dc, vertices, 2, &gradient, 1, GRADIENT_FILL_RECT_H );
-+    }
-+    client.left += 4;
-+    if ((icon = (HICON)SendMessageW( window, WM_GETICON, ICON_SMALL2, 0 )) ||
-+        (icon = (HICON)GetClassLongPtrW( window, GCLP_HICONSM )))
-+    {
-+        int size = GetSystemMetrics( SM_CXSMICON );
-+        if (client.bottom >= size)
-+            NtUserDrawIconEx( dc, client.left, (client.bottom - size) / 2, icon, size, size, 0, NULL, DI_NORMAL );
-+        client.left += size + 4;
-+    }
-+    if (GetWindowTextW( window, title, ARRAY_SIZE(title) ) &&
-+        SystemParametersInfoW( SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0 ) &&
-+        (font = CreateFontIndirectW( &metrics.lfCaptionFont )))
-+    {
-+        old_font = SelectObject( dc, font );
-+        SetBkMode( dc, TRANSPARENT );
-+        SetTextColor( dc, GetSysColor( COLOR_CAPTIONTEXT ) );
-+        DrawTextW( dc, title, -1, &client, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX );
-+        SelectObject( dc, old_font );
-+        DeleteObject( font );
-+    }
-+    NtUserReleaseDC( popup, dc );
-+    GdiFlush();
++    if (ex_style & WS_EX_WINDOWEDGE) borders += 2;
++    else if (ex_style & WS_EX_STATICEDGE) borders++;
++    if ((style & WS_CAPTION) || (ex_style & WS_EX_DLGMODALFRAME)) borders++;
++    if ((style & WS_THICKFRAME) && SystemParametersInfoW( SPI_GETBORDER, 0, &border, 0 )) borders += border;
++    return borders;
 +}
 +
  BOOL WINAPI DrawAnimatedRects( HWND hwnd, INT idAni, const RECT* lprcFrom, const RECT* lprcTo )
  {
 -    FIXME("(%p,%d,%p,%p): stub\n",hwnd,idAni,lprcFrom,lprcTo);
 +    static const WCHAR class_name[] = L"Win4WineCaptionAnimation";
-+    static const int duration = 200, frames = 12;
++    /* XP's CMS_ANIMATION */
++    static const DWORD duration = 250;
 +    /* The caption colour behind the first frame, rather than black. */
 +    WNDCLASSW wc = {.lpfnWndProc = animation_proc, .lpszClassName = class_name,
 +                    .hbrBackground = (HBRUSH)(COLOR_ACTIVECAPTION + 1)};
 +    ANIMATIONINFO info = {.cbSize = sizeof(info)};
-+    DWORD start;
++    RECT from = *lprcFrom, to = *lprcTo, strip;
++    BOOL gradient = FALSE;
++    HBITMAP bitmap, old_bitmap;
++    DWORD start, elapsed;
++    int cy, borders;
++    HDC screen, dc, mem;
 +    HWND popup;
 +
 +    TRACE("(%p,%d,%p,%p)\n",hwnd,idAni,lprcFrom,lprcTo);
@@ -232,27 +218,77 @@ index d4b51a9..79ceaf8 100644
 +     * XP shell's session; Wine has none otherwise. */
 +    if (win4wine_shell() != WIN4WINE_SHELL_XP || idAni != IDANI_CAPTION || !lprcFrom || !lprcTo) return TRUE;
 +    if (!SystemParametersInfoW( SPI_GETANIMATION, sizeof(info), &info, 0 ) || !info.iMinAnimate) return TRUE;
++
++    /* As XP's xxxAnimateCaption: a caption strip one pixel shorter than the
++     * caption moves between the top left corners and stretches between the
++     * widths, inside the borders of a rectangle taller than a caption. */
++    cy = GetSystemMetrics( SM_CYCAPTION ) - 1;
++    borders = window_borders( hwnd );
++    if (from.bottom - from.top > cy + 1)
++    {
++        from.left += borders;
++        from.top += borders;
++        from.right -= borders;
++    }
++    if (to.bottom - to.top > cy + 1)
++    {
++        to.left += borders;
++        to.top += borders;
++        to.right -= borders;
++    }
++    SetRect( &strip, 0, 0, max( from.right - from.left, to.right - to.left ), cy );
++    if (strip.right <= 0 || cy <= 0) return TRUE;
++
++    /* XP draws it once, as DrawCaptionTemp's active caption (never the
++     * visual style's), and shows its left part at each width. */
++    SystemParametersInfoW( SPI_GETGRADIENTCAPTIONS, 0, &gradient, 0 );
++    screen = NtUserGetDC( 0 );
++    mem = CreateCompatibleDC( screen );
++    bitmap = CreateCompatibleBitmap( screen, strip.right, cy );
++    NtUserReleaseDC( 0, screen );
++    if (!mem || !bitmap)
++    {
++        if (bitmap) DeleteObject( bitmap );
++        if (mem) DeleteDC( mem );
++        return TRUE;
++    }
++    old_bitmap = SelectObject( mem, bitmap );
++    NtUserDrawCaptionTemp( hwnd, mem, &strip, 0, 0, NULL, DC_ACTIVE | DC_ICON | DC_TEXT | (gradient ? DC_GRADIENT : 0) );
++
 +    /* In the program's module: user32's own is reserved for system classes. */
 +    wc.hInstance = GetModuleHandleW( NULL );
 +    RegisterClassW( &wc );
-+    if (!(popup = CreateWindowExW( WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-+                                   class_name, L"", WS_POPUP, lprcFrom->left, lprcFrom->top, 1, 1,
-+                                   NULL, NULL, wc.hInstance, NULL )))
-+        return TRUE;
-+    start = GetTickCount();
-+    for (int i = 0; i <= frames; i++)
++    if ((popup = CreateWindowExW( WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
++                                  class_name, L"", WS_POPUP, from.left, from.top, 1, 1,
++                                  NULL, NULL, wc.hInstance, NULL )))
 +    {
-+        RECT rect;
-+        int wait;
-+        rect.left = lprcFrom->left + MulDiv( lprcTo->left - lprcFrom->left, i, frames );
-+        rect.top = lprcFrom->top + MulDiv( lprcTo->top - lprcFrom->top, i, frames );
-+        rect.right = lprcFrom->right + MulDiv( lprcTo->right - lprcFrom->right, i, frames );
-+        rect.bottom = lprcFrom->bottom + MulDiv( lprcTo->bottom - lprcFrom->bottom, i, frames );
-+        draw_animation_frame( hwnd, popup, &rect );
-+        wait = (int)(start + MulDiv( duration, i + 1, frames + 1 ) - GetTickCount());
-+        if (wait > 0) Sleep( wait );
++        start = GetTickCount();
++        elapsed = 0;
++        while (elapsed <= duration)
++        {
++            int left = from.left + MulDiv( to.left - from.left, elapsed, duration );
++            int top = from.top + MulDiv( to.top - from.top, elapsed, duration );
++            int cx = (from.right - from.left) + MulDiv( (to.right - to.left) - (from.right - from.left), elapsed, duration );
++
++            if (cx > 0)
++            {
++                NtUserSetWindowPos( popup, HWND_TOPMOST, left, top, cx, cy, SWP_NOACTIVATE | SWP_SHOWWINDOW );
++                if ((dc = NtUserGetDCEx( popup, 0, DCX_WINDOW | DCX_CACHE )))
++                {
++                    BitBlt( dc, 0, 0, cx, cy, mem, 0, 0, SRCCOPY );
++                    NtUserReleaseDC( popup, dc );
++                }
++                GdiFlush();
++            }
++            /* Not Sleep: waiting lets the window surface reach the screen. */
++            MsgWaitForMultipleObjects( 0, NULL, FALSE, 10, 0 );
++            elapsed = GetTickCount() - start;
++        }
++        NtUserDestroyWindow( popup );
 +    }
-+    NtUserDestroyWindow( popup );
++    SelectObject( mem, old_bitmap );
++    DeleteObject( bitmap );
++    DeleteDC( mem );
      return TRUE;
  }
  
