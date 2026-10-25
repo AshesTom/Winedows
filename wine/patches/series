@@ -176,3 +176,4 @@
 0176-kernelbase-retain-change-notification-filter.patch
 0177-shell32-match-both-rename-paths.patch
 0178-user32-validate-xp-animate-window-flags.patch
+0179-user32-xp-message-beep-sounds.patch

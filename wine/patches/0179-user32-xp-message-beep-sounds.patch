@@ -1,0 +1,160 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] win32u, user32: MessageBeep plays XP's sound scheme in the XP session
+
+Purpose: play XP's Default Beep (and the other events) where Wine sounded
+the hardware beep, such as a key that does nothing on the desktop.
+XP behavior: win32k's xxxMessageBeep picks the event of the type's icon
+(SystemHand, SystemQuestion, SystemExclamation, SystemAsterisk, otherwise
+.Default, the Default Beep, also for 0xFFFFFFFF) and winlogon plays it from
+the sound scheme; only system threads beep the speaker. DefWindowProc and
+the menus call it for keys that do nothing.
+Wine before: NtUserMessageBeep asked the driver for its beep (XBell), and
+message boxes without an icon looked up a SystemDefault event, which XP's
+scheme does not have.
+Change: in the XP session, NtUserMessageBeep calls back into user32
+(PlayMessageBeep, through wow64win for 32-bit programs), which plays the
+event with PlaySound from winmm, as message boxes already do (0167); the
+driver's beep remains when winmm can't be loaded. Message boxes without an
+icon play the Default Beep.
+Evidence: XP source at Source/XPSP1/NT/windows/core/ntuser/kernel/msgbeep.c
+(xxxMessageBeep), dwp.c and mnkey.c (xxxMessageBeep(0) for unused keys).
+Scope: the XP session (WIN4WINE_SHELL=xp).
+---
+diff --git a/include/ntuser.h b/include/ntuser.h
+--- a/include/ntuser.h
++++ b/include/ntuser.h
+@@ -96,7 +96,8 @@
+     USER32_CALLBACK_ENTRY(DragDropDrag) \
+     USER32_CALLBACK_ENTRY(DragDropDrop) \
+     USER32_CALLBACK_ENTRY(DragDropPost) \
+-    USER32_CALLBACK_ENTRY(MenuTheme)
++    USER32_CALLBACK_ENTRY(MenuTheme) \
++    USER32_CALLBACK_ENTRY(PlayMessageBeep)
+ 
+ enum
+ {
+diff --git a/dlls/user32/msgbox.c b/dlls/user32/msgbox.c
+--- a/dlls/user32/msgbox.c
++++ b/dlls/user32/msgbox.c
+@@ -36,18 +36,18 @@
+ WINE_DEFAULT_DEBUG_CHANNEL(dialog);
+ WINE_DECLARE_DEBUG_CHANNEL(msgbox);
+ 
+-/* XP message boxes play the configured AppEvents sound that corresponds to
+- * their icon.  Wine's MessageBeep currently only asks the Unix driver for a
+- * generic beep, so the native XP shell never reaches the imported XP sound
+- * scheme.  Resolve PlaySoundW dynamically to avoid a user32 -> winmm import
+- * cycle (winmm already imports user32). */
+-static void MSGBOX_PlayXPSound( UINT style )
++/* XP message boxes and MessageBeep play the configured AppEvents sound that
++ * corresponds to their icon (XP's winlogon plays it for win32k's
++ * xxxMessageBeep); Wine's driver only has a generic beep. Resolve PlaySoundW
++ * dynamically to avoid a user32 -> winmm import cycle (winmm already imports
++ * user32). Returns FALSE when winmm can't play it. */
++BOOL play_xp_message_sound( UINT style )
+ {
+     static HMODULE winmm;
+     static BOOL (WINAPI *play_sound)( LPCWSTR, HMODULE, DWORD );
+     LPCWSTR alias;
+ 
+-    if (win4wine_shell() != WIN4WINE_SHELL_XP) return;
++    if (win4wine_shell() != WIN4WINE_SHELL_XP) return FALSE;
+ 
+     switch (style & MB_ICONMASK)
+     {
+@@ -64,7 +64,8 @@
+         alias = L"SystemAsterisk";
+         break;
+     default:
+-        alias = L"SystemDefault";
++        /* the Default Beep: XP's scheme has no SystemDefault event */
++        alias = L".Default";
+         break;
+     }
+ 
+@@ -73,7 +74,9 @@
+         if (!winmm) winmm = LoadLibraryW( L"winmm.dll" );
+         if (winmm) play_sound = (void *)GetProcAddress( winmm, "PlaySoundW" );
+     }
+-    if (play_sound) play_sound( alias, NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT );
++    if (!play_sound) return FALSE;
++    play_sound( alias, NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT );
++    return TRUE;
+ }
+ 
+ struct ThreadWindows
+@@ -587,7 +590,7 @@
+        LPMSGBOXPARAMSW mbp = (LPMSGBOXPARAMSW)lParam;
+        NtUserSetWindowContextHelpId(hwnd, mbp->dwContextHelpId);
+        MSGBOX_OnInit(hwnd, mbp);
+-       MSGBOX_PlayXPSound( mbp->dwStyle );
++       play_xp_message_sound( mbp->dwStyle );
+        SetPropA(hwnd, "WINE_MSGBOX_HELPCALLBACK", mbp->lpfnMsgBoxCallback);
+        break;
+    }
+diff --git a/dlls/user32/user_main.c b/dlls/user32/user_main.c
+--- a/dlls/user32/user_main.c
++++ b/dlls/user32/user_main.c
+@@ -190,6 +190,13 @@
+     return STATUS_SUCCESS;
+ }
+ 
++/* MessageBeep's sound in the XP session: the sound scheme's event for the
++ * type (a UINT), as XP's winlogon plays it; win32u beeps when it fails. */
++static NTSTATUS WINAPI User32PlayMessageBeep( void *args, ULONG size )
++{
++    return play_xp_message_sound( *(const UINT *)args ) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
++}
++
+ /* The menu parts of the visual style, from Wine's own uxtheme for the
+  * opted-in external shell (win32u lays the menus out and draws the text). */
+ static NTSTATUS WINAPI User32MenuTheme( void *args, ULONG size )
+diff --git a/dlls/user32/user_private.h b/dlls/user32/user_private.h
+--- a/dlls/user32/user_private.h
++++ b/dlls/user32/user_private.h
+@@ -55,6 +55,7 @@
+ extern DWORD drag_drop_drag( HWND hwnd, POINT point, DWORD effect );
+ extern DWORD drag_drop_drop( HWND hwnd );
+ extern void drag_drop_post( HWND hwnd, UINT drop_size, const DROPFILES *drop );
++extern BOOL play_xp_message_sound( UINT style );
+ extern void unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lparam,
+                             void *buffer, BOOL ansi );
+ 
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -7536,8 +7536,17 @@
+ BOOL WINAPI NtUserMessageBeep( UINT type )
+ {
+     BOOL active = TRUE;
++    void *ret_ptr;
++    ULONG ret_len;
++
+     NtUserSystemParametersInfo( SPI_GETBEEP, 0, &active, FALSE );
+-    if (active) user_driver->pBeep();
++    if (!active) return TRUE;
++    /* XP plays the sound scheme's event for the type (its winlogon, for
++     * win32k's xxxMessageBeep); the speaker beeps for system threads only. */
++    if (win4wine_shell() == WIN4WINE_SHELL_XP &&
++        !KeUserModeCallback( NtUserPlayMessageBeep, &type, sizeof(type), &ret_ptr, &ret_len ))
++        return TRUE;
++    user_driver->pBeep();
+     return TRUE;
+ }
+ 
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -1528,6 +1528,12 @@
+     return dispatch_callback( NtUserMenuTheme, &params32, sizeof(params32) );
+ }
+ 
++static NTSTATUS WINAPI wow64_NtUserPlayMessageBeep( void *arg, ULONG size )
++{
++    /* a UINT, the same in both */
++    return dispatch_callback( NtUserPlayMessageBeep, arg, size );
++}
++
+ ntuser_callback user_callbacks[NtUserCallCount] =
+ {
+ #define USER32_CALLBACK_ENTRY(name) wow64_NtUser##name,
