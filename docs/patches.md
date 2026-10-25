@@ -13,7 +13,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 
 - 判定は 0019 が加える `include/wine/win4wine.h` の `win4wine_external_shell()` に 1 つにまとめています。
   ntdll は Rtl の関数で、wow64.dll（0023）は ntdll の関数で同じ変数を読みます。
-- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169）、普通のアプリの見た目と動作を変えない 0025・0026、
+- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173）、普通のアプリの見た目と動作を変えない 0025・0026、
   Windows 7 のシェルが呼ぶ API と Wine の修正（0094〜0112）の多くと、版 4 のスタイルでだけ効くテーマの修正（0113〜0119）です。
 - 0024 は `WIN4WINE_SESSION_REQUEST` があるときだけ効きます。
 - 0090 は、さらに `WIN4WINE_FOLDER_SHELL` があるときだけ効きます（ReactOS のシェルのセッションだけが設定します）。
@@ -286,6 +286,8 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0169 | wuapi, wuaueng: 自動更新の設定（IAutomaticUpdatesSettings。通知のレベル、予定の曜日と時刻、ポリシーによる固定。Auto Update キーの AUOptions などを読み書きする）と、XP の自動更新の項目（wuaucpl.cpl）が読む wuaueng の GetAUOptionsEx（序数 1）。どちらも未実装で、セキュリティ センターの自動更新が「未構成」のまま有効にできず、自動更新の項目を開くと rundll32 が落ちた | なし |
 | 0170 | user32: 外部シェルで GetWindowLong(GWLP_WOWWORDS、-1) が窓のフラグ（WND と同じ並びの state、state2、ExStyle、style、hModule）へのポインターを返す。XP の comctl32 6 のボタンが WM_NCCREATE でこれからボタンの種類を読み、0 で作成に失敗していた（セキュリティ センターの「自動更新を有効にする」「推奨事項」や開閉のボタンが空だった） | あり |
 | 0171 | control: XP のセッションで、control.exe に渡された項目を XP の control.exe と同じく Windows フォルダーの rundll32（shell32 の Control_RunDLL）に渡す。セキュリティ センターの「インターネット オプション」が control.exe の中で開いてすぐ閉じていた | あり（XP のセッション） |
+| 0172 | advapi32: RegisterIdleTask・UnregisterIdleTask。XP のアイドル タスクのサービスは、マシンが使われていない間にタスクの開始のイベントを、また使われると停止のイベントを知らせる。Wine はアイドルの時間を見ないので、イベントを作るだけで開始は知らせない。どちらも無く、XP のヘルプとサポートのサービス（svchost の中の pchsvc.dll）が落ち、ヘルプとサポート センターがサービスにつながらなかった | なし |
+| 0173 | netapi32, advapi32: NetLocalGroupAdd が作るローカル グループを HKLM\Software\Wine\LocalGroups に残す（1001 からの相対 ID、コメント。同じ名前は ERROR_ALIAS_EXISTS）。NetLocalGroupDel が消し、LookupAccountNameW がその名前を S-1-5-21-0-0-0-ID（SidTypeAlias、コンピューター名のドメイン）に、LookupAccountSidW がその SID を名前にする。メンバーは持たない。XP の HelpSvc.exe /install2 が HelpServicesGroup を作ってからその SID をフォルダーの ACL に使おうとして失敗し（SetupProblems が SKU_INSTALL）、ヘルプのトピックが入らなかった | なし |
 
 
 ## 並び順の考え方

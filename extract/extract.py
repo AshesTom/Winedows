@@ -77,6 +77,15 @@ FILES = {
     # security settings for": Internet Options (IE6's, its pages in
     # inetcplc.dll) and Automatic Updates (prefix/extras.py).
     **dict.fromkeys(('inetcpl.cpl', 'inetcplc.dll', 'wuaucpl.cpl'), 'security'),
+    # XP's Help and Support Center: what PCHEALTH.INF installs in
+    # PCHealth\HelpCtr\Binaries (its help topics in pchdt_w3.cab, of
+    # Professional), the database engine of its service (esent.dll) and
+    # esentutl.exe, which rebuilds the database's indexes with Wine's sort
+    # keys, and the type library of Remote Desktop (rdshost.exe) that its
+    # service's interfaces import (prefix/extras.py).
+    **dict.fromkeys(('hcappres.dll', 'helpctr.exe', 'helphost.exe', 'helpsvc.exe', 'hscupd.exe', 'brpinfo.dll',
+                     'notiflag.exe', 'pchshell.dll', 'pchsvc.dll', 'pchdt_w3.cab', 'esent.dll', 'esentutl.exe',
+                     'rdshost.exe'), 'helpctr'),
     # XP's Network Connections folder (tray/netshell.dll) and what it loads
     # that Wine lacks: its tracing and wired 802.1X libraries, and the
     # wireless dialogs with their SP3 texts (prefix/extras.py).
@@ -121,7 +130,8 @@ LANGUAGE_FILES = {
 RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
-                'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security')
+                'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
+                'help')
 
 
 def setup_sources(paths):
@@ -190,6 +200,26 @@ def tour_files(paths):
             fields = [f.strip() for f in value.split(',')]
             if len(fields) > 7 and fields[7] in TOUR_DIRECTORIES:
                 files[name.lower()] = (TOUR_DIRECTORIES[fields[7]], fields[10] if len(fields) > 10 and fields[10] else name)
+    return files
+
+
+def help_files(paths):
+    """{name on the medium: (group, installed name)} of the compiled help
+    files (.chm) that TXTSETUP.SIF installs in %windir%\\Help (directory
+    21): the Help and Support Center's topics (update1w.chm is update1.chm)."""
+    sif = next((p for p in paths if p.name.lower() == 'txtsetup.sif'), None)
+    if not sif:
+        return {}
+    files, section = {}, None
+    for raw in sif.read_text(encoding='latin-1').splitlines():
+        line = raw.split(';', 1)[0].strip()
+        if line.startswith('['):
+            section = line.strip('[]').lower()
+        elif section and section.startswith('sourcedisksfiles') and '=' in line:
+            name, value = (part.strip() for part in line.split('=', 1))
+            fields = [f.strip() for f in value.split(',')]
+            if name.lower().endswith('.chm') and len(fields) > 7 and fields[7] == '21':
+                files[name.lower()] = ('help', fields[10] if len(fields) > 10 and fields[10] else name)
     return files
 
 
@@ -268,7 +298,7 @@ def missing_groups(output):
               'wallpaper': 'wallpaper', 'wsc': 'wsc/wscsvc.dll',
               'programs': 'programs/tourstart.exe', 'tour': 'tour/mmTour/tour.exe',
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
-              'security': 'security/wuaucpl.cpl'}
+              'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 
@@ -329,6 +359,8 @@ def extract(source, output, only=None):
         RENAMED.update({name: target for name, (_, target) in wallpapers.items()})
         tour = tour_files(paths)
         RENAMED.update({name: target for name, (_, target) in tour.items()})
+        chm = help_files(paths)
+        RENAMED.update({name: target.lower() for name, (_, target) in chm.items()})
         if only:
             # Add groups of files to assets extracted before they existed.
             groups = set(only)
@@ -341,6 +373,8 @@ def extract(source, output, only=None):
                 group_files.update({name: group for name, (group, _) in wallpapers.items()})
             if 'tour' in groups:
                 group_files.update({name: group for name, (group, _) in tour.items()})
+            if 'help' in groups:
+                group_files.update({name: group for name, (group, _) in chm.items()})
             copy(group_files)
             listed = output / 'manifest.json'
             old = json.loads(listed.read_text()) if listed.is_file() else []
@@ -352,6 +386,7 @@ def extract(source, output, only=None):
         copy(dict.fromkeys(sounds, 'media'))
         copy({name: group for name, (group, _) in wallpapers.items()})
         copy({name: group for name, (group, _) in tour.items()})
+        copy({name: group for name, (group, _) in chm.items()})
         for original in paths:
             if original.name.lower() != 'shellstyle.dll':
                 continue

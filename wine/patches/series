@@ -169,3 +169,5 @@
 0169-wuapi-automatic-updates-settings.patch
 0170-user32-external-wow-words.patch
 0171-control-external-xp-rundll32.patch
+0172-advapi32-idle-tasks.patch
+0173-netapi32-local-groups.patch

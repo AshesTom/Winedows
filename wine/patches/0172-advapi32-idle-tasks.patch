@@ -1,0 +1,85 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] advapi32: register idle tasks, which Wine never starts
+
+Purpose: keep XP's Help and Support service running.
+XP behavior: RegisterIdleTask gives a task a start event, which XP's idle
+task service signals while the machine is idle, and a stop event, signaled
+when it is used again; UnregisterIdleTask removes it.
+Wine before: neither was exported. XP's Help and Support service host
+(pchsvc.dll, in svchost) registers its data collection as an idle task, and
+the call aborted its svchost: the Help and Support Center could not reach
+its service.
+Change: RegisterIdleTask creates the two manual-reset events, neither
+signaled (Wine detects no idle time, so the task never starts), and returns
+the start event as the item; UnregisterIdleTask closes them.
+Scope: all processes.
+---
+ dlls/advapi32/advapi.c      | 35 +++++++++++++++++++++++++++++++++++
+ dlls/advapi32/advapi32.spec |  4 ++--
+ 2 files changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/advapi32/advapi.c b/dlls/advapi32/advapi.c
+index 2284e92..749e6a2 100644
+--- a/dlls/advapi32/advapi.c
++++ b/dlls/advapi32/advapi.c
+@@ -361,3 +361,38 @@ ULONG WINAPI PerfQueryCounterData( HANDLE query, PERF_DATA_HEADER *data, DWORD d
+ 
+     return ERROR_SUCCESS;
+ }
++
++/******************************************************************************
++ * RegisterIdleTask [ADVAPI32.@]
++ *
++ * Windows XP's idle task service signals a task's start event while the
++ * machine is idle and its stop event when it is used again. Wine detects no
++ * idle time: the task is registered, and never told to start.
++ */
++DWORD WINAPI RegisterIdleTask( ULONG id, HANDLE *item, HANDLE *start, HANDLE *stop )
++{
++    FIXME( "id %lu, item %p, start %p, stop %p semi-stub.\n", id, item, start, stop );
++
++    if (!item || !start || !stop) return ERROR_INVALID_PARAMETER;
++    if (!(*start = CreateEventW( NULL, TRUE, FALSE, NULL ))) return GetLastError();
++    if (!(*stop = CreateEventW( NULL, TRUE, FALSE, NULL )))
++    {
++        DWORD error = GetLastError();
++        CloseHandle( *start );
++        return error;
++    }
++    *item = *start;
++    return ERROR_SUCCESS;
++}
++
++/******************************************************************************
++ * UnregisterIdleTask [ADVAPI32.@]
++ */
++DWORD WINAPI UnregisterIdleTask( HANDLE item, HANDLE start, HANDLE stop )
++{
++    TRACE( "item %p, start %p, stop %p.\n", item, start, stop );
++
++    if (start) CloseHandle( start );
++    if (stop) CloseHandle( stop );
++    return ERROR_SUCCESS;
++}
+diff --git a/dlls/advapi32/advapi32.spec b/dlls/advapi32/advapi32.spec
+index 9cc720a..5783b6f 100644
+--- a/dlls/advapi32/advapi32.spec
++++ b/dlls/advapi32/advapi32.spec
+@@ -696,7 +696,7 @@
+ @ stdcall -import RegUnLoadKeyW(long wstr)
+ @ stdcall RegisterEventSourceA(str str)
+ @ stdcall RegisterEventSourceW(wstr wstr)
+-# @ stub RegisterIdleTask
++@ stdcall RegisterIdleTask(long ptr ptr ptr)
+ @ stdcall -import RegisterServiceCtrlHandlerA(str ptr)
+ @ stdcall -import RegisterServiceCtrlHandlerExA(str ptr ptr)
+ @ stdcall -import RegisterServiceCtrlHandlerExW(wstr ptr ptr)
+@@ -829,7 +829,7 @@
+ # @ stub TrusteeAccessToObjectW
+ # @ stub UninstallApplication
+ @ stdcall UnlockServiceDatabase (ptr)
+-# @ stub UnregisterIdleTask
++@ stdcall UnregisterIdleTask(ptr ptr ptr)
+ @ stdcall UnregisterTraceGuids(int64) ntdll.EtwUnregisterTraceGuids
+ @ stub UpdateTraceA
+ @ stub UpdateTraceW

@@ -8,7 +8,8 @@ XP's Display Properties, image thumbnails and the picture viewer, XP's sound
 scheme and Explorer defaults, Internet Explorer 6, Windows Media Player 9, and
 the Start menu's full left column (Internet, E-mail and the most used
 programs); and XP's Regional and Language Options, whose input languages
-the session's keyboard layout follows (session/keyboard.py). This applies them to a prefix made by prefix/create.py, with
+the session's keyboard layout follows (session/keyboard.py), and XP's Help
+and Support Center. This applies them to a prefix made by prefix/create.py, with
 xp-explorer/scripts/prefix.py's own code, and again when they change.
 
   extras.py PREFIX --wine WINE      apply (scripts/setup.sh runs it)
@@ -30,7 +31,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '27'
+VERSION = '28'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -353,6 +354,101 @@ def security_center(assets, prefix, wine, xpx):
                         '/reg:64'], env=env, check=False, stdout=subprocess.DEVNULL)
 
 
+# XP's Help and Support Center (assets/helpctr) in PCHealth\HelpCtr\Binaries,
+# as PCHEALTH.INF installs it, and the programs that run it there.
+HELPCTR = r'C:\windows\PCHealth\HelpCtr'
+HELPCTR_PROGRAMS = ('helpctr.exe', 'helphost.exe', 'helpsvc.exe')
+# The WebBrowser control (and its version 1), which Wine registers to its
+# ieframe.dll: XP's Help and Support Center hosts it, and its pages find the
+# Help Center through the control's site (IServiceProvider), which only XP's
+# shdocvw passes on. Programs without XP's shdocvw load Wine's, which hands
+# the classes to ieframe.
+WEB_BROWSER_CLASSES = ('{8856F961-340A-11D0-A96B-00C04FD705A2}', '{EAB22AC3-30C1-11CF-A7EB-0000C05BAE0B}')
+
+
+def help_center(assets, prefix, wine, xpx):
+    """XP's Help and Support Center: its files, its service (pchsvc.dll in
+    Wine's 32-bit svchost, which starts HelpSvc.exe), and its help topics,
+    which HelpSvc.exe /install2 installs from pchdt_w3.cab as XP's setup
+    does (syssetup.inf). The topics' database (ESE) comes with indexes on
+    XP's sort keys, which Wine's LCMapString does not give: esentutl /d
+    builds it again, and the topics under each heading are found."""
+    source = assets / 'helpctr'
+    if not (source / 'helpctr.exe').is_file():
+        return
+    windows = prefix / 'drive_c/windows'
+    binaries = windows / 'PCHealth/HelpCtr/Binaries'
+    binaries.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        shutil.copyfile(path, windows / 'syswow64' / path.name if path.name == 'rdshost.exe' else binaries / path.name)
+    # XP's common controls 6 beside it, as for rundll32 (Wine patch 0149):
+    # the toolbar's images.
+    controls = prefix / 'drive_c/xp/comctl32.dll'
+    if controls.is_file() and (prefix / '.patched-wine').is_file():
+        shutil.copyfile(controls, binaries / 'comctl32.dll')
+    # The help files of its topics, in %windir%\Help (the prefix's "help").
+    help_folder = next((p for p in windows.iterdir() if p.name.lower() == 'help'), windows / 'Help')
+    help_folder.mkdir(exist_ok=True)
+    for path in sorted((assets / 'help').glob('*.chm')):
+        shutil.copyfile(path, help_folder / path.name)
+    r = xpx.Reg()
+    # IE6's engine and XP's shell in its programs; the service's database
+    # engine is XP's (Wine's esent is a stub).
+    for program in HELPCTR_PROGRAMS + ('esentutl.exe',):
+        dlls = ('esent',) if program == 'esentutl.exe' else xpx.NATIVE + xpx.IE_NATIVE + xpx.SEARCH_NATIVE + ('esent',)
+        for dll in dlls:
+            r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll, 'native,builtin')
+    # HIVESYS.INF's Terminal Server key: without it the service's host
+    # (pchsvc.dll) stops as soon as it starts.
+    r.add(r'HKLM\System\CurrentControlSet\Control\Terminal Server', 'fAllowToGetHelp', '1', 'REG_DWORD')
+    r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\HELPCTR.EXE', None,
+          HELPCTR + r'\Binaries\HelpCtr.exe')
+    for clsid in WEB_BROWSER_CLASSES:
+        r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', None, r'%SystemRoot%\system32\shdocvw.dll',
+              'REG_EXPAND_SZ')
+        r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', 'ThreadingModel', 'Apartment')
+    # Its service in a group of its own, as XP's netsvcs runs it: with COM
+    # (Wine patch 0156).
+    r.add(r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost', 'helpsvc', ['helpsvc'], 'REG_MULTI_SZ')
+    r.add(r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost\helpsvc', 'CoInitializeSecurityParam', '1',
+          'REG_DWORD')
+    regedit(wine, prefix, r.text())
+    language = json.loads((prefix / 'xp-shell.json').read_text()).get('language', 'en')
+    locale = 'ja_JP.UTF-8' if language == 'ja' else 'en_US.UTF-8'
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', LANG=locale, LC_ALL=locale)
+    env.pop('WINEARCH', None)
+
+    def run(*args, cwd=None):
+        subprocess.run([wine, *args], env=env, cwd=cwd, check=False, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+
+    # Wine's 32-bit svchost reads its groups from the 64-bit view too.
+    run('reg', 'add', r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost', '/v', 'helpsvc', '/t',
+        'REG_MULTI_SZ', '/d', 'helpsvc', '/f', '/reg:64')
+    run('reg', 'add', r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost\helpsvc', '/v',
+        'CoInitializeSecurityParam', '/t', 'REG_DWORD', '/d', '1', '/f', '/reg:64')
+    # The type library that the service's interfaces import (Remote Desktop's).
+    run(r'C:\windows\syswow64\rdshost.exe', '/regserver')
+    # syssetup.inf's registrations; the service runs in Wine's 32-bit svchost.
+    run(HELPCTR + r'\Binaries\HelpSvc.exe', '/svchost', 'helpsvc', '/regserver')
+    run('reg', 'add', r'HKLM\System\CurrentControlSet\Services\helpsvc', '/v', 'ImagePath', '/t', 'REG_EXPAND_SZ',
+        '/d', r'C:\windows\syswow64\svchost.exe -k helpsvc', '/f')
+    run(HELPCTR + r'\Binaries\HelpHost.exe', '/regserver')
+    run(HELPCTR + r'\Binaries\HelpCtr.exe', '/regserver')
+    run(r'C:\windows\syswow64\regsvr32.exe', '/s', HELPCTR + r'\Binaries\brpinfo.dll')
+    # The help topics, once, in the system's language (the package's). The
+    # service keeps a copy of its installed packages in the registry, from
+    # which it would only restore the list of a database that is missing.
+    database = windows / 'PCHealth/HelpCtr/Database'
+    if not (database / 'HCdata.edb').is_file():
+        run('reg', 'delete', r'HKLM\Software\Microsoft\PCHealth\HelpSvc\Backup', '/f', '/reg:32')
+        run(HELPCTR + r'\Binaries\HelpSvc.exe', '/install2')
+        stop(wine, prefix)
+        if (database / 'HCdata.edb').is_file():
+            run(HELPCTR + r'\Binaries\esentutl.exe', '/d', 'HCdata.edb', '/o', cwd=database)
+    stop(wine, prefix)
+
+
 def user_accounts(prefix, wine):
     """XP's User Accounts, where the account picture of the Start menu and
     the Welcome screen is chosen: shgina.dll's user objects and nusrmgr.cpl's
@@ -633,6 +729,8 @@ def apply(prefix, wine):
     print("* XP's Control Panel categories", flush=True)
     control_panel(assets, prefix, wine, xpx)
     stop(wine, prefix)
+    print("* XP's Help and Support Center", flush=True)
+    help_center(assets, prefix, wine, xpx)
     stage(prefix, xpx)
     (prefix / MARKER).write_text(wanted(xpx, wine) + '\n')
 

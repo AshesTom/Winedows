@@ -1,0 +1,258 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] netapi32, advapi32: keep the local groups NetLocalGroupAdd creates
+
+Purpose: let XP's Help and Support service install its content.
+XP behavior: NetLocalGroupAdd creates a local group (an alias of the
+computer's account domain); LookupAccountName then gives its SID and
+LookupAccountSid its name; NetLocalGroupDel removes it.
+Wine before: NetLocalGroupAdd and NetLocalGroupDel were stubs that
+succeeded. XP's HelpSvc.exe /install2 creates HelpServicesGroup, looks up
+its SID for the ACLs of its folders and stopped there (SetupProblems
+"SKU_INSTALL"): no help topics were installed.
+Change: NetLocalGroupAdd (levels 0 and 1) stores the group under
+HKLM\Software\Wine\LocalGroups with the next relative id from 1001 (1000 is
+the user's) and its comment, and fails with ERROR_ALIAS_EXISTS for an
+existing one; NetLocalGroupDel deletes it. LookupAccountNameW resolves such a
+name (optionally with the computer name as domain) to S-1-5-21-0-0-0-<rid>
+as SidTypeAlias, and LookupAccountSidW gives the name back. Members are not
+kept.
+Scope: all processes.
+---
+ dlls/advapi32/security.c | 94 +++++++++++++++++++++++++++++++++++++++++++++++-
+ dlls/netapi32/netapi32.c | 83 ++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 172 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/advapi32/security.c b/dlls/advapi32/security.c
+index 3cde335..4185813 100644
+--- a/dlls/advapi32/security.c
++++ b/dlls/advapi32/security.c
+@@ -804,6 +804,28 @@ LookupAccountSidLocalA(
+     return LookupAccountSidA(NULL, sid, account, accountSize, domain, domainSize, name_use);
+ }
+ 
++/* the name of the local group with this relative id (lookup_local_group_name) */
++static WCHAR *local_group_name( DWORD rid )
++{
++    WCHAR name[GNLEN + 1];
++    DWORD i, value, size, len;
++    HKEY groups;
++
++    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\LocalGroups", 0, KEY_READ | KEY_WOW64_64KEY, &groups ))
++        return NULL;
++    for (i = 0; len = ARRAY_SIZE(name), !RegEnumKeyExW( groups, i, name, &len, NULL, NULL, NULL, NULL ); i++)
++    {
++        size = sizeof(value);
++        if (!RegGetValueW( groups, name, L"Rid", RRF_RT_REG_DWORD, NULL, &value, &size ) && value == rid)
++        {
++            RegCloseKey( groups );
++            return wcsdup( name );
++        }
++    }
++    RegCloseKey( groups );
++    return NULL;
++}
++
+ /******************************************************************************
+  * LookupAccountSidW [ADVAPI32.@]
+  *
+@@ -930,7 +952,12 @@ LookupAccountSidW(
+ 
+                             break;
+                         default:
+-                            dm = NULL;
++                            if ((account_name = local_group_name( ((MAX_SID *)sid)->SubAuthority[4] )))
++                            {
++                                ac = account_name;
++                                use = SidTypeAlias;
++                            }
++                            else dm = NULL;
+                             break;
+                         }
+                     }
+@@ -1372,6 +1399,65 @@ BOOL lookup_local_user_name( const LSA_UNICODE_STRING *account_and_domain,
+     return ret;
+ }
+ 
++/******************************************************************************
++ * lookup_local_group_name
++ *
++ * The local groups that NetLocalGroupAdd keeps in the registry, whose SIDs
++ * are their relative ids in the computer's account domain.
++ */
++static BOOL lookup_local_group_name( const LSA_UNICODE_STRING *account_and_domain,
++                                     PSID Sid, LPDWORD cbSid,
++                                     LPWSTR ReferencedDomainName,
++                                     LPDWORD cchReferencedDomainName,
++                                     PSID_NAME_USE peUse, BOOL *handled )
++{
++    WCHAR name[GNLEN + 1], computer[MAX_COMPUTERNAME_LENGTH + 1];
++    LSA_UNICODE_STRING account, domain;
++    DWORD rid, size = sizeof(rid), len = ARRAY_SIZE(computer);
++    MAX_SID sid;
++    BOOL ret = TRUE;
++    HKEY groups;
++    LONG status;
++
++    *handled = FALSE;
++    split_domain_account( account_and_domain, &account, &domain );
++    if (!account.Length || account.Length / sizeof(WCHAR) > GNLEN) return FALSE;
++    if (!GetComputerNameW( computer, &len )) return FALSE;
++    if (domain.Buffer && (domain.Length / sizeof(WCHAR) != len || wcsnicmp( domain.Buffer, computer, len )))
++        return FALSE;
++
++    memcpy( name, account.Buffer, account.Length );
++    name[account.Length / sizeof(WCHAR)] = 0;
++    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\LocalGroups", 0, KEY_READ | KEY_WOW64_64KEY, &groups ))
++        return FALSE;
++    status = RegGetValueW( groups, name, L"Rid", RRF_RT_REG_DWORD, NULL, &rid, &size );
++    RegCloseKey( groups );
++    if (status) return FALSE;
++    *handled = TRUE;
++
++    ADVAPI_GetComputerSid( &sid );
++    sid.SubAuthority[sid.SubAuthorityCount++] = rid;
++    if (*cbSid < GetLengthSid( &sid ))
++    {
++        SetLastError( ERROR_INSUFFICIENT_BUFFER );
++        ret = FALSE;
++    }
++    else if (Sid) CopySid( *cbSid, Sid, &sid );
++    *cbSid = GetLengthSid( &sid );
++
++    if (*cchReferencedDomainName <= len || !ret)
++    {
++        SetLastError( ERROR_INSUFFICIENT_BUFFER );
++        len++;
++        ret = FALSE;
++    }
++    else if (ReferencedDomainName) lstrcpyW( ReferencedDomainName, computer );
++    *cchReferencedDomainName = len;
++
++    if (ret) *peUse = SidTypeAlias;
++    return ret;
++}
++
+ /******************************************************************************
+  * LookupAccountNameW [ADVAPI32.@]
+  */
+@@ -1411,6 +1497,12 @@ BOOL WINAPI LookupAccountNameW( LPCWSTR lpSystemName, LPCWSTR lpAccountName, PSI
+     if (handled)
+         return ret;
+ 
++    /* and local groups */
++    ret = lookup_local_group_name( &account, Sid, cbSid, ReferencedDomainName,
++                                   cchReferencedDomainName, peUse, &handled );
++    if (handled)
++        return ret;
++
+     SetLastError( ERROR_NONE_MAPPED );
+     return FALSE;
+ }
+diff --git a/dlls/netapi32/netapi32.c b/dlls/netapi32/netapi32.c
+index a93607c..f583da3 100644
+--- a/dlls/netapi32/netapi32.c
++++ b/dlls/netapi32/netapi32.c
+@@ -2347,6 +2347,12 @@ DWORD WINAPI DsGetDcOpenW(LPCWSTR domain, ULONG flags, LPCWSTR site,
+     return ERROR_CALL_NOT_IMPLEMENTED;
+ }
+ 
++/* Local groups (aliases) are kept in the registry, with the relative id of
++ * their SID in the computer's account domain; advapi32's LookupAccountNameW
++ * and LookupAccountSidW find them there. */
++#define LOCAL_GROUPS_KEY L"Software\\Wine\\LocalGroups"
++#define LOCAL_GROUPS_FIRST_RID 1001
++
+ /************************************************************
+  *                NetLocalGroupAdd  (NETAPI32.@)
+  */
+@@ -2356,8 +2362,63 @@ NET_API_STATUS WINAPI NetLocalGroupAdd(
+     LPBYTE buf,
+     LPDWORD parm_err)
+ {
+-    FIXME("(%s %ld %p %p) stub!\n", debugstr_w(servername), level, buf,
+-          parm_err);
++    const WCHAR *name, *comment = NULL;
++    DWORD rid = LOCAL_GROUPS_FIRST_RID, value, size, i, disposition;
++    WCHAR subkey[GNLEN + 1];
++    HKEY groups, group;
++    LONG status;
++
++    TRACE("(%s %ld %p %p)\n", debugstr_w(servername), level, buf, parm_err);
++
++    if (!NETAPI_IsLocalComputer(servername))
++    {
++        FIXME("remote computer not supported\n");
++        return ERROR_NOT_SUPPORTED;
++    }
++    if (!buf) return ERROR_INVALID_PARAMETER;
++    switch (level)
++    {
++    case 0:
++        name = ((LOCALGROUP_INFO_0 *)buf)->lgrpi0_name;
++        break;
++    case 1:
++        name = ((LOCALGROUP_INFO_1 *)buf)->lgrpi1_name;
++        comment = ((LOCALGROUP_INFO_1 *)buf)->lgrpi1_comment;
++        break;
++    default:
++        return ERROR_INVALID_LEVEL;
++    }
++    if (!name || !*name || wcslen(name) > GNLEN)
++    {
++        if (parm_err) *parm_err = LOCALGROUP_NAME_PARMNUM;
++        return ERROR_INVALID_PARAMETER;
++    }
++
++    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, LOCAL_GROUPS_KEY, 0, NULL, 0, KEY_ALL_ACCESS | KEY_WOW64_64KEY,
++                        NULL, &groups, NULL))
++        return ERROR_ACCESS_DENIED;
++    /* the next free relative id */
++    for (i = 0; ; i++)
++    {
++        size = ARRAY_SIZE(subkey);
++        if (RegEnumKeyExW(groups, i, subkey, &size, NULL, NULL, NULL, NULL)) break;
++        size = sizeof(value);
++        if (!RegGetValueW(groups, subkey, L"Rid", RRF_RT_REG_DWORD, NULL, &value, &size) && value >= rid)
++            rid = value + 1;
++    }
++    status = RegCreateKeyExW(groups, name, 0, NULL, 0, KEY_ALL_ACCESS | KEY_WOW64_64KEY, NULL, &group,
++                             &disposition);
++    RegCloseKey(groups);
++    if (status) return ERROR_ACCESS_DENIED;
++    if (disposition == REG_OPENED_EXISTING_KEY)
++    {
++        RegCloseKey(group);
++        return ERROR_ALIAS_EXISTS;
++    }
++    RegSetValueExW(group, L"Rid", 0, REG_DWORD, (BYTE *)&rid, sizeof(rid));
++    if (comment)
++        RegSetValueExW(group, L"Comment", 0, REG_SZ, (BYTE *)comment, (wcslen(comment) + 1) * sizeof(WCHAR));
++    RegCloseKey(group);
+     return NERR_Success;
+ }
+ 
+@@ -2396,8 +2457,22 @@ NET_API_STATUS WINAPI NetLocalGroupDel(
+     LPCWSTR servername,
+     LPCWSTR groupname)
+ {
+-    FIXME("(%s %s) stub!\n", debugstr_w(servername), debugstr_w(groupname));
+-    return NERR_Success;
++    HKEY groups;
++    LONG status;
++
++    TRACE("(%s %s)\n", debugstr_w(servername), debugstr_w(groupname));
++
++    if (!NETAPI_IsLocalComputer(servername))
++    {
++        FIXME("remote computer not supported\n");
++        return ERROR_NOT_SUPPORTED;
++    }
++    if (!groupname || !*groupname) return ERROR_INVALID_PARAMETER;
++    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, LOCAL_GROUPS_KEY, 0, KEY_ALL_ACCESS | KEY_WOW64_64KEY, &groups))
++        return NERR_GroupNotFound;
++    status = RegDeleteKeyExW(groups, groupname, KEY_WOW64_64KEY, 0);
++    RegCloseKey(groups);
++    return status ? NERR_GroupNotFound : NERR_Success;
+ }
+ 
+ /************************************************************
