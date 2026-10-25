@@ -228,6 +228,19 @@ static void exclude(const WCHAR *path)
     if (*path && excluded_count < MAX_LIST && !is_excluded(path)) wcscpy(excluded[excluded_count++], path);
 }
 
+/* XP leaves setup programs out of the most used list (Explorer\\FileAssociation's
+ * AddRemoveApps); MSN's sign-up (msnsusii.exe, the "MSN" shortcut) only
+ * installs MSN Explorer. */
+static BOOL is_setup(const WCHAR *target)
+{
+    static const WCHAR *names[] = { L"msnsusii.exe", L"setup.exe", L"install.exe", L"uninst.exe",
+                                    L"uninstall.exe", L"unwise.exe", L"msoobe.exe" };
+    const WCHAR *file = wcsrchr(target, '\\');
+    file = file ? file + 1 : target;
+    for (unsigned i = 0; i < ARRAYSIZE(names); i++) if (!_wcsicmp(file, names[i])) return TRUE;
+    return FALSE;
+}
+
 /* The program a Start Menu Internet Application (or mail client) runs. */
 static void exclude_client(const WCHAR *kind)
 {
@@ -334,17 +347,16 @@ static int recent(XPStartMenuPin *pins)
     DWORD wanted = 6, size = sizeof(wanted), chosen_count = 0;
 
     /* XP's setup populates the lower column with familiar programs until
-     * enough usage history exists. Use the shortcuts installed by extras.py;
-     * after that, UserAssist's most-used programs take their places. */
+     * enough usage history exists. Use the shortcuts installed by extras.py
+     * (XP's own, Windows Messenger itself rather than MSN's setup); after
+     * that, UserAssist's most-used programs take their places. */
     if (!seed_count)
     {
         static const WCHAR *defaults[] = {
-            L"MSN.lnk",
+            L"Windows Media Player.lnk",
+            L"Windows Messenger.lnk",
             L"Accessories\\Tour Windows XP.lnk",
-            L"Accessories\\System Tools\\Files and Settings Transfer Wizard.lnk",
-            L"Accessories\\Entertainment\\Windows Media Player.lnk",
-            L"Accessories\\Alacritty.lnk",
-            L"Development\\Kate.lnk"
+            L"Accessories\\System Tools\\Files and Settings Transfer Wizard.lnk"
         };
         WCHAR folder[MAX_PATH];
         if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_COMMON_PROGRAMS, NULL, SHGFP_TYPE_CURRENT, folder)))
@@ -373,7 +385,7 @@ static int recent(XPStartMenuPin *pins)
     qsort(programs, program_count, sizeof(programs[0]), compare_programs);
     for (unsigned i = 0; i < program_count && chosen_count < wanted; i++)
     {
-        if (is_excluded(programs[i].link) || is_excluded(programs[i].target)) continue;
+        if (is_excluded(programs[i].link) || is_excluded(programs[i].target) || is_setup(programs[i].target)) continue;
         wcscpy(targets[chosen_count], programs[i].target);
         wcscpy(chosen[chosen_count++], programs[i].link);
     }
@@ -383,7 +395,7 @@ static int recent(XPStartMenuPin *pins)
         WCHAR target[MAX_PATH];
         BOOL dup = FALSE;
         if (GetFileAttributesW(seeds[i]) == INVALID_FILE_ATTRIBUTES || !link_target(seeds[i], target) ||
-            is_excluded(seeds[i]) || is_excluded(target))
+            is_excluded(seeds[i]) || is_excluded(target) || is_setup(target))
             continue;
         for (DWORD j = 0; j < chosen_count; j++) if (!_wcsicmp(targets[j], target)) dup = TRUE;
         if (dup) continue;

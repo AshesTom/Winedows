@@ -94,6 +94,23 @@ FILES = {
     # and Settings Transfer Wizard) and the icons of Set Program Access and
     # Defaults (prefix/extras.py).
     **dict.fromkeys(('msnsusii.exe', 'tourstart.exe', 'migwiz.exe', 'moricons.dll'), 'programs'),
+    # XP's own programs in place of Wine's (prefix/extras.py xp_programs): the
+    # Accessories, the games and the Accessibility tools of XP's Start menu,
+    # Task Manager and Registry Editor, with the DLLs they need that Wine
+    # lacks (or draws otherwise, cards.dll) beside them in system32.
+    **dict.fromkeys(('calc.exe', 'notepad.exe', 'mspaint.exe', 'taskmgr.exe', 'cmd.exe', 'regedit.exe',
+                     'charmap.exe', 'getuname.dll', 'sndrec32.exe', 'sndvol32.exe', 'winmine.exe', 'sol.exe',
+                     'freecell.exe', 'mshearts.exe', 'spider.exe', 'cards.dll', 'mfc42u.dll', 'magnify.exe',
+                     'mag_hook.dll', 'osk.exe', 'msswch.dll', 'accwiz.exe', 'mobsync.exe', 'mobsync.dll', 'cleanmgr.exe', 'mstsc.exe', 'mstscax.dll',
+                     'wupdmgr.exe', 'rcimlby.exe', 'clb.dll', 'ulib.dll', 'hypertrm.dll', 'compatui.dll'),
+                    'apps/system32'),
+    'wordpad.exe': 'apps/programs/Windows NT/Accessories',
+    'hypertrm.exe': 'apps/programs/Windows NT',
+    # The INFs whose ProfileItems and syssetup.inf's Start menu sections make
+    # XP's Start menu, read when it is made (prefix/startmenu.py).
+    **dict.fromkeys(('syssetup.inf', 'accessor.inf', 'communic.inf', 'games.inf', 'pinball.inf',
+                     'multimed.inf', 'optional.inf', 'shell.inf', 'tsoc.inf', 'wordpad.inf', 'msmsgs.inf',
+                     'ieuinit.inf', 'netrass.inf', 'ie.inf'), 'apps/inf'),
     # XP's registry defaults (sounds, Explorer settings), read by prefix/extras.py.
     **dict.fromkeys(('hivedef.inf', 'hivesft.inf'), 'inf'),
     # Image thumbnails and previews in folder windows (and Windows Picture and Fax Viewer).
@@ -131,7 +148,7 @@ RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
                 'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
-                'help')
+                'help', 'apps')
 
 
 def setup_sources(paths):
@@ -201,6 +218,28 @@ def tour_files(paths):
             if len(fields) > 7 and fields[7] in TOUR_DIRECTORIES:
                 files[name.lower()] = (TOUR_DIRECTORIES[fields[7]], fields[10] if len(fields) > 10 and fields[10] else name)
     return files
+
+
+def pinball_files(paths, root):
+    """{name on the medium: (group, installed name)} of 3D Pinball, which
+    PINBALL.INF copies to Program Files\\Windows NT\\Pinball."""
+    inf = next((p for p in paths if p.name.lower() in ('pinball.inf', 'pinball.in_')), None)
+    if not inf:
+        return {}
+    return {source: ('apps/programs/Windows NT/Pinball', target.lower())
+            for source, target in inf_copies(inf_text(inf, root), ('basecopyprogramfiles',)).items()}
+
+
+def messenger_files(paths, root, output):
+    """Windows Messenger, which MSMSGS.INF installs from MMSSETUP.CAB to
+    Program Files\\Messenger: the cabinet's files, as (name, source) pairs."""
+    cab = next((p for p in paths if p.name.lower() == 'mmssetup.cab'), None)
+    if not cab:
+        return []
+    target = output / 'apps/programs/Messenger'
+    target.mkdir(parents=True, exist_ok=True)
+    run('cabextract', '-q', '-d', str(target), str(cab))
+    return [(path, cab) for path in sorted(target.iterdir())]
 
 
 def help_files(paths):
@@ -298,7 +337,8 @@ def missing_groups(output):
               'wallpaper': 'wallpaper', 'wsc': 'wsc/wscsvc.dll',
               'programs': 'programs/tourstart.exe', 'tour': 'tour/mmTour/tour.exe',
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
-              'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help'}
+              'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help',
+              'apps': 'apps/programs/Messenger/msmsgs.exe'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 
@@ -361,6 +401,13 @@ def extract(source, output, only=None):
         RENAMED.update({name: target for name, (_, target) in tour.items()})
         chm = help_files(paths)
         RENAMED.update({name: target.lower() for name, (_, target) in chm.items()})
+        pinball = pinball_files(paths, root)
+        RENAMED.update({name: target for name, (_, target) in pinball.items()})
+
+        def copy_messenger():
+            for path, cab in messenger_files(paths, root, output):
+                manifest.append({'name': str(path.relative_to(output)), 'source': str(cab.relative_to(media)),
+                                 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
         if only:
             # Add groups of files to assets extracted before they existed.
             groups = set(only)
@@ -375,6 +422,9 @@ def extract(source, output, only=None):
                 group_files.update({name: group for name, (group, _) in tour.items()})
             if 'help' in groups:
                 group_files.update({name: group for name, (group, _) in chm.items()})
+            if 'apps' in groups:
+                group_files.update({name: group for name, (group, _) in pinball.items()})
+                copy_messenger()
             copy(group_files)
             listed = output / 'manifest.json'
             old = json.loads(listed.read_text()) if listed.is_file() else []
@@ -387,6 +437,8 @@ def extract(source, output, only=None):
         copy({name: group for name, (group, _) in wallpapers.items()})
         copy({name: group for name, (group, _) in tour.items()})
         copy({name: group for name, (group, _) in chm.items()})
+        copy({name: group for name, (group, _) in pinball.items()})
+        copy_messenger()
         for original in paths:
             if original.name.lower() != 'shellstyle.dll':
                 continue

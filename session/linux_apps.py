@@ -3,8 +3,9 @@
 
 Reads the desktop entries of the XDG data directories (freedesktop.org Desktop
 Entry Specification) and keeps one shortcut per shown application in the
-prefix's common Programs folder, sorted into XP-like folders by category and
-named after the application. Each shortcut starts the program through
+prefix's common Programs folder, in a folder of their own (Linux Applications)
+that keeps XP's All Programs as XP has it, sorted into XP-like folders by
+category within it and named after the application. Each shortcut starts the program through
 linux-launch.exe, under a name of its own (apps\\<desktop file ID>.exe, a hard
 link): XP's Start menu counts the uses of a program by the executable its
 shortcut runs, so with one launcher for all, every application would count as
@@ -241,12 +242,17 @@ def command(entry, path, locales):
     return args
 
 
+# The folder of all of them in All Programs (Japanese, other languages).
+LINUX_FOLDER = ('Linux アプリケーション', 'Linux Applications')
+
+
 def folder(entry, japanese):
     categories = strings(entry, 'Categories')
+    top = LINUX_FOLDER[0 if japanese else 1]
     for category, names in FOLDERS:
         if category in categories:
-            return names[0 if japanese else 1]
-    return ''
+            return top + '\\' + names[0 if japanese else 1]
+    return top
 
 
 def entries():
@@ -687,10 +693,24 @@ class Menu:
                     done[file_id] = item
                 else:
                     del done[file_id]
+        self.remove_strays(done)
         self.save(done, folders)
         self.save_relaunch(done)
         self.save_programs(done)
         return len(lines), len(old.keys() - new.keys())
+
+    def remove_strays(self, links):
+        """Shortcuts to this module's launchers that its list lacks (made by an
+        earlier version that did not record them) go too."""
+        kept = {(self.programs / item['link'].replace('\\', '/')).resolve() for item in links.values()}
+        marks = ('linux-apps\\apps\\'.encode('utf-16-le'), b'linux-apps\\apps\\')
+        for path in self.programs.rglob('*.lnk'):
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if path.resolve() not in kept and any(mark in data for mark in marks):
+                path.unlink(missing_ok=True)
 
     def save_programs(self, links):
         """The applications in Add or Remove Programs (the 32-bit view, which

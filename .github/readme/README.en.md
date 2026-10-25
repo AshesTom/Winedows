@@ -79,6 +79,12 @@ and **XP Explorer** ([xp-explorer/](../../xp-explorer/README.md)), which opens X
   Defaults; the Linux applications are listed too, Remove goes to the package manager and the default programs become
   the Linux defaults), the Security Center (Automatic Updates, Internet Options) and the Help and Support Center (XP's help
   topics and their service, opened from the Start menu's Help and Support), all from your own ISO's files (`prefix/extras.py`).
+- **XP's own programs and All Programs**: XP's Calculator, Notepad, Paint, WordPad, Command Prompt, Task Manager,
+  Registry Editor, Character Map, Sound Recorder, Volume Control, Magnifier, On-Screen Keyboard, HyperTerminal,
+  Remote Desktop Connection, the games (FreeCell, Hearts, Minesweeper, Pinball, Solitaire, Spider Solitaire) and
+  Windows Messenger, in place of Wine's. All Programs is XP's own, made from your ISO's setup INFs in its language
+  (Windows Update, Windows Catalog and Set Program Access and Defaults at the top, then Accessories, Games, Startup
+  and XP's programs); the Linux applications are in its Linux Applications folder (`prefix/startmenu.py`).
 - **Keyboard layout**: the Linux system's (`localectl`) at first. Add input languages or change the default in
   Control Panel, Regional and Language Options, Languages, Details (XP's own), and the session's layout (labwc on
   Wayland, setxkbmap on X11) follows at once; with two or more, Left Alt+Shift switches them as on XP

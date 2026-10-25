@@ -31,7 +31,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '28'
+VERSION = '29'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -551,6 +551,170 @@ def start_menu_programs(assets, prefix, wine, xpx):
     regedit(wine, prefix, r.text())
 
 
+# XP's programs in system32 that replace Wine's own (or that Wine lacks), and
+# the DLLs they need; the files of the others' folders in Program Files.
+PROGRAM_FOLDERS = ('Windows NT', 'Messenger')
+# Shortcuts of XP's INFs left out, as what they start needs XP's services,
+# drivers or components: Backup, activation, the network wizards, Narrator
+# (XP's speech engine and voices), Utility Manager (its service) and Scheduled
+# Tasks (its folder, D6277990: XP's Task Scheduler).
+LEFT_OUT = ('ntbackup.exe', 'msoobe.exe', 'netsetup.cpl', 'hnetwiz.dll', 'narrator.exe', 'utilman.exe',
+            '{d6277990-4c6a-11cf-8d87-00aa0060f5bf}')
+EXPLORER = r'C:\xp\xp-explorer.exe'
+XP_SHELL_PROGRAMS = ('taskmgr.exe', 'osk.exe', 'magnify.exe', 'accwiz.exe')
+
+
+def xp_programs(assets, prefix, wine, xpx):
+    """XP's own programs and XP's All Programs: the Accessories, the games, the
+    Accessibility tools, Task Manager, Registry Editor and Windows Messenger in
+    place of Wine's programs (DllOverrides), installed where XP's setup puts
+    them, and the shortcuts that XP's INFs make (prefix/startmenu.py), in the
+    media's language. Windows Messenger has MSMSGS.INF's registry entries, as
+    its optional component installs it."""
+    import startmenu
+    import xpreg
+    source = assets / 'apps'
+    if not (source / 'system32/notepad.exe').is_file():
+        return
+    drive = prefix / 'drive_c'
+    system = drive / 'windows/syswow64'
+    r = xpx.Reg()
+    for path in sorted((source / 'system32').iterdir()):
+        shutil.copyfile(path, system / path.name)
+        r.add(r'HKCU\Software\Wine\DllOverrides', path.name.removesuffix('.dll'), 'native,builtin')
+    for folder in PROGRAM_FOLDERS:
+        for path in sorted((source / 'programs' / folder).rglob('*')):
+            if path.is_file():
+                target = drive / 'Program Files' / path.relative_to(source / 'programs')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+                if path.suffix.lower() == '.exe':
+                    r.add(r'HKCU\Software\Wine\DllOverrides', path.name, 'native,builtin')
+    # Windows Messenger: its optional component's install section and the
+    # per-user one that Active Setup runs at the first logon.
+    inf = source / 'inf/msmsgs.inf'
+    shutil.copyfile(inf, drive / 'windows/inf/msmsgs.inf')
+    dirids = {'10': r'C:\windows', '11': r'C:\windows\system32', '17': r'C:\windows\inf',
+              '16422': r'C:\Program Files'}
+    text = xpreg.read_inf(inf)
+    for root in ('HKLM', 'HKCR'):
+        regedit(wine, prefix, xpreg.hive_entries(text, root, ('',), extra=dirids, install=('msmsgs', 'ShowIcons')))
+    regedit(wine, prefix, xpreg.hive_entries(text, 'HKCU', ('',), extra=dirids, install=('BLC.Install.PerUser',)))
+    # XP's shell32 where they call it by ordinal (Task Manager's Run dialog and
+    # restrictions) or use its classes (the Accessibility tools' "Link Window").
+    for program in XP_SHELL_PROGRAMS:
+        for dll in xpx.NATIVE:
+            r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll, 'native,builtin')
+    regedit(wine, prefix, r.text())
+
+    def exists(windows):
+        """Whether a Windows path of the 32-bit XP shell names a file of the prefix."""
+        if not windows[1:3] == ':\\':
+            return True
+        relative = windows[3:].replace('\\', '/')
+        relative = relative.replace('windows/system32/', 'windows/syswow64/', 1) \
+            if relative.lower().startswith('windows/system32/') else relative
+        return (drive / relative).exists() or (drive / relative.lower()).exists()
+
+    programs = r'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
+    lines, names = [], {}
+    for item in startmenu.items(source / 'inf'):
+        target, arguments = item['target'], item['arguments']
+        named = (target + ' ' + arguments).lower()
+        if any(name in named for name in LEFT_OUT):
+            continue
+        folder = programs.rsplit('\\', 1)[0] if item['folder'] is None else \
+            programs + ('\\' + item['folder'] if item['folder'] else '')
+        if target.lower().startswith('hcp://'):
+            # A Help and Support Center page (the Program Compatibility
+            # Wizard), opened as XP's own Help menu opens them.
+            (drive / folder[3:].replace('\\', '/') / (item['name'] + '.url')).unlink(missing_ok=True)
+            target, arguments = HELPCTR + r'\Binaries\HelpCtr.exe', f'-url {target}'
+        if '://' in target:
+            # An Internet shortcut, as XP's setup makes for a URL.
+            path = drive / folder[3:].replace('\\', '/') / (item['name'] + '.url')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            icon, _, index = item.get('icon', '').partition(',')
+            body = f'[InternetShortcut]\r\nURL={target}\r\n'
+            if icon and exists(icon):
+                body += f'IconFile={icon}\r\nIconIndex={index or 0}\r\n'
+            path.write_text(body, encoding='utf-8')
+            if item['display']:
+                names.setdefault(path.parent, {})[path.name] = item['display']
+            continue
+        if not exists(target) or (target.lower().endswith('rundll32.exe') and
+                                  not exists('C:\\windows\\system32\\' + arguments.split(',')[0])):
+            continue
+        if item['display']:
+            names.setdefault(drive / folder[3:].replace('\\', '/'), {})[item['name'] + '.lnk'] = item['display']
+        # The shortcuts that XP Explorer makes itself stay (Network Connections).
+        if exists(f'{folder}\\{item["name"]}.lnk'):
+            continue
+        icon = item.get('icon', '')
+        # XP's explorer.exe is C:\xp\xp-explorer.exe here; Wine's keeps its name.
+        target, icon = (EXPLORER if value.lower() == r'c:\windows\explorer.exe' else value for value in (target, icon))
+        icon = icon.replace(r'C:\windows\explorer.exe', EXPLORER)
+        if icon and not exists(icon.rsplit(',', 1)[0]):
+            icon = ''
+        lines.append('\t'.join((f'{folder}\\{item["name"]}.lnk', target, arguments, item['directory'], icon,
+                                 item['infotip'])))
+    # Windows Media Player at the top of All Programs too, as unregmp2.exe
+    # /ShowWMP puts it.
+    media = drive / 'ProgramData/Microsoft/Windows/Start Menu/Programs/Accessories/Entertainment/Windows Media Player.lnk'
+    if media.is_file():
+        shutil.copyfile(media, media.parents[2] / media.name)
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all',
+               WINEDLLOVERRIDES='winemenubuilder.exe=d')
+    env.pop('WINEARCH', None)
+    result = subprocess.run([wine, str(BRIDGE / 'linux-links.exe')], env=env, input='\n'.join(lines) + '\n',
+                            capture_output=True, text=True, encoding='utf-8', timeout=600)
+    for line in result.stdout.splitlines():
+        if line.startswith('fail'):
+            print('xp-programs:', line, file=sys.stderr)
+    for folder, entries in names.items():
+        localized_names(xpx, folder, entries)
+    # XP sorts All Programs (folders first, then by name) until the user moves
+    # an item; the order an earlier menu kept would leave the new items last.
+    regedit(wine, prefix, 'Windows Registry Editor Version 5.00\r\n\r\n'
+            '[-HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MenuOrder\\'
+            'Start Menu2\\Programs]\r\n')
+
+
+def localized_names(xpx, folder, entries):
+    """XP shows a shortcut under the name of its folder's desktop.ini
+    [LocalizedFileNames] (the INFs' DisplayResource: "FreeCell" for
+    Freecell.lnk), when the folder is a system one (Wine keeps a folder's
+    system attribute, not its read-only one)."""
+    path = folder / 'desktop.ini'
+    try:
+        raw = path.read_bytes()
+        text = raw.decode('utf-16') if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else raw.decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        text = ''
+    lines, section, done = [], None, set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('['):
+            if section == '[localizedfilenames]':
+                lines += [f'{name}={value}' for name, value in entries.items() if name not in done]
+                done.update(entries)
+            section = stripped.lower()
+        elif section == '[localizedfilenames]' and '=' in stripped:
+            name = stripped.split('=', 1)[0].strip()
+            if name in entries:
+                line = f'{name}={entries[name]}'
+                done.add(name)
+        lines.append(line)
+    if section == '[localizedfilenames]':
+        lines += [f'{name}={value}' for name, value in entries.items() if name not in done]
+        done.update(entries)
+    if set(entries) - done:
+        lines += ['[LocalizedFileNames]'] + [f'{name}={value}' for name, value in entries.items() if name not in done]
+    path.write_bytes(b'\xff\xfe' + ('\r\n'.join(lines) + '\r\n').encode('utf-16-le'))
+    xpx.set_dos_attributes(path, 0x6)
+    xpx.set_dos_attributes(folder, 0x4)
+
+
 def xp_user_defaults(prefix, wine):
     """XP's defaults that earlier versions set otherwise: the access keys'
     underlines hidden until Alt is pressed (UserPreferencesMask's
@@ -725,6 +889,8 @@ def apply(prefix, wine):
     network_connections(prefix, wine)
     print("* XP's Start menu programs", flush=True)
     start_menu_programs(assets, prefix, wine, xpx)
+    print("* XP's programs and All Programs", flush=True)
+    xp_programs(assets, prefix, wine, xpx)
     xp_user_defaults(prefix, wine)
     print("* XP's Control Panel categories", flush=True)
     control_panel(assets, prefix, wine, xpx)
