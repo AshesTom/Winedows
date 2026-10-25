@@ -1,6 +1,6 @@
 # Wine のパッチ
 
-`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 179 本のパッチがあります。
+`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 180 本のパッチがあります。
 当てるのは `wine/build.sh` で、実際の適用は `wine/patch-state.py` が行います（途中まで当たったソースにも、足りない分だけを当てます）。
 
 番号の付け直しや、以前の番号との対応表は [history/patch-history.md](history/patch-history.md) にあります。
@@ -289,9 +289,9 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0172 | advapi32: RegisterIdleTask・UnregisterIdleTask。XP のアイドル タスクのサービスは、マシンが使われていない間にタスクの開始のイベントを、また使われると停止のイベントを知らせる。Wine はアイドルの時間を見ないので、イベントを作るだけで開始は知らせない。どちらも無く、XP のヘルプとサポートのサービス（svchost の中の pchsvc.dll）が落ち、ヘルプとサポート センターがサービスにつながらなかった | なし |
 | 0173 | netapi32, advapi32: NetLocalGroupAdd が作るローカル グループを HKLM\Software\Wine\LocalGroups に残す（1001 からの相対 ID、コメント。同じ名前は ERROR_ALIAS_EXISTS）。NetLocalGroupDel が消し、LookupAccountNameW がその名前を S-1-5-21-0-0-0-ID（SidTypeAlias、コンピューター名のドメイン）に、LookupAccountSidW がその SID を名前にする。メンバーは持たない。XP の HelpSvc.exe /install2 が HelpServicesGroup を作ってからその SID をフォルダーの ACL に使おうとして失敗し（SetupProblems が SKU_INSTALL）、ヘルプのトピックが入らなかった | なし |
 | 0174 | winex11: 外部シェルで、リージョンで形を変えた窓には 0033 の影を描かない（リージョンを設定したら消す）。通知領域のバルーン（セキュリティ センターの「Your computer might be at risk」など）は CS_DROPSHADOW のクラスのツールチップだが、XP SP3 では影が無い。角の丸いバルーンの外接矩形の右と下に四角い影が出ていた | あり |
-| 0175 | dlls: XP のセッションでメニューとコンテキスト メニューをアニメーション表示する。MenuFade が有効なら約 175 ms でフェードし、そうでなければ開く方向から約 150 ms で展開する。合成マネージャーが無い場合、メニューは覆う画面のコピーに重ねて描いてフェードし（レイヤー付きウィンドウの X11 はディザの領域を使う）、Wayland はレイヤー付きサーフェスで透明度と領域を描く。AnimateWindow の AW_BLEND・AW_SLIDE も実装 | あり（XP のセッション） |
+| 0175 | dlls: XP のセッションでメニューとコンテキスト メニューをアニメーション表示する。MenuFade が有効なら約 175 ms でフェードし、そうでなければ開く方向から約 150 ms で展開する。合成マネージャーが無い場合、メニューは覆う画面のコピーに重ねて描いてフェードし、Wayland はレイヤー付きサーフェスで透明度と領域を描く。AnimateWindow の AW_BLEND・AW_SLIDE も実装 | あり（XP のセッション） |
 
-### XP のソースとの照合で見つけた API の修正（0176〜0179）
+### XP のソースとの照合で見つけた API の修正（0176〜0180）
 
 | 番号 | 内容 | opt-in |
 |---|---|---|
@@ -299,6 +299,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0177 | shell32: rename の通知を移動元と移動先の両方を監視する登録へ届け、NewDelivery の共有メモリーを PIDL の整列分も確保する。XP の scnotify.cpp は二つの PIDL を照合していた | なし |
 | 0178 | user32: XP の AnimateWindow と同じく、未知のフラグやモードのない要求を拒否し、子ウィンドウの AW_BLEND を拒否する。Wine は AW_SLIDE だけの要求を両方向に展開し、無効な AW_BLEND でもウィンドウの状態を変えることがあった | あり（XP のセッション） |
 | 0179 | win32u, user32: XP のセッションで MessageBeep が XP の win32k の xxxMessageBeep と同じく種類のアイコンのイベント（SystemHand、SystemQuestion、SystemExclamation、SystemAsterisk、それ以外と 0xFFFFFFFF は「一般の警告音」の .Default）をサウンド設定から鳴らす（user32 への PlayMessageBeep のコールバックで winmm の PlaySound。32 ビットのプログラムは wow64win を通る）。Wine はドライバーのビープ（XBell）を鳴らしていて、デスクトップで何もしないキーを押すとハードウェアのビープが鳴った。アイコンの無いメッセージ ボックスも XP のスキームに無い SystemDefault ではなく .Default を鳴らす | あり（XP のセッション） |
+| 0180 | win32u: XP のセッションで合成マネージャーが無いとき（`WIN4WINE_COMPOSITED` が無い）、一定の透明度のレイヤー付きウィンドウ（SetLayeredWindowAttributes の LWA_ALPHA、ピクセルごとのアルファの無い UpdateLayeredWindow の ULW_ALPHA）を、同じプロセスの下のウィンドウのサーフェスと混ぜて画面に送る（送るたびに読み直すので、下で描き直された画素も透ける）。スタートメニューの「すべてのプログラム」の AnimateWindow(AW_BLEND) と選択項目の SysFader が、X11 の不透明度の無視（0175 ではディザの穴）ではなく XP と同じくなめらかにフェードする | あり（XP のセッション） |
 
 
 ## 並び順の考え方

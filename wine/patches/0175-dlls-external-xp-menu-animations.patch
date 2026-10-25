@@ -5,14 +5,13 @@ Purpose: make XP popup menus and context menus open with their expected effects.
 XP behavior: when menu animation and UI effects are enabled, MenuFade blends a
 popup over 175 ms; otherwise XP reveals it from the direction in which it opens.
 Wine before: win32u showed popup menus immediately, AnimateWindow was a partial
-stub, X11 only exposed compositor opacity, and Wayland did not apply layered
+stub, and Wayland did not apply layered
 window alpha or window regions to its surface.
 Change: enable menu transitions and AnimateWindow's AW_BLEND and AW_SLIDE only
 in the external XP shell. Without a compositor (WIN4WINE_COMPOSITED unset), a
 fading menu stays opaque and shows the menu blended over a copy of the screen it
 covers, flushing each frame as the menu thread reaches no message loop until the
-end. X11 layered windows use _NET_WM_WINDOW_OPACITY, and an ordered-dither shape
-when no compositor is present. Wayland applies constant alpha to
+end. Wayland applies constant alpha to
 premultiplied pixels and uses an ARGB SHM surface to clip animated regions.
 Each program reads UserPreferencesMask again when Display Properties' effects
 change it (WM_SETTINGCHANGE with SPI_SETMENUANIMATION, SPI_SETMENUFADE and the
@@ -24,7 +23,6 @@ XP references:
 ---
  dlls/win32u/menu.c | 175 ++++++++++++++++++++++++++++++++++++++++++++++---
  dlls/user32/win.c | 113 ++++++++++++++++++++++++++++++++++++++++--------
- dlls/winex11.drv/window.c |  82 ++++++++++++++++++++++++++++++++++++++++------
  dlls/winewayland.drv/waylanddrv.h |   4 ++++
  dlls/winewayland.drv/waylanddrv_main.c |   1 +
  dlls/winewayland.drv/window.c |  34 ++++++++++++++++++++++++++++++++++
@@ -32,7 +30,7 @@ XP references:
  dlls/win32u/win32u_private.h |   1 +
  dlls/win32u/sysparams.c |   8 ++++++++
  dlls/win32u/message.c |   3 +++
- 10 files changed, 512 insertions(+), 18 deletions(-)
+ 9 files changed, 436 insertions(+), 12 deletions(-)
 
 diff --git a/dlls/win32u/menu.c b/dlls/win32u/menu.c
 --- a/dlls/win32u/menu.c
@@ -376,140 +374,6 @@ diff --git a/dlls/user32/win.c b/dlls/user32/win.c
 +    else if (hide) NtUserShowWindow( hwnd, SW_HIDE );
      return TRUE;
  }
- 
-diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
---- a/dlls/winex11.drv/window.c
-+++ b/dlls/winex11.drv/window.c
-@@ -683,7 +683,75 @@
- /***********************************************************************
-  *              sync_window_opacity
-  */
--static void sync_window_opacity( Display *display, Window win, BYTE alpha, DWORD flags )
-+static void sync_layered_window_shape( struct x11drv_win_data *data, BYTE alpha, DWORD flags )
-+{
-+#ifdef HAVE_LIBXSHAPE
-+    static const BYTE matrix[8][8] =
-+    {
-+        { 0,48,12,60, 3,51,15,63 }, {32,16,44,28,35,19,47,31},
-+        { 8,56, 4,52,11,59, 7,55}, {40,24,36,20,43,27,39,23},
-+        { 2,50,14,62, 1,49,13,61}, {34,18,46,30,33,17,45,29},
-+        {10,58, 6,54, 9,57, 5,53}, {42,26,38,22,41,25,37,21}
-+    };
-+    Display *display;
-+    XWindowAttributes attr;
-+    Pixmap mask, stipple;
-+    GC gc;
-+    BYTE bits[8];
-+    unsigned int x, y, level;
-+
-+    if (!data || data->shaped || !data->whole_window || win4wine_shell() != WIN4WINE_SHELL_XP) return;
-+    display = data->display;
-+
-+    /* EWMH opacity needs a compositing manager. In the XP session's nested
-+     * X server there isn't one, so use an ordered-dither shape as the
-+     * equivalent visible opacity for XP's 175 ms menu fade. */
-+    if (flags & LWA_ALPHA)
-+    {
-+        char selection[32];
-+        Atom compositor;
-+        snprintf( selection, sizeof(selection), "_NET_WM_CM_S%d", DefaultScreen(display) );
-+        compositor = XInternAtom( display, selection, False );
-+        if (XGetSelectionOwner( display, compositor ) == None)
-+        {
-+            if (!XGetWindowAttributes( display, data->whole_window, &attr )) return;
-+            if (!alpha) level = 0;
-+            else level = (alpha * 64 + 254) / 255;
-+            for (y = 0; y < 8; y++)
-+            {
-+                bits[y] = 0;
-+                for (x = 0; x < 8; x++) if (matrix[y][x] < level) bits[y] |= 1 << x;
-+            }
-+            mask = XCreatePixmap( display, data->whole_window, attr.width, attr.height, 1 );
-+            stipple = XCreateBitmapFromData( display, data->whole_window, (const char *)bits, 8, 8 );
-+            if (!mask || !stipple)
-+            {
-+                if (mask) XFreePixmap( display, mask );
-+                if (stipple) XFreePixmap( display, stipple );
-+                return;
-+            }
-+            gc = XCreateGC( display, mask, 0, NULL );
-+            XSetForeground( display, gc, 1 );
-+            XSetBackground( display, gc, 0 );
-+            XSetFillStyle( display, gc, FillOpaqueStippled );
-+            XSetStipple( display, gc, stipple );
-+            XFillRectangle( display, mask, gc, 0, 0, attr.width, attr.height );
-+            XShapeCombineMask( display, data->whole_window, ShapeBounding, 0, 0, mask, ShapeSet );
-+            XFreeGC( display, gc );
-+            XFreePixmap( display, stipple );
-+            XFreePixmap( display, mask );
-+            return;
-+        }
-+    }
-+
-+    /* Clear the temporary opacity shape after the fade, or when a compositor
-+     * takes over. This function leaves application window regions untouched. */
-+    XShapeCombineMask( display, data->whole_window, ShapeBounding, 0, 0, None, ShapeSet );
-+#endif
-+}
-+
-+static void sync_window_opacity( struct x11drv_win_data *data, Display *display, Window win,
-+                                 BYTE alpha, DWORD flags )
- {
-     unsigned long opacity = 0xffffffff;
- 
-@@ -694,6 +762,8 @@
-     else
-         XChangeProperty( display, win, x11drv_atom(_NET_WM_WINDOW_OPACITY),
-                          XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&opacity, 1 );
-+
-+    sync_layered_window_shape( data, alpha, flags );
- }
- 
- 
-@@ -2708,7 +2778,7 @@
- 
-     /* set the window opacity */
-     if (!NtUserGetLayeredWindowAttributes( data->hwnd, &key, &alpha, &layered_flags )) layered_flags = 0;
--    sync_window_opacity( data->display, data->whole_window, alpha, layered_flags );
-+    sync_window_opacity( data, data->display, data->whole_window, alpha, layered_flags );
-     sync_window_input_shape( data );
- 
-     XFlush( data->display );  /* make sure the window exists before we start painting to it */
-@@ -2850,7 +2920,7 @@
-         {
-             data->layered = FALSE;
-             set_window_visual( data, &default_visual, FALSE );
--            sync_window_opacity( data->display, data->whole_window, 0, 0 );
-+            sync_window_opacity( data, data->display, data->whole_window, 0, 0 );
-         }
-         if (changed & WS_EX_TRANSPARENT) sync_window_style( data );
-         flush = TRUE;
-@@ -3715,7 +3785,7 @@
- 
-         if (data->whole_window)
-         {
--            sync_window_opacity( data->display, data->whole_window, alpha, flags );
-+            sync_window_opacity( data, data->display, data->whole_window, alpha, flags );
-             XFlush( data->display );
-         }
- 
-@@ -3727,7 +3797,7 @@
-         Window win = X11DRV_get_whole_window( hwnd );
-         if (win)
-         {
--            sync_window_opacity( gdi_display, win, alpha, flags );
-+            sync_window_opacity( NULL, gdi_display, win, alpha, flags );
-             if (flags & LWA_COLORKEY)
-                 FIXME( "LWA_COLORKEY not supported on foreign process window %p\n", hwnd );
-             XFlush( gdi_display );
-@@ -3747,7 +3817,7 @@
- 
-     if (data->whole_window)
-     {
--        sync_window_opacity( data->display, data->whole_window, alpha, flags );
-+        sync_window_opacity( data, data->display, data->whole_window, alpha, flags );
-         XFlush( data->display );
-     }
  
 diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
 --- a/dlls/winewayland.drv/waylanddrv.h

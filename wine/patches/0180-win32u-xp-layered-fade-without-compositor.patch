@@ -1,0 +1,249 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] win32u: blend faded layered windows with the windows below without a compositor
+
+Purpose: fade XP's menus and selections smoothly in the X11 session, where
+no compositing manager blends a window's opacity with the screen.
+XP behavior: the Start menu's submenus open with AnimateWindow(AW_BLEND)
+(shell32/menuband/menubar.cpp), and the selection fades through the
+SysFader window, a layered window whose constant alpha UpdateLayeredWindow
+lowers (fadetsk.cpp); USER composites both over what lies below.
+Wine before: the constant alpha went to the X11 driver as
+_NET_WM_WINDOW_OPACITY, which without a compositor does nothing; 0175 drew
+it as an ordered-dither shape instead, a pattern of holes over the window.
+Change: in the XP session without a compositor (WIN4WINE_COMPOSITED unset),
+a layered window of constant opacity (SetLayeredWindowAttributes' LWA_ALPHA,
+or UpdateLayeredWindow's ULW_ALPHA without per-pixel alpha) is flushed
+blended with what this process's windows below it show there, read from
+their surfaces at each flush, so their new pixels show through as they draw.
+UpdateLayeredWindow calls that only change the alpha flush the window again.
+Evidence: XP source at Source/XPSP1/NT/shell/shell32/menuband/fadetsk.cpp
+and menubar.cpp; the Start menu's All Programs fades over the Start menu in
+an Xvfb test session, frame by frame.
+Scope: the XP session (WIN4WINE_SHELL=xp) without WIN4WINE_COMPOSITED.
+---
+diff --git a/dlls/win32u/ntuser_private.h b/dlls/win32u/ntuser_private.h
+--- a/dlls/win32u/ntuser_private.h
++++ b/dlls/win32u/ntuser_private.h
+@@ -76,6 +76,7 @@
+     int                clip_clients;  /* Has client surfaces that needs to be clipped out */
+     int                cbWndExtra;    /* class cbWndExtra at window creation */
+     DWORD_PTR          userdata;      /* User private data */
++    UINT               fade_alpha;    /* win4wine: UpdateLayeredWindow's constant alpha + 1 without per-pixel alpha */
+     DWORD              wExtra[1];     /* Window extra bytes */
+ } WND;
+ 
+diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -274,6 +274,7 @@
+ extern MINMAXINFO get_min_max_info( HWND hwnd );
+ extern HWND get_window_relative( HWND hwnd, UINT rel );
+ extern BOOL have_shell_overlays(void);
++extern DWORD *get_layered_background( struct window_surface *surface, BYTE *alpha );
+ extern void blend_shell_overlays( struct window_surface *owner );
+ extern DWORD get_window_thread( HWND hwnd, DWORD *process );
+ extern HWND is_current_process_window( HWND hwnd );
+diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
+--- a/dlls/win32u/dce.c
++++ b/dlls/win32u/dce.c
+@@ -617,7 +617,13 @@
+     BITMAPINFO *shape_info = (BITMAPINFO *)shape_buf;
+     RECT dirty = surface->rect, bounds;
+     BOOL flushed = FALSE;
+-    void *color_bits;
++    void *color_bits, *blended = NULL;
++    DWORD *under = NULL;
++    BYTE alpha = 0xff;
++
++    /* XP's session without a compositor: a layered window of constant opacity
++     * blended with the windows below (get_layered_background) */
++    if (surface->hwnd && win4wine_shell() == WIN4WINE_SHELL_XP) under = get_layered_background( surface, &alpha );
+ 
+     window_surface_lock( surface );
+ 
+@@ -637,6 +643,35 @@
+         TRACE( "Flushing hwnd %p, surface %p %s, bounds %s, dirty %s\n", surface->hwnd, surface,
+                wine_dbgstr_rect( &surface->rect ), wine_dbgstr_rect( &surface->bounds ), wine_dbgstr_rect( &dirty ) );
+ 
++        if (under && color_info->bmiHeader.biBitCount == 32)
++        {
++            int width = surface->rect.right - surface->rect.left;
++            int rows = abs( color_info->bmiHeader.biHeight ), stride = color_info->bmiHeader.biWidth;
++            DWORD *src, *dst, pixel, back;
++            int x, y, row;
++
++            if (stride >= width && (blended = malloc( stride * rows * sizeof(DWORD) )))
++            {
++                memcpy( blended, color_bits, stride * rows * sizeof(DWORD) );
++                for (y = dirty.top; y < dirty.bottom && y < rows; y++)
++                {
++                    row = color_info->bmiHeader.biHeight > 0 ? rows - 1 - y : y;
++                    src = (DWORD *)color_bits + row * stride;
++                    dst = (DWORD *)blended + row * stride;
++                    for (x = dirty.left; x < dirty.right && x < width; x++)
++                    {
++                        if (!((back = under[y * width + x]) >> 24)) continue;
++                        pixel = src[x];
++                        dst[x] = (pixel & 0xff000000) |
++                                 ((((pixel >> 16) & 0xff) * alpha + ((back >> 16) & 0xff) * (255 - alpha)) / 255) << 16 |
++                                 ((((pixel >> 8) & 0xff) * alpha + ((back >> 8) & 0xff) * (255 - alpha)) / 255) << 8 |
++                                 (((pixel & 0xff) * alpha + (back & 0xff) * (255 - alpha)) / 255);
++                    }
++                }
++                color_bits = blended;
++            }
++        }
++
+         if (surface->funcs->flush( surface, &surface->rect, &dirty, color_info, color_bits,
+                                    shape_changed, shape_info, shape_bits ))
+             reset_bounds( &surface->bounds );
+@@ -644,6 +679,8 @@
+     }
+ 
+     window_surface_unlock( surface );
++    free( blended );
++    free( under );
+     /* Windows 7's shell: layered windows over this one blend with its new pixels */
+     if (flushed && have_shell_overlays()) blend_shell_overlays( surface );
+ }
+diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -2869,6 +2869,105 @@
+ /*****************************************************************************
+  *           UpdateLayeredWindow (win32u.@)
+  */
++/* XP's session without a compositing manager (WIN4WINE_COMPOSITED unset): the
++ * screen can't show through a layered window of constant opacity, such as XP's
++ * SysFader (the Start menu's selection fade, UpdateLayeredWindow) or a window
++ * that AnimateWindow fades (SetLayeredWindowAttributes). Its surface is shown
++ * blended with what this process's windows below show there, read from their
++ * surfaces at each flush, so their new pixels show through as they draw. */
++static BOOL fades_layered( HWND hwnd )
++{
++    return win4wine_shell() == WIN4WINE_SHELL_XP && !getenv( "WIN4WINE_COMPOSITED" ) &&
++           (get_window_long( hwnd, GWL_EXSTYLE ) & WS_EX_LAYERED);
++}
++
++/* The pixels under SURFACE's window, one per surface pixel with 0xff in its top
++ * byte where a window below shows one, and the window's ALPHA; NULL when it is
++ * opaque or nothing is known under it. */
++DWORD *get_layered_background( struct window_surface *surface, BYTE *alpha )
++{
++    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
++    BITMAPINFO *info = (BITMAPINFO *)buffer;
++    HWND hwnd = surface->hwnd, below;
++    struct window_surface *other;
++    struct window_rects rects, other_rects;
++    UINT alpha_bits, alpha_mask, fade_alpha;
++    DWORD *under, *color;
++    RECT window, area;
++    int width, height, x, y, sx, sy, filled = 0;
++    HWND parent;
++    WND *win;
++
++    if (!hwnd || !fades_layered( hwnd )) return NULL;
++    if (!(win = get_win_ptr( hwnd )) || win == WND_DESKTOP || win == WND_OTHER_PROCESS) return NULL;
++    rects = win->rects;
++    fade_alpha = win->fade_alpha;
++    parent = win->parent;
++    release_win_ptr( win );
++    if (parent && parent != get_desktop_window()) return NULL;
++
++    window_surface_lock( surface );
++    alpha_bits = surface->alpha_bits;
++    alpha_mask = surface->alpha_mask;
++    window_surface_unlock( surface );
++    if (alpha_bits != ~0u && !alpha_mask) *alpha = alpha_bits >> 24;
++    else if (fade_alpha) *alpha = fade_alpha - 1;
++    else return NULL;
++    if (*alpha == 0xff) return NULL;
++
++    width = surface->rect.right - surface->rect.left;
++    height = surface->rect.bottom - surface->rect.top;
++    window = surface->rect;
++    OffsetRect( &window, rects.visible.left, rects.visible.top );
++    if (width <= 0 || height <= 0 || !(under = calloc( width * height, sizeof(*under) ))) return NULL;
++
++    for (below = get_window_relative( hwnd, GW_HWNDNEXT ); below && filled < width * height;
++         below = get_window_relative( below, GW_HWNDNEXT ))
++    {
++        if (!is_window_visible( below )) continue;
++        if (!(win = get_win_ptr( below )) || win == WND_DESKTOP || win == WND_OTHER_PROCESS) continue;
++        if ((other = win->surface)) window_surface_add_ref( other );
++        other_rects = win->rects;
++        release_win_ptr( win );
++        if (!other) continue;
++        if (other == &dummy_surface)
++        {
++            window_surface_release( other );
++            continue;
++        }
++        area = other->rect;
++        OffsetRect( &area, other_rects.visible.left, other_rects.visible.top );
++        intersect_rect( &area, &area, &other_rects.visible );
++        if (intersect_rect( &area, &area, &window ))
++        {
++            window_surface_lock( other );
++            if ((color = window_surface_get_color( other, info )) && info->bmiHeader.biBitCount == 32)
++            {
++                int stride = info->bmiHeader.biWidth, rows = abs( info->bmiHeader.biHeight );
++                for (y = area.top; y < area.bottom; y++)
++                {
++                    DWORD *row = under + (y - window.top) * width;
++                    sy = y - other_rects.visible.top - other->rect.top;
++                    if (sy < 0 || sy >= rows) continue;
++                    if (info->bmiHeader.biHeight > 0) sy = rows - 1 - sy;
++                    for (x = area.left; x < area.right; x++)
++                    {
++                        sx = x - other_rects.visible.left - other->rect.left;
++                        if (row[x - window.left] || sx < 0 || sx >= stride) continue;
++                        row[x - window.left] = color[sy * stride + sx] | 0xff000000;
++                        filled++;
++                    }
++                }
++            }
++            window_surface_unlock( other );
++        }
++        window_surface_release( other );
++    }
++    if (filled) return under;
++    free( under );
++    return NULL;
++}
++
+ BOOL WINAPI NtUserUpdateLayeredWindow( HWND hwnd, HDC hdc_dst, const POINT *pts_dst, const SIZE *size,
+                                        HDC hdc_src, const POINT *pts_src, COLORREF key,
+                                        const BLENDFUNCTION *blend, DWORD flags, const RECT *dirty )
+@@ -2936,9 +3035,31 @@
+         apply_window_pos( hwnd, 0, swp_flags, surface, &new_rects, NULL );
+     if (!surface) return FALSE;
+ 
++    if (fades_layered( hwnd ))
++    {
++        /* the constant alpha, when the pixels have none: the flush blends them */
++        WND *win = get_win_ptr( hwnd );
++        if (win && win != WND_DESKTOP && win != WND_OTHER_PROCESS)
++        {
++            if (!blend || blend->AlphaFormat & AC_SRC_ALPHA || !(flags & ULW_ALPHA)) win->fade_alpha = 0;
++            else win->fade_alpha = source_alpha + 1;
++            release_win_ptr( win );
++        }
++    }
++
+     if (!hdc_src || surface == &dummy_surface)
+     {
+         user_driver->pUpdateLayeredWindow( hwnd, source_alpha, flags );
++        if (surface != &dummy_surface && fades_layered( hwnd ))
++        {
++            /* show the new alpha: the image is blended again */
++            RECT all = surface->rect;
++            OffsetRect( &all, -all.left, -all.top );
++            window_surface_lock( surface );
++            add_bounds_rect( &surface->bounds, &all );
++            window_surface_unlock( surface );
++            window_surface_flush( surface );
++        }
+         ret = TRUE;
+     }
+     else
