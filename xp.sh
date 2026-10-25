@@ -81,7 +81,13 @@ setup)
     media=$(realpath -e -- "${2:?usage: $0 setup /path/to/WindowsXP-SP3.iso}")
     need cabextract 7z i686-w64-mingw32-gcc x86_64-w64-mingw32-gcc xvfb-run Xephyr
     [[ $root != *[[:space:]]* ]] || { echo "The checkout path must not contain spaces: $root" >&2; exit 2; }
+    [[ $EUID -ne 0 ]] || { echo "Run this as your user, not as root" >&2; exit 2; }
     mkdir -p "$local"
+    # A setup once run as root leaves .local to root: Wine refuses it.
+    if [[ -n $(find "$local" -maxdepth 2 ! -user "$(id -u)" -print -quit 2>/dev/null) ]]; then
+        echo "$local has files of another user (an earlier run as root?): sudo chown -R $(id -un): $local" >&2
+        exit 1
+    fi
     patches=$(python3 "$root/wine/patch-state.py" --digest "$root/wine/patches")
     if [[ -x $wine && $(cat "$local/wine-install/win4wine-patches" 2>/dev/null) == "$patches" ]]; then
         echo "Wine: built ($("$wine" --version))"

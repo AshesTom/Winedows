@@ -156,6 +156,13 @@ install_input_method() {
     fi
 }
 mkdir -p "$local"
+# A checkout set up once as root (sudo) leaves .local to root; Wine and the
+# logs then fail with "Permission denied" and "not owned by you".
+if [[ -n $(find "$local" -maxdepth 2 ! -user "$(id -u)" -print -quit 2>/dev/null) ]]; then
+    printf '%s has files of another user (an earlier run as root?): sudo chown -R %s: %q\n' \
+        "$local" "$(id -un)" "$local" >&2
+    exit 1
+fi
 
 # The same packages on Arch Linux (pacman). Arch's display manager is the
 # target of display-manager.service.
@@ -448,16 +455,20 @@ case $shell in
 esac
 config=${XDG_CONFIG_HOME:-$HOME/.config}/win4wine/$config_name
 if [[ -f $config ]]; then
-    # Kept, with the Wine and the language of the prefix (a new prefix may be
-    # made with another Wine, or be in another language)
-    python3 - "$config" "$locale" "$wine" <<'EOF'
+    # Kept, with this checkout's prefix and Wine and the language of the prefix
+    # (a new prefix may be made with another Wine, or be in another language;
+    # a config written by another checkout would run that checkout's XP files)
+    python3 - "$config" "$locale" "$wine" "$prefix" <<'EOF'
 import json, sys
-config, locale, wine = sys.argv[1:]
+config, locale, wine, prefix = sys.argv[1:]
 settings = json.load(open(config))
 changes = []
 if settings.get('wine') != wine:
     settings['wine'] = wine
     changes.append(f'Wine {wine}')
+if settings.get('prefix') != prefix:
+    settings['prefix'] = prefix
+    changes.append(f'prefix {prefix}')
 if settings.get('locale') != locale:
     settings['locale'] = locale
     if locale.startswith('ja'):

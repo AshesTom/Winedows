@@ -24,6 +24,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import ctypes
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -570,9 +571,19 @@ class Menu:
             overrides = env.get('WINEDLLOVERRIDES', '')
             env['WINEDLLOVERRIDES'] = (overrides + ';' if overrides else '') + 'winemenubuilder.exe=d'
             env.pop('WINEARCH', None)
-            result = subprocess.run([self.wine, str(ROOT / '.local/bridge/linux-links.exe')], env=env,
-                                    input='\n'.join(lines) + '\n', capture_output=True, text=True,
-                                    encoding='utf-8', timeout=120)
+            # Through files, not pipes: a wineserver or explorer.exe that this
+            # run starts inherits its standard handles and outlives it, and
+            # reading a pipe to its end would wait for them too.
+            with tempfile.TemporaryFile() as stdin, tempfile.TemporaryFile() as stdout, \
+                    tempfile.TemporaryFile() as stderr:
+                stdin.write(('\n'.join(lines) + '\n').encode())
+                stdin.seek(0)
+                result = subprocess.run([self.wine, str(ROOT / '.local/bridge/linux-links.exe')], env=env,
+                                        stdin=stdin, stdout=stdout, stderr=stderr, timeout=600)
+                stdout.seek(0)
+                stderr.seek(0)
+                result.stdout = stdout.read().decode('utf-8', 'replace')
+                result.stderr = stderr.read().decode('utf-8', 'replace')
             for line in result.stdout.splitlines():
                 if line.startswith('fail'):
                     print('linux-apps:', line, file=sys.stderr)
