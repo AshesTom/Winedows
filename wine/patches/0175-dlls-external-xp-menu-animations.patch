@@ -1,0 +1,800 @@
+From: Codex <noreply@openai.com>
+Subject: [PATCH] dlls: restore XP menu animations and fades
+
+Purpose: make XP popup menus and context menus open with their expected effects.
+XP behavior: when menu animation and UI effects are enabled, MenuFade blends a
+popup over 175 ms; otherwise XP reveals it from the direction in which it opens.
+Wine before: win32u showed popup menus immediately, AnimateWindow was a partial
+stub, X11 only exposed compositor opacity, and Wayland did not apply layered
+window alpha or window regions to its surface.
+Change: enable menu transitions and AnimateWindow's AW_BLEND and AW_SLIDE only
+in the external XP shell. Without a compositor (WIN4WINE_COMPOSITED unset), a
+fading menu stays opaque and shows the menu blended over a copy of the screen it
+covers, flushing each frame as the menu thread reaches no message loop until the
+end. X11 layered windows use _NET_WM_WINDOW_OPACITY, and an ordered-dither shape
+when no compositor is present. Wayland applies constant alpha to
+premultiplied pixels and uses an ARGB SHM surface to clip animated regions.
+Each program reads UserPreferencesMask again when Display Properties' effects
+change it (WM_SETTINGCHANGE with SPI_SETMENUANIMATION, SPI_SETMENUFADE and the
+other user preference actions), so turning the menu effect off applies at once.
+XP references:
+  /home/gainsbarre/Projects/winxp_source/Source/XPSP1/NT/windows/core/ntuser/kernel/menu.c
+  /home/gainsbarre/Projects/winxp_source/Source/XPSP1/NT/windows/core/ntuser/kernel/mnpopup.c
+  /home/gainsbarre/Projects/winxp_source/Source/XPSP1/NT/shell/shell32/menuband/menubar.cpp
+---
+ dlls/win32u/menu.c | 175 ++++++++++++++++++++++++++++++++++++++++++++++---
+ dlls/user32/win.c | 113 ++++++++++++++++++++++++++++++++++++++++--------
+ dlls/winex11.drv/window.c |  82 ++++++++++++++++++++++++++++++++++++++++------
+ dlls/winewayland.drv/waylanddrv.h |   4 ++++
+ dlls/winewayland.drv/waylanddrv_main.c |   1 +
+ dlls/winewayland.drv/window.c |  34 ++++++++++++++++++++++++++++++++++
+ dlls/winewayland.drv/window_surface.c | 107 ++++++++++++++++++++++++++++++++++++++++--
+ dlls/win32u/win32u_private.h |   1 +
+ dlls/win32u/sysparams.c |   8 ++++++++
+ dlls/win32u/message.c |   3 +++
+ 10 files changed, 512 insertions(+), 18 deletions(-)
+
+diff --git a/dlls/win32u/menu.c b/dlls/win32u/menu.c
+--- a/dlls/win32u/menu.c
++++ b/dlls/win32u/menu.c
+@@ -30,6 +30,7 @@
+ #include "wine/debug.h"
+ #include "wine/win4wine.h"
+ #include "vssym32.h"
++#include "winternl.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(menu);
+ WINE_DECLARE_DEBUG_CHANNEL(accel);
+@@ -3503,6 +3504,74 @@
+     NtUserReleaseDC( 0, hdc );
+ }
+ 
++/* XP's menu fade without a compositing manager: show the menu over a copy of
++ * the screen it covers, more opaque at each frame, for XP's 175 ms. The window
++ * stays opaque, so nothing shows through it but these frames. */
++static BOOL fade_popup_menu( HWND hwnd, HMENU hmenu, int x, int y, int width, int height )
++{
++    static const DWORD duration = 175; /* XP's CMS_MENUFADE */
++    HDC screen, hdc, under = 0, image = 0, frame = 0;
++    HBITMAP under_bitmap = 0, image_bitmap = 0, frame_bitmap = 0;
++    LARGE_INTEGER delay;
++    DWORD start, elapsed;
++    BOOL ret = FALSE;
++
++    if (width <= 0 || height <= 0) return FALSE;
++    if (!(screen = NtUserGetDCEx( 0, 0, DCX_CACHE | DCX_WINDOW ))) return FALSE;
++    if ((under = NtGdiCreateCompatibleDC( screen )) && (image = NtGdiCreateCompatibleDC( screen )) &&
++        (frame = NtGdiCreateCompatibleDC( screen )) &&
++        (under_bitmap = NtGdiCreateCompatibleBitmap( screen, width, height )) &&
++        (image_bitmap = NtGdiCreateCompatibleBitmap( screen, width, height )) &&
++        (frame_bitmap = NtGdiCreateCompatibleBitmap( screen, width, height )))
++    {
++        NtGdiSelectBitmap( under, under_bitmap );
++        NtGdiSelectBitmap( image, image_bitmap );
++        NtGdiSelectBitmap( frame, frame_bitmap );
++        ret = NtGdiBitBlt( under, 0, 0, width, height, screen, x, y, SRCCOPY, 0, 0 );
++    }
++    NtUserReleaseDC( 0, screen );
++
++    if (ret)
++    {
++        draw_popup_menu( hwnd, image, hmenu );
++        /* the first frame is the screen alone: with SWP_NOREDRAW, the external
++         * shell's X11 driver keeps what the screen shows under the new popup,
++         * where the window would be black until its first frame. The menu's
++         * own painting waits until the end. */
++        NtUserSetWindowPos( hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOACTIVATE |
++                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOREDRAW | SWP_DEFERERASE );
++        if ((hdc = NtUserGetDCEx( hwnd, 0, DCX_CACHE | DCX_WINDOW )))
++        {
++            delay.QuadPart = -100000; /* 10 ms */
++            start = NtGetTickCount();
++            do
++            {
++                BLENDFUNCTION blend = { AC_SRC_OVER, 0, 0, 0 };
++
++                elapsed = min( NtGetTickCount() - start, duration );
++                blend.SourceConstantAlpha = elapsed * 255 / duration;
++                NtGdiBitBlt( frame, 0, 0, width, height, under, 0, 0, SRCCOPY, 0, 0 );
++                NtGdiAlphaBlend( frame, 0, 0, width, height, image, 0, 0, width, height,
++                                 *(DWORD *)&blend, 0 );
++                NtGdiBitBlt( hdc, 0, 0, width, height, frame, 0, 0, SRCCOPY, 0, 0 );
++                /* show this frame now: the thread reaches no message loop until the end */
++                flush_window_surfaces( TRUE );
++                if (elapsed < duration) NtDelayExecution( FALSE, &delay );
++            } while (elapsed < duration);
++            NtUserReleaseDC( hwnd, hdc );
++        }
++        NtUserRedrawWindow( hwnd, NULL, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN );
++    }
++
++    if (frame) NtGdiDeleteObjectApp( frame );
++    if (image) NtGdiDeleteObjectApp( image );
++    if (under) NtGdiDeleteObjectApp( under );
++    if (frame_bitmap) NtGdiDeleteObjectApp( frame_bitmap );
++    if (image_bitmap) NtGdiDeleteObjectApp( image_bitmap );
++    if (under_bitmap) NtGdiDeleteObjectApp( under_bitmap );
++    return ret;
++}
++
+ static BOOL show_popup( HWND owner, HMENU hmenu, UINT id, UINT flags,
+                         int x, int y, INT xanchor, INT yanchor )
+ {
+@@ -3510,6 +3579,9 @@
+     MONITORINFO info;
+     UINT max_height;
+     RECT rect;
++    BOOL animate = FALSE, fade = FALSE, ui_effects = FALSE;
++    BOOL layered = FALSE, blend = FALSE;
++    DWORD exstyle = 0;
+ 
+     TRACE( "owner=%p hmenu=%p id=0x%04x x=0x%04x y=0x%04x xa=0x%04x ya=0x%04x\n",
+            owner, hmenu, id, x, y, xanchor, yanchor );
+@@ -3554,16 +3626,117 @@
+     }
+     if (y < info.rcWork.top) y = info.rcWork.top;
+ 
++    /* XP's USER menu window checks both the menu-animation and UI-effects
++     * preferences. If MenuFade is set, it blends the popup for 175 ms;
++     * otherwise it reveals the popup from the edge it opened from. */
++    if (win4wine_shell() == WIN4WINE_SHELL_XP && !(flags & TPM_NOANIMATION) && !menu_keyboard_mode &&
++        NtUserSystemParametersInfo( SPI_GETMENUANIMATION, 0, &animate, 0 ) && animate &&
++        NtUserSystemParametersInfo( SPI_GETUIEFFECTS, 0, &ui_effects, 0 ) && ui_effects)
++    {
++        NtUserSystemParametersInfo( SPI_GETMENUFADE, 0, &fade, 0 );
++        animate = TRUE;
++    }
++    else animate = FALSE;
++
++    if (animate && fade && !getenv( "WIN4WINE_COMPOSITED" ))
++    {
++        /* Without a compositing manager, window opacity can't show what is
++         * underneath. Blend the menu with the screen it covers instead. */
++        blend = TRUE;
++    }
++    else if (animate && fade)
++    {
++        exstyle = NtUserGetWindowLongW( menu->hWnd, GWL_EXSTYLE );
++        layered = !(exstyle & WS_EX_LAYERED);
++        if (layered) NtUserSetWindowLong( menu->hWnd, GWL_EXSTYLE, exstyle | WS_EX_LAYERED, FALSE );
++        if (!NtUserSetLayeredWindowAttributes( menu->hWnd, 0, 0, LWA_ALPHA ))
++        {
++            if (layered) NtUserSetWindowLong( menu->hWnd, GWL_EXSTYLE, exstyle, FALSE );
++            animate = FALSE;
++        }
++    }
++    else if (animate)
++    {
++        HRGN empty = NtGdiCreateRectRgn( 0, 0, 0, 0 );
++        if (!empty || !NtUserSetWindowRgn( menu->hWnd, empty, FALSE ))
++        {
++            if (empty) NtGdiDeleteObjectApp( empty );
++            animate = FALSE;
++        }
++    }
++
+     if (!top_popup)
+     {
+         top_popup = menu->hWnd;
+         top_popup_hmenu = hmenu;
+     }
+ 
++    if (blend)
++    {
++        /* size the hidden window, so the menu can draw before it shows */
++        NtUserSetWindowPos( menu->hWnd, HWND_TOPMOST, x, y, menu->Width, menu->Height,
++                            SWP_NOACTIVATE | SWP_NOREDRAW );
++        if (!fade_popup_menu( menu->hWnd, hmenu, x, y, menu->Width, menu->Height ))
++            blend = animate = FALSE;
++    }
+     /* Display the window */
+-    NtUserSetWindowPos( menu->hWnd, HWND_TOPMOST, x, y, menu->Width, menu->Height,
+-                        SWP_SHOWWINDOW | SWP_NOACTIVATE );
+-    NtUserRedrawWindow( menu->hWnd, NULL, 0, RDW_UPDATENOW | RDW_ALLCHILDREN );
++    if (!blend)
++    {
++        NtUserSetWindowPos( menu->hWnd, HWND_TOPMOST, x, y, menu->Width, menu->Height,
++                            SWP_SHOWWINDOW | SWP_NOACTIVATE );
++        NtUserRedrawWindow( menu->hWnd, NULL, 0, RDW_UPDATENOW | RDW_ALLCHILDREN );
++    }
++
++    if (animate && fade && !blend)
++    {
++        LARGE_INTEGER delay;
++        unsigned int i;
++
++        delay.QuadPart = -175000; /* XP's CMS_MENUFADE is 175 ms. */
++        for (i = 1; i <= 10; i++)
++        {
++            NtUserSetLayeredWindowAttributes( menu->hWnd, 0, i * 255 / 10, LWA_ALPHA );
++            NtUserRedrawWindow( menu->hWnd, NULL, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN );
++            /* show this frame now: the thread reaches no message loop until the end */
++            flush_window_surfaces( TRUE );
++            NtDelayExecution( FALSE, &delay );
++        }
++        NtUserSetLayeredWindowAttributes( menu->hWnd, 0, 255, LWA_ALPHA );
++        if (layered) NtUserSetWindowLong( menu->hWnd, GWL_EXSTYLE, exstyle, FALSE );
++    }
++    else if (animate && !fade)
++    {
++        LARGE_INTEGER delay;
++        BOOL from_right = !!(flags & TPM_RIGHTALIGN);
++        BOOL from_bottom = !!(flags & TPM_BOTTOMALIGN);
++        BOOL animate_horiz = !!(flags & (TPM_HORPOSANIMATION | TPM_HORNEGANIMATION));
++        BOOL animate_vert = !!(flags & (TPM_VERPOSANIMATION | TPM_VERNEGANIMATION));
++        BOOL directional = animate_horiz || animate_vert;
++        unsigned int i, frames = 11;
++        INT width = menu->Width, height = menu->Height;
++
++        if (flags & TPM_HORPOSANIMATION) from_right = FALSE;
++        else if (flags & TPM_HORNEGANIMATION) from_right = TRUE;
++        if (flags & TPM_VERPOSANIMATION) from_bottom = FALSE;
++        else if (flags & TPM_VERNEGANIMATION) from_bottom = TRUE;
++        delay.QuadPart = -1500000 / frames;
++        for (i = 1; i <= frames; i++)
++        {
++            INT cx = !directional || animate_horiz ? max( 1, width * i / frames ) : width;
++            INT cy = !directional || animate_vert ? max( 1, height * i / frames ) : height;
++            HRGN region = NtGdiCreateRectRgn( from_right ? width - cx : 0,
++                                             from_bottom ? height - cy : 0,
++                                             from_right ? width : cx,
++                                             from_bottom ? height : cy );
++            if (region && !NtUserSetWindowRgn( menu->hWnd, region, TRUE )) NtGdiDeleteObjectApp( region );
++            NtUserRedrawWindow( menu->hWnd, NULL, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN );
++            /* show this frame now: the thread reaches no message loop until the end */
++            flush_window_surfaces( TRUE );
++            NtDelayExecution( FALSE, &delay );
++        }
++        NtUserSetWindowRgn( menu->hWnd, 0, TRUE );
++        NtUserRedrawWindow( menu->hWnd, NULL, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN );
++    }
+     return TRUE;
+ }
+ 
+diff --git a/dlls/user32/win.c b/dlls/user32/win.c
+--- a/dlls/user32/win.c
++++ b/dlls/user32/win.c
+@@ -874,17 +874,114 @@
+  */
+ BOOL WINAPI AnimateWindow( HWND hwnd, DWORD time, DWORD flags )
+ {
+-    FIXME( "partial stub\n" );
+-
+-    /* If trying to show/hide and it's already shown/hidden or invalid window,
+-     * fail with invalid parameter. */
+-    if (!IsWindow( hwnd ) || (!(flags & AW_HIDE)) == IsWindowVisible( hwnd ))
+-    {
+-        SetLastError(ERROR_INVALID_PARAMETER);
++    BOOL hide = !!(flags & AW_HIDE), visible, layered, has_layered_attrs = FALSE;
++    DWORD exstyle, old_flags = 0;
++    BYTE old_alpha = 255;
++    COLORREF old_key = 0;
++    unsigned int frames, i;
++
++    if (win4wine_shell() != WIN4WINE_SHELL_XP)
++    {
++        FIXME( "partial stub\n" );
++        /* If trying to show/hide and it's already shown/hidden or invalid window,
++         * fail with invalid parameter. */
++        if (!IsWindow( hwnd ) || (!hide) == IsWindowVisible( hwnd ))
++        {
++            SetLastError(ERROR_INVALID_PARAMETER);
++            return FALSE;
++        }
++        NtUserShowWindow( hwnd, hide ? SW_HIDE : ((flags & AW_ACTIVATE) ? SW_SHOW : SW_SHOWNA) );
++        return TRUE;
++    }
++
++    visible = IsWindowVisible( hwnd );
++    if (!IsWindow( hwnd ) || (!hide) == visible)
++    {
++        SetLastError( ERROR_INVALID_PARAMETER );
+         return FALSE;
+     }
+ 
+-    NtUserShowWindow( hwnd, (flags & AW_HIDE) ? SW_HIDE : ((flags & AW_ACTIVATE) ? SW_SHOW : SW_SHOWNA) );
++    if (!time) time = 200;
++    frames = min( max( time / 10, 1 ), 30 );
++    exstyle = GetWindowLongW( hwnd, GWL_EXSTYLE );
++    layered = !!(exstyle & WS_EX_LAYERED);
++    if (layered) has_layered_attrs = NtUserGetLayeredWindowAttributes( hwnd, &old_key, &old_alpha, &old_flags );
++
++    if (flags & AW_BLEND)
++    {
++        if (!layered) SetWindowLongW( hwnd, GWL_EXSTYLE, exstyle | WS_EX_LAYERED );
++        if (!hide)
++        {
++            NtUserSetLayeredWindowAttributes( hwnd, 0, 0, LWA_ALPHA );
++            if (!visible) NtUserShowWindow( hwnd, (flags & AW_ACTIVATE) ? SW_SHOW : SW_SHOWNA );
++        }
++        else NtUserSetLayeredWindowAttributes( hwnd, 0, 255, LWA_ALPHA );
++
++        for (i = 1; i <= frames; i++)
++        {
++            BYTE alpha = hide ? 255 - i * 255 / frames : i * 255 / frames;
++            NtUserSetLayeredWindowAttributes( hwnd, 0, alpha, LWA_ALPHA );
++            NtUserRedrawWindow( hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW | RDW_ALLCHILDREN );
++            MsgWaitForMultipleObjects( 0, NULL, FALSE, time / frames, 0 );
++        }
++        if (hide) NtUserShowWindow( hwnd, SW_HIDE );
++        if (layered)
++        {
++            if (has_layered_attrs) NtUserSetLayeredWindowAttributes( hwnd, old_key, old_alpha, old_flags );
++            else NtUserSetLayeredWindowAttributes( hwnd, old_key, 255, LWA_ALPHA );
++        }
++        else SetWindowLongW( hwnd, GWL_EXSTYLE, exstyle );
++        return TRUE;
++    }
++
++    if (flags & AW_SLIDE)
++    {
++        RECT window;
++        HRGN current;
++        int width, height;
++        BOOL right_to_left = !!(flags & AW_HOR_NEGATIVE);
++        BOOL bottom_to_top = !!(flags & AW_VER_NEGATIVE);
++        BOOL animate_horiz = !!(flags & (AW_HOR_POSITIVE | AW_HOR_NEGATIVE));
++        BOOL animate_vert = !!(flags & (AW_VER_POSITIVE | AW_VER_NEGATIVE));
++
++        if ((flags & AW_CENTER) || (!animate_horiz && !animate_vert))
++            animate_horiz = animate_vert = TRUE;
++
++        current = CreateRectRgn( 0, 0, 0, 0 );
++        if (current && GetWindowRgn( hwnd, current ) != ERROR)
++        {
++            DeleteObject( current );
++            current = NULL; /* Preserve an application's existing window shape. */
++        }
++        if (current && GetWindowRect( hwnd, &window ))
++        {
++            width = window.right - window.left;
++            height = window.bottom - window.top;
++            if (!hide) NtUserSetWindowRgn( hwnd, CreateRectRgn( 0, 0, 0, 0 ), FALSE );
++            if (!visible) NtUserShowWindow( hwnd, (flags & AW_ACTIVATE) ? SW_SHOW : SW_SHOWNA );
++
++            for (i = 1; i <= frames; i++)
++            {
++                int cx = animate_horiz ? (hide ? width * (frames - i) / frames : max( 1, width * i / frames )) : width;
++                int cy = animate_vert ? (hide ? height * (frames - i) / frames : max( 1, height * i / frames )) : height;
++                int left = (flags & AW_CENTER) ? (width - cx) / 2 : (right_to_left ? width - cx : 0);
++                int top = (flags & AW_CENTER) ? (height - cy) / 2 : (bottom_to_top ? height - cy : 0);
++                HRGN region = CreateRectRgn( left, top, left + cx, top + cy );
++                if (region && !NtUserSetWindowRgn( hwnd, region, TRUE )) DeleteObject( region );
++                NtUserRedrawWindow( hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN );
++                MsgWaitForMultipleObjects( 0, NULL, FALSE, time / frames, 0 );
++            }
++
++            if (hide) NtUserShowWindow( hwnd, SW_HIDE );
++            NtUserSetWindowRgn( hwnd, NULL, TRUE );
++            DeleteObject( current );
++            return TRUE;
++        }
++        if (current) DeleteObject( current );
++    }
++
++    if (!hide && !visible) NtUserShowWindow( hwnd, (flags & AW_ACTIVATE) ? SW_SHOW : SW_SHOWNA );
++    else if (hide) NtUserShowWindow( hwnd, SW_HIDE );
+     return TRUE;
+ }
+ 
+diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -683,7 +683,75 @@
+ /***********************************************************************
+  *              sync_window_opacity
+  */
+-static void sync_window_opacity( Display *display, Window win, BYTE alpha, DWORD flags )
++static void sync_layered_window_shape( struct x11drv_win_data *data, BYTE alpha, DWORD flags )
++{
++#ifdef HAVE_LIBXSHAPE
++    static const BYTE matrix[8][8] =
++    {
++        { 0,48,12,60, 3,51,15,63 }, {32,16,44,28,35,19,47,31},
++        { 8,56, 4,52,11,59, 7,55}, {40,24,36,20,43,27,39,23},
++        { 2,50,14,62, 1,49,13,61}, {34,18,46,30,33,17,45,29},
++        {10,58, 6,54, 9,57, 5,53}, {42,26,38,22,41,25,37,21}
++    };
++    Display *display;
++    XWindowAttributes attr;
++    Pixmap mask, stipple;
++    GC gc;
++    BYTE bits[8];
++    unsigned int x, y, level;
++
++    if (!data || data->shaped || !data->whole_window || win4wine_shell() != WIN4WINE_SHELL_XP) return;
++    display = data->display;
++
++    /* EWMH opacity needs a compositing manager. In the XP session's nested
++     * X server there isn't one, so use an ordered-dither shape as the
++     * equivalent visible opacity for XP's 175 ms menu fade. */
++    if (flags & LWA_ALPHA)
++    {
++        char selection[32];
++        Atom compositor;
++        snprintf( selection, sizeof(selection), "_NET_WM_CM_S%d", DefaultScreen(display) );
++        compositor = XInternAtom( display, selection, False );
++        if (XGetSelectionOwner( display, compositor ) == None)
++        {
++            if (!XGetWindowAttributes( display, data->whole_window, &attr )) return;
++            if (!alpha) level = 0;
++            else level = (alpha * 64 + 254) / 255;
++            for (y = 0; y < 8; y++)
++            {
++                bits[y] = 0;
++                for (x = 0; x < 8; x++) if (matrix[y][x] < level) bits[y] |= 1 << x;
++            }
++            mask = XCreatePixmap( display, data->whole_window, attr.width, attr.height, 1 );
++            stipple = XCreateBitmapFromData( display, data->whole_window, (const char *)bits, 8, 8 );
++            if (!mask || !stipple)
++            {
++                if (mask) XFreePixmap( display, mask );
++                if (stipple) XFreePixmap( display, stipple );
++                return;
++            }
++            gc = XCreateGC( display, mask, 0, NULL );
++            XSetForeground( display, gc, 1 );
++            XSetBackground( display, gc, 0 );
++            XSetFillStyle( display, gc, FillOpaqueStippled );
++            XSetStipple( display, gc, stipple );
++            XFillRectangle( display, mask, gc, 0, 0, attr.width, attr.height );
++            XShapeCombineMask( display, data->whole_window, ShapeBounding, 0, 0, mask, ShapeSet );
++            XFreeGC( display, gc );
++            XFreePixmap( display, stipple );
++            XFreePixmap( display, mask );
++            return;
++        }
++    }
++
++    /* Clear the temporary opacity shape after the fade, or when a compositor
++     * takes over. This function leaves application window regions untouched. */
++    XShapeCombineMask( display, data->whole_window, ShapeBounding, 0, 0, None, ShapeSet );
++#endif
++}
++
++static void sync_window_opacity( struct x11drv_win_data *data, Display *display, Window win,
++                                 BYTE alpha, DWORD flags )
+ {
+     unsigned long opacity = 0xffffffff;
+ 
+@@ -694,6 +762,8 @@
+     else
+         XChangeProperty( display, win, x11drv_atom(_NET_WM_WINDOW_OPACITY),
+                          XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&opacity, 1 );
++
++    sync_layered_window_shape( data, alpha, flags );
+ }
+ 
+ 
+@@ -2708,7 +2778,7 @@
+ 
+     /* set the window opacity */
+     if (!NtUserGetLayeredWindowAttributes( data->hwnd, &key, &alpha, &layered_flags )) layered_flags = 0;
+-    sync_window_opacity( data->display, data->whole_window, alpha, layered_flags );
++    sync_window_opacity( data, data->display, data->whole_window, alpha, layered_flags );
+     sync_window_input_shape( data );
+ 
+     XFlush( data->display );  /* make sure the window exists before we start painting to it */
+@@ -2850,7 +2920,7 @@
+         {
+             data->layered = FALSE;
+             set_window_visual( data, &default_visual, FALSE );
+-            sync_window_opacity( data->display, data->whole_window, 0, 0 );
++            sync_window_opacity( data, data->display, data->whole_window, 0, 0 );
+         }
+         if (changed & WS_EX_TRANSPARENT) sync_window_style( data );
+         flush = TRUE;
+@@ -3715,7 +3785,7 @@
+ 
+         if (data->whole_window)
+         {
+-            sync_window_opacity( data->display, data->whole_window, alpha, flags );
++            sync_window_opacity( data, data->display, data->whole_window, alpha, flags );
+             XFlush( data->display );
+         }
+ 
+@@ -3727,7 +3797,7 @@
+         Window win = X11DRV_get_whole_window( hwnd );
+         if (win)
+         {
+-            sync_window_opacity( gdi_display, win, alpha, flags );
++            sync_window_opacity( NULL, gdi_display, win, alpha, flags );
+             if (flags & LWA_COLORKEY)
+                 FIXME( "LWA_COLORKEY not supported on foreign process window %p\n", hwnd );
+             XFlush( gdi_display );
+@@ -3747,7 +3817,7 @@
+ 
+     if (data->whole_window)
+     {
+-        sync_window_opacity( data->display, data->whole_window, alpha, flags );
++        sync_window_opacity( data, data->display, data->whole_window, alpha, flags );
+         XFlush( data->display );
+     }
+ 
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -372,6 +372,9 @@
+     BOOL is_fullscreen;
+     BOOL managed;
+     BOOL layered_attribs_set;
++    BOOL layered_alpha_set;
++    BYTE layered_alpha;
++    HRGN window_region;
+ };
+ 
+ struct wayland_win_data *wayland_win_data_get(HWND hwnd);
+@@ -446,6 +449,7 @@
+ void WAYLAND_SetCursor(HWND hwnd, HCURSOR hcursor);
+ BOOL WAYLAND_SetCursorPos(INT x, INT y);
+ void WAYLAND_SetLayeredWindowAttributes(HWND hwnd, COLORREF key, BYTE alpha, DWORD flags);
++void WAYLAND_SetWindowRgn(HWND hwnd, HRGN hrgn, BOOL redraw);
+ void WAYLAND_SetWindowIcons(HWND hwnd, HICON icon, const ICONINFO *ii, HICON icon_small, const ICONINFO *ii_small);
+ void WAYLAND_SetWindowStyle(HWND hwnd, INT offset, STYLESTRUCT *style);
+ void WAYLAND_SetWindowText(HWND hwnd, LPCWSTR text);
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -45,6 +45,7 @@
+     .pSetCursor = WAYLAND_SetCursor,
+     .pSetCursorPos = WAYLAND_SetCursorPos,
+     .pSetLayeredWindowAttributes = WAYLAND_SetLayeredWindowAttributes,
++    .pSetWindowRgn = WAYLAND_SetWindowRgn,
+     .pSetWindowIcons = WAYLAND_SetWindowIcons,
+     .pSetWindowStyle = WAYLAND_SetWindowStyle,
+     .pSetWindowText = WAYLAND_SetWindowText,
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -72,6 +72,7 @@
+ 
+     data->hwnd = hwnd;
+     data->rects = *rects;
++    data->layered_alpha = 255;
+ 
+     pthread_mutex_lock(&win_data_mutex);
+ 
+@@ -102,6 +103,7 @@
+ 
+     if (data->wayland_surface) wayland_surface_destroy(data->wayland_surface);
+     if (data->window_contents) wayland_shm_buffer_unref(data->window_contents);
++    if (data->window_region) NtGdiDeleteObjectApp(data->window_region);
+     free(data);
+ }
+ 
+@@ -645,7 +647,35 @@
+ 
+     if (!(data = wayland_win_data_get(hwnd))) return;
+     data->layered_attribs_set = TRUE;
++    data->layered_alpha_set = !!(flags & LWA_ALPHA);
++    data->layered_alpha = (flags & LWA_ALPHA) ? alpha : 255;
+     wayland_win_data_release(data);
++    NtUserRedrawWindow(hwnd, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW | RDW_ALLCHILDREN);
++}
++
++void WAYLAND_SetWindowRgn(HWND hwnd, HRGN hrgn, BOOL redraw)
++{
++    struct wayland_win_data *data;
++    HRGN region = 0;
++
++    if (hrgn && (region = NtGdiCreateRectRgn(0, 0, 0, 0)))
++        if (!NtGdiCombineRgn(region, hrgn, 0, RGN_COPY))
++        {
++            NtGdiDeleteObjectApp(region);
++            region = 0;
++        }
++
++    if (!(data = wayland_win_data_get(hwnd)))
++    {
++        if (region) NtGdiDeleteObjectApp(region);
++        return;
++    }
++    if (data->window_region) NtGdiDeleteObjectApp(data->window_region);
++    data->window_region = region;
++    wayland_win_data_release(data);
++
++    if (redraw)
++        NtUserRedrawWindow(hwnd, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW | RDW_ALLCHILDREN);
+ }
+ 
+ static enum xdg_toplevel_resize_edge hittest_to_resize_edge(WPARAM hittest)
+@@ -703,7 +733,11 @@
+ 
+     /* Changing WS_EX_LAYERED resets attributes */
+     if (offset == GWL_EXSTYLE && (changed & WS_EX_LAYERED))
++    {
+         data->layered_attribs_set = FALSE;
++        data->layered_alpha_set = FALSE;
++        data->layered_alpha = 255;
++    }
+ 
+     wayland_win_data_release(data);
+ }
+diff --git a/dlls/winewayland.drv/window_surface.c b/dlls/winewayland.drv/window_surface.c
+--- a/dlls/winewayland.drv/window_surface.c
++++ b/dlls/winewayland.drv/window_surface.c
+@@ -365,6 +365,84 @@
+     }
+ }
+ 
++/* Wayland surfaces blend their premultiplied alpha. Apply the constant
++ * opacity from SetLayeredWindowAttributes to the changed pixels so XP menu
++ * fades work without a compositor-specific window opacity protocol. */
++static void wayland_shm_buffer_apply_alpha(struct wayland_shm_buffer *buffer, HRGN region, BYTE alpha)
++{
++    RGNDATA *data;
++    DWORD size;
++    RECT *rects;
++    unsigned int i;
++
++    if (alpha == 255 || !(size = NtGdiGetRegionData(region, 0, NULL))) return;
++    if (!(data = malloc(size))) return;
++    if (!NtGdiGetRegionData(region, size, data))
++    {
++        free(data);
++        return;
++    }
++
++    rects = (RECT *)data->Buffer;
++    for (i = 0; i < data->rdh.nCount; i++)
++    {
++        int left = max(rects[i].left, 0), top = max(rects[i].top, 0);
++        int right = min(rects[i].right, buffer->width), bottom = min(rects[i].bottom, buffer->height);
++        int x, y;
++
++        for (y = top; y < bottom; y++)
++        {
++            UINT32 *pixel = (UINT32 *)buffer->map_data + y * buffer->width + left;
++            for (x = left; x < right; x++, pixel++)
++            {
++                BYTE a = (*pixel >> 24) * alpha / 255;
++                if (!a) *pixel = 0;
++                else *pixel = (a << 24) | (((*pixel >> 16) & 0xff) * alpha / 255 << 16) |
++                              (((*pixel >> 8) & 0xff) * alpha / 255 << 8) |
++                              ((*pixel & 0xff) * alpha / 255);
++            }
++        }
++    }
++    free(data);
++}
++
++static void wayland_shm_buffer_apply_region(struct wayland_shm_buffer *buffer, HRGN region)
++{
++    RGNDATA *data;
++    BYTE *mask;
++    DWORD size;
++    RECT *rects;
++    unsigned int i, x, y;
++    UINT32 *pixels = buffer->map_data;
++
++    if (!region || !(size = NtGdiGetRegionData(region, 0, NULL))) return;
++    if (!(data = malloc(size))) return;
++    if (!NtGdiGetRegionData(region, size, data))
++    {
++        free(data);
++        return;
++    }
++    if (!(mask = calloc((size_t)buffer->width * buffer->height, 1)))
++    {
++        free(data);
++        return;
++    }
++
++    rects = (RECT *)data->Buffer;
++    for (i = 0; i < data->rdh.nCount; i++)
++    {
++        int left = max(rects[i].left, 0), top = max(rects[i].top, 0);
++        int right = min(rects[i].right, buffer->width), bottom = min(rects[i].bottom, buffer->height);
++        for (y = top; y < bottom; y++) memset(mask + y * buffer->width + left, 1, right - left);
++    }
++
++    for (i = 0; i < (unsigned int)buffer->width * buffer->height; i++)
++        if (!mask[i]) pixels[i] = 0;
++
++    free(mask);
++    free(data);
++}
++
+ /***********************************************************************
+  *           wayland_window_surface_flush
+  */
+@@ -375,6 +453,10 @@
+     RECT surface_rect = {.right = color_info->bmiHeader.biWidth, .bottom = abs(color_info->bmiHeader.biHeight)};
+     struct wayland_window_surface *wws = wayland_window_surface_cast(window_surface);
+     struct wayland_shm_buffer *shm_buffer = NULL, *latest_buffer;
++    struct wayland_win_data *win_data;
++    HRGN window_region = 0;
++    BYTE layered_alpha = 255;
++    BOOL layered_alpha_set = FALSE;
+     BOOL flushed = FALSE;
+     HRGN surface_damage_region = NULL;
+     HRGN copy_from_window_region;
+@@ -388,7 +470,23 @@
+         goto done;
+     }
+ 
+-    buffer_format = (shape_bits || wws->layered) ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888;
++    if ((win_data = wayland_win_data_get(window_surface->hwnd)))
++    {
++        if (win_data->layered_attribs_set) layered_alpha = win_data->layered_alpha;
++        layered_alpha_set = win_data->layered_alpha_set;
++        if (win_data->window_region && (window_region = NtGdiCreateRectRgn(0, 0, 0, 0)))
++        {
++            if (!NtGdiCombineRgn(window_region, win_data->window_region, 0, RGN_COPY))
++            {
++                NtGdiDeleteObjectApp(window_region);
++                window_region = 0;
++            }
++        }
++        wayland_win_data_release(win_data);
++    }
++
++    buffer_format = (shape_bits || wws->layered || window_region || layered_alpha_set) ?
++                    WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888;
+     if (wws->wayland_buffer_queue->format != buffer_format)
+     {
+         int width = wws->wayland_buffer_queue->width;
+@@ -440,8 +538,12 @@
+     }
+ 
+     wayland_shm_buffer_copy_data(shm_buffer, color_bits, &surface_rect, copy_from_window_region,
+-                                 shape_bits && !wws->layered);
++                                 (shape_bits && !wws->layered) || layered_alpha_set ||
++                                 (window_region && !wws->layered));
+     if (shape_bits) wayland_shm_buffer_copy_shape(shm_buffer, rect, shape_info, shape_bits);
++    wayland_shm_buffer_apply_region(shm_buffer, window_region);
++    if (layered_alpha_set && layered_alpha != 255)
++        wayland_shm_buffer_apply_alpha(shm_buffer, surface_damage_region, layered_alpha);
+ 
+     NtGdiSetRectRgn(shm_buffer->damage_region, 0, 0, 0, 0);
+ 
+@@ -450,6 +552,7 @@
+ 
+ done:
+     if (surface_damage_region) NtGdiDeleteObjectApp(surface_damage_region);
++    if (window_region) NtGdiDeleteObjectApp(window_region);
+     return flushed;
+ }
+ 
+diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -189,6 +189,7 @@
+ extern MONITORINFO monitor_info_from_window( HWND hwnd, UINT flags );
+ extern UINT monitor_dpi_from_rect( RECT rect, UINT dpi, UINT *raw_dpi );
+ extern void nonclient_metrics_changed(void);
++extern void user_preferences_changed(void);
+ extern void sys_colors_changed(void);
+ extern BOOL update_display_cache( BOOL force );
+ extern void reset_monitor_update_serial(void);
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -6022,6 +6022,14 @@
+     for (i = 0; i < ARRAY_SIZE( entries ); i++) entries[i]->hdr.loaded = FALSE;
+ }
+ 
++/* The same for the UserPreferencesMask bits (WM_SETTINGCHANGE with an action
++ * from SPI_GETACTIVEWINDOWTRACKING to SPI_SETUIEFFECTS): Display Properties'
++ * menu and tooltip effects, which XP applies to the next menu of every program. */
++void user_preferences_changed(void)
++{
++    entry_USERPREFERENCESMASK.hdr.loaded = FALSE;
++}
++
+ /***********************************************************************
+  *	     NtUserSystemParametersInfoForDpi   (win32u.@)
+  */
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -2391,6 +2391,9 @@
+      * every program's windows with them at once, and frames them again for
+      * the new borders and captions. */
+     if (msg == WM_SYSCOLORCHANGE && win4wine_external_shell()) sys_colors_changed();
++    if (msg == WM_SETTINGCHANGE && wparam >= SPI_GETACTIVEWINDOWTRACKING && wparam <= SPI_SETUIEFFECTS &&
++        win4wine_external_shell())
++        user_preferences_changed();
+     if (msg == WM_SETTINGCHANGE && wparam == SPI_SETNONCLIENTMETRICS && win4wine_external_shell())
+     {
+         nonclient_metrics_changed();

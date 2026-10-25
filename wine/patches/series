@@ -172,3 +172,4 @@
 0172-advapi32-idle-tasks.patch
 0173-netapi32-local-groups.patch
 0174-winex11-external-no-shadow-under-regions.patch
+0175-dlls-external-xp-menu-animations.patch
