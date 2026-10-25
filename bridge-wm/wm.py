@@ -417,23 +417,66 @@ class Manager:
         temporary.write_text(f'{self.shell_keys} {kind}' + ''.join(f' {k:x}' for k in keys) + '\n')
         temporary.replace(self.ipc / 'shellkeys.tsv')
 
+    def raise_managed(self, w):
+        """Raise a managed window to just under the unmanaged (override-redirect)
+        windows shown: above them, the X server would draw the menus covered for
+        a frame before raise_overlays raised them again (All Programs blinked
+        each time a submenu opened and the Start menu took the focus)."""
+        # The lowest of those above the other managed windows, which w goes over.
+        sibling = None
+        try:
+            for child in self.root.query_tree().children:
+                if child.id in (self.support.id, w.id):
+                    continue
+                try:
+                    attrs = child.get_attributes()
+                except error.XError:
+                    continue
+                if attrs.map_state != X.IsViewable:
+                    continue
+                if not attrs.override_redirect:
+                    sibling = None
+                elif sibling is None:
+                    sibling = child
+            if sibling is not None:
+                w.configure(sibling=sibling, stack_mode=X.Below)
+            else:
+                w.configure(stack_mode=X.Above)
+        except error.XError:
+            pass
+
     def raise_overlays(self):
         # The unmanaged (override-redirect) windows that are shown stay above the
         # managed ones, in their order: XP's menus and the Start menu's All
         # Programs cascade (popups of its own), their drop shadows, tooltips and
         # balloons are topmost on XP. Raising the Start menu when it takes the
         # focus back from a closed submenu covered All Programs.
+        # Only those under a managed window move, in their order: restacking
+        # the others each time (a menu that opens) made the menus flicker.
         try:
             children = self.root.query_tree().children
         except error.XError:
             children = []
+        unmanaged, covered = [], []
         for w in children:
             if w.id == self.support.id:
                 continue
             try:
                 attrs = w.get_attributes()
-                if attrs.override_redirect and attrs.map_state == X.IsViewable:
-                    w.configure(stack_mode=X.Above)
+            except error.XError:
+                continue
+            if attrs.map_state != X.IsViewable:
+                continue
+            if attrs.override_redirect:
+                unmanaged.append(w)
+            else:
+                # A managed window above these covers them.
+                covered += unmanaged
+                unmanaged = []
+        # The ones already on top follow, to keep the order.
+        for w in covered + unmanaged if covered else ():
+            try:
+                w.configure(stack_mode=X.Above)
             except error.XError:
                 pass
         # Windows 7's Start button over the taskbar and the user picture over the
@@ -458,7 +501,7 @@ class Manager:
             # An XP Start popup needs real X keyboard focus for Wine activation,
             # without becoming the active application task or an Alt+Tab entry.
             w.map()
-            w.configure(stack_mode=X.Above)
+            self.raise_managed(w)
             self.raise_overlays()
             if self.atom('WM_TAKE_FOCUS') in self.prop(w, 'WM_PROTOCOLS'):
                 self.message(w, 'WM_PROTOCOLS', [self.atom('WM_TAKE_FOCUS'), X.CurrentTime, 0, 0, 0])
@@ -474,7 +517,7 @@ class Manager:
         self.setprop(w, 'WM_STATE', self.atom('WM_STATE'), [1, 0])
         states = list(self.prop(w, '_NET_WM_STATE'))
         self.setprop(w, '_NET_WM_STATE', Xatom.ATOM, [s for s in states if s != self.atom('_NET_WM_STATE_HIDDEN')])
-        w.configure(stack_mode=X.Above)
+        self.raise_managed(w)
         self.raise_owned(w.id)
         protocols = self.prop(w, 'WM_PROTOCOLS')
         if self.atom('WM_TAKE_FOCUS') in protocols:
@@ -500,7 +543,7 @@ class Manager:
             return
         for c in sorted(owned, key=lambda c: order.index(c['w'].id) if c['w'].id in order else len(order)):
             try:
-                c['w'].configure(stack_mode=X.Above)
+                self.raise_managed(c['w'])
             except error.XError:
                 continue
             self.raise_owned(c['w'].id, seen)
@@ -571,12 +614,12 @@ class Manager:
                 c['w'].configure(stack_mode=X.Below)
         for c in self.clients.values():
             if c['kind'] == 'dock' and not c['hidden']:
-                c['w'].configure(stack_mode=X.Above)
+                self.raise_managed(c['w'])
         # As on XP, the active full-screen window (a video, a game, a screen
         # capture's selection) covers the taskbar; another one uncovers it.
         active = self.clients.get(self.active)
         if active and active['kind'] == 'normal' and not active['hidden'] and self.fullscreen(active):
-            active['w'].configure(stack_mode=X.Above)
+            self.raise_managed(active['w'])
             self.raise_owned(self.active)
         # Win32 topmost windows (EWMH above), such as XP's dimmed shut down
         # screen, cover the topmost taskbar; keep their transients above them.
@@ -584,15 +627,15 @@ class Manager:
         raised = set()
         for c in list(self.clients.values()):
             if c['kind'] == 'normal' and not c['hidden'] and above in self.prop(c['w'], '_NET_WM_STATE'):
-                c['w'].configure(stack_mode=X.Above)
+                self.raise_managed(c['w'])
                 raised.add(c['w'].id)
         for i, c in list(self.clients.items()):
             if c['kind'] == 'normal' and not c['hidden'] and i not in raised:
                 if c['owner'] in raised:
-                    c['w'].configure(stack_mode=X.Above)
+                    self.raise_managed(c['w'])
         for c in self.clients.values():
             if c['kind'] == 'popup' and not c['hidden']:
-                c['w'].configure(stack_mode=X.Above)
+                self.raise_managed(c['w'])
         self.raise_overlays()
         ids = [i for i, c in self.clients.items() if c['kind'] != 'proxy']
         self.setprop(self.root, '_NET_CLIENT_LIST', Xatom.WINDOW, ids)

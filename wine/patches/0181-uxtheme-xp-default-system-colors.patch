@@ -1,0 +1,63 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] uxtheme: set the system colours a visual style does not name to XP's defaults
+
+Purpose: draw tooltips black on light yellow under the Windows XP style, as XP does.
+XP behavior: uxtheme's loader starts from its default colours (loader.cpp
+DefaultColors: InfoText 0 0 0, InfoBk 255 255 225, HotTracking 0 0 128,
+...) and replaces those the style's [SysMetrics] names; it then sets all 31.
+Luna names no tooltip colours in any of its styles.
+Wine before: only the style's colours were set (and, in the XP session, the
+hot-tracking one, patch 0160), so the scheme used before kept the others:
+after the Eggplant scheme, tooltips had purple text on white under Luna.
+Change: in the XP session, the colours a style does not name are XP's
+defaults; 0160's hot-tracking colour is one of them.
+Evidence: XP source at Source/XPSP1/NT/shell/themes/uxtheme/loader.cpp
+(DefaultColors, InitThemeMetrics, SetSystemMetrics); luna.msstyles'
+[SysMetrics] names no InfoText or InfoBk.
+Scope: the XP session (WIN4WINE_SHELL=xp).
+---
+diff --git a/dlls/uxtheme/msstyles.c b/dlls/uxtheme/msstyles.c
+--- a/dlls/uxtheme/msstyles.c
++++ b/dlls/uxtheme/msstyles.c
+@@ -831,18 +831,31 @@
+ 
+ static void parse_apply_color (struct PARSECOLORSTATE* state)
+ {
+-    /* XP's styles name no hot-tracking colour except Luna's Silver: on XP the
+-     * others keep the scheme's, HIVEDEF.INF's 0 0 128, the colour of links
+-     * (SysLink); here the one of the style applied before would stay. */
+-    if (win4wine_shell() == WIN4WINE_SHELL_XP && state->colorCount < ARRAY_SIZE(state->colorElements))
++    /* XP's uxtheme sets all the system colours of a style, those it does not
++     * name to its defaults (loader.cpp's DefaultColors): Luna names no tooltip
++     * colours (black on 255 255 225) and, but for Silver, no hot-tracking one
++     * (0 0 128, the colour of links). Here the colours of the scheme applied
++     * before would stay (Eggplant's purple tooltip text). */
++    static const COLORREF defaults[] =
+     {
+-        int i;
+-        for (i = 0; i < state->colorCount; i++)
+-            if (state->colorElements[i] == COLOR_HOTLIGHT) break;
+-        if (i == state->colorCount)
++        RGB(212, 208, 200), RGB(58, 110, 165), RGB(10, 36, 106), RGB(128, 128, 128), RGB(212, 208, 200),
++        RGB(255, 255, 255), RGB(0, 0, 0), RGB(0, 0, 0), RGB(0, 0, 0), RGB(255, 255, 255),
++        RGB(212, 208, 200), RGB(212, 208, 200), RGB(128, 128, 128), RGB(10, 36, 106), RGB(255, 255, 255),
++        RGB(212, 208, 200), RGB(128, 128, 128), RGB(128, 128, 128), RGB(0, 0, 0), RGB(212, 208, 200),
++        RGB(255, 255, 255), RGB(64, 64, 64), RGB(212, 208, 200), RGB(0, 0, 0), RGB(255, 255, 225),
++        RGB(181, 181, 181), RGB(0, 0, 128), RGB(166, 202, 240), RGB(192, 192, 192), RGB(206, 211, 225),
++        RGB(244, 244, 240),
++    };
++    if (win4wine_shell() == WIN4WINE_SHELL_XP)
++    {
++        int color, i, count = state->colorCount;
++        for (color = 0; color < ARRAY_SIZE(defaults) && state->colorCount < ARRAY_SIZE(state->colorElements); color++)
+         {
+-            state->colorElements[state->colorCount] = COLOR_HOTLIGHT;
+-            state->colorRgb[state->colorCount++] = RGB(0, 0, 128);
++            for (i = 0; i < count; i++)
++                if (state->colorElements[i] == color) break;
++            if (i < count) continue;
++            state->colorElements[state->colorCount] = color;
++            state->colorRgb[state->colorCount++] = defaults[color];
+         }
+     }
+     if (state->colorCount > 0)

@@ -31,7 +31,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '29'
+VERSION = '30'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe')
@@ -720,7 +720,10 @@ def xp_user_defaults(prefix, wine):
     underlines hidden until Alt is pressed (UserPreferencesMask's
     KeyboardCues bit, 0x20 of its first byte), and the links' colour
     (HotTrackingColor) of the blue and olive styles, which name none: XP keeps
-    HIVEDEF.INF's 0 0 128 (Wine patch 0160 when a style is applied)."""
+    HIVEDEF.INF's 0 0 128 (Wine patch 0160 when a style is applied); and the
+    tooltips' colours, which Luna names in none of its styles: XP's uxtheme
+    sets them to its defaults, black on 255 255 225 (Wine patch 0181), where
+    the scheme used before stayed (Eggplant's purple text on white)."""
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
     env.pop('WINEARCH', None)
 
@@ -738,8 +741,12 @@ def xp_user_defaults(prefix, wine):
     mask = query(desktop, 'UserPreferencesMask')
     if len(mask) >= 2 and int(mask[:2], 16) & 0x20:
         add(desktop, 'UserPreferencesMask', 'REG_BINARY', f'{int(mask[:2], 16) & ~0x20:02x}' + mask[2:])
-    if query(r'HKCU\Software\Microsoft\Windows\CurrentVersion\ThemeManager', 'ColorName').lower() != 'metallic':
+    themes = r'HKCU\Software\Microsoft\Windows\CurrentVersion\ThemeManager'
+    if query(themes, 'ColorName').lower() != 'metallic':
         add(r'HKCU\Control Panel\Colors', 'HotTrackingColor', 'REG_SZ', '0 0 128')
+    if query(themes, 'ThemeActive') == '1':
+        add(r'HKCU\Control Panel\Colors', 'InfoText', 'REG_SZ', '0 0 0')
+        add(r'HKCU\Control Panel\Colors', 'InfoWindow', 'REG_SZ', '255 255 225')
 
 
 # The categories of XP's Control Panel (its category view's "or pick a

@@ -178,3 +178,4 @@
 0178-user32-validate-xp-animate-window-flags.patch
 0179-user32-xp-message-beep-sounds.patch
 0180-win32u-xp-layered-fade-without-compositor.patch
+0181-uxtheme-xp-default-system-colors.patch
