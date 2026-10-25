@@ -1,0 +1,39 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] shell32: notify watchers of both sides of a rename
+
+Purpose: keep folder views and shell clients notified when an item is renamed into a watched folder.
+XP behavior: the shell change-notify service matches registrations against both PIDLs for two-item events (shell32/scnotify.cpp, CChangeNotify::_AddToClients).
+Wine before: the two-item path branch checked only the old PIDL; its second-PIDL branch was unreachable. New-delivery notifications also copied the aligned second PIDL into shared memory sized without the alignment padding.
+Change: match rename notifications against both PIDLs and allocate shared memory for the aligned payload.
+Evidence: XP source at Source/XPSP1/NT/shell/shell32/scnotify.cpp calls _MatchAndNotify for pidl and pidlExtra.
+Scope: all processes.
+---
+dlls/shell32/changenotify.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/shell32/changenotify.c b/dlls/shell32/changenotify.c
+--- a/dlls/shell32/changenotify.c
++++ b/dlls/shell32/changenotify.c
+@@ -349,10 +349,11 @@
+                     notify = TRUE;
+                 else if( wEventId & SHCNE_NOITEMEVENTS )
+                     notify = TRUE;
+-                else if( wEventId & ( SHCNE_ONEITEMEVENTS | SHCNE_TWOITEMEVENTS ) )
++                else if( wEventId & SHCNE_ONEITEMEVENTS )
+                     notify = should_notify( Pidls[0], pidl, subtree );
+                 else if( wEventId & SHCNE_TWOITEMEVENTS )
+-                    notify = should_notify( Pidls[1], pidl, subtree );
++                    notify = should_notify( Pidls[0], pidl, subtree ) ||
++                             should_notify( Pidls[1], pidl, subtree );
+             }
+         }
+ 
+@@ -395,7 +396,7 @@
+                         memcpy(notification->data+offset, Pidls[1], size2);
+ 
+                     shared_data = SHAllocShared(notification,
+-                        sizeof(struct new_delivery_notification)+size1+size2,
++                        sizeof(struct new_delivery_notification)+offset+size2,
+                         GetCurrentProcessId());
+                     SHFree(notification);
+                 }

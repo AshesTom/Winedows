@@ -1,0 +1,48 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] user32: validate XP AnimateWindow flags
+
+Purpose: reject invalid animation requests before changing a window.
+XP behavior: AnimateWindow rejects unknown flags and requests with no
+direction, center, or blend mode. XP also refuses AW_BLEND for child windows.
+Wine before: the external XP implementation accepted those requests; an
+AW_SLIDE request without a direction could animate in both axes, and an
+invalid blend could leave a child window layered.
+Change: validate the XP flag mask and required animation mode, and reject
+child-window blending before changing visibility or extended styles.
+Evidence: XP source at
+Source/XPSP1/NT/windows/core/ntuser/client/winmgrc.c validates AW_VALID and
+returns from its child-window AW_BLEND path before animation.
+Scope: WIN4WINE_EXTERNAL_SHELL.
+---
+dlls/user32/win.c | 15 +++++++++++++++
+
+diff --git a/dlls/user32/win.c b/dlls/user32/win.c
+--- a/dlls/user32/win.c
++++ b/dlls/user32/win.c
+@@ -894,11 +894,26 @@ BOOL WINAPI AnimateWindow( HWND hwnd, DWORD time, DWORD flags )
+         return TRUE;
+     }
+ 
++    /* Match XP's AW_VALID check and require an animation mode. */
++    if ((flags & ~(AW_HOR_POSITIVE | AW_HOR_NEGATIVE | AW_VER_POSITIVE | AW_VER_NEGATIVE |
++                   AW_CENTER | AW_HIDE | AW_ACTIVATE | AW_BLEND | AW_SLIDE)) ||
++        !(flags & (AW_HOR_POSITIVE | AW_HOR_NEGATIVE | AW_VER_POSITIVE | AW_VER_NEGATIVE |
++                   AW_CENTER | AW_BLEND)))
++    {
++        SetLastError( ERROR_INVALID_PARAMETER );
++        return FALSE;
++    }
++
+     visible = IsWindowVisible( hwnd );
+     if (!IsWindow( hwnd ) || (!hide) == visible)
+     {
+         SetLastError( ERROR_INVALID_PARAMETER );
+         return FALSE;
+     }
++    if ((flags & AW_BLEND) && (GetWindowLongW( hwnd, GWL_STYLE ) & WS_CHILD))
++    {
++        SetLastError( ERROR_INVALID_PARAMETER );
++        return FALSE;
++    }
+ 
+     if (!time) time = 200;

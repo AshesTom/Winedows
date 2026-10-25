@@ -1,6 +1,6 @@
 # Wine のパッチ
 
-`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 171 本のパッチがあります。
+`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 178 本のパッチがあります。
 当てるのは `wine/build.sh` で、実際の適用は `wine/patch-state.py` が行います（途中まで当たったソースにも、足りない分だけを当てます）。
 
 番号の付け直しや、以前の番号との対応表は [history/patch-history.md](history/patch-history.md) にあります。
@@ -13,7 +13,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 
 - 判定は 0019 が加える `include/wine/win4wine.h` の `win4wine_external_shell()` に 1 つにまとめています。
   ntdll は Rtl の関数で、wow64.dll（0023）は ntdll の関数で同じ変数を読みます。
-- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173）、普通のアプリの見た目と動作を変えない 0025・0026、
+- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173、0176、0177）、普通のアプリの見た目と動作を変えない 0025・0026、
   Windows 7 のシェルが呼ぶ API と Wine の修正（0094〜0112）の多くと、版 4 のスタイルでだけ効くテーマの修正（0113〜0119）です。
 - 0024 は `WIN4WINE_SESSION_REQUEST` があるときだけ効きます。
 - 0090 は、さらに `WIN4WINE_FOLDER_SHELL` があるときだけ効きます（ReactOS のシェルのセッションだけが設定します）。
@@ -290,6 +290,14 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0173 | netapi32, advapi32: NetLocalGroupAdd が作るローカル グループを HKLM\Software\Wine\LocalGroups に残す（1001 からの相対 ID、コメント。同じ名前は ERROR_ALIAS_EXISTS）。NetLocalGroupDel が消し、LookupAccountNameW がその名前を S-1-5-21-0-0-0-ID（SidTypeAlias、コンピューター名のドメイン）に、LookupAccountSidW がその SID を名前にする。メンバーは持たない。XP の HelpSvc.exe /install2 が HelpServicesGroup を作ってからその SID をフォルダーの ACL に使おうとして失敗し（SetupProblems が SKU_INSTALL）、ヘルプのトピックが入らなかった | なし |
 | 0174 | winex11: 外部シェルで、リージョンで形を変えた窓には 0033 の影を描かない（リージョンを設定したら消す）。通知領域のバルーン（セキュリティ センターの「Your computer might be at risk」など）は CS_DROPSHADOW のクラスのツールチップだが、XP SP3 では影が無い。角の丸いバルーンの外接矩形の右と下に四角い影が出ていた | あり |
 | 0175 | dlls: XP のセッションでメニューとコンテキスト メニューをアニメーション表示する。MenuFade が有効なら約 175 ms でフェードし、そうでなければ開く方向から約 150 ms で展開する。合成マネージャーが無い場合、メニューは覆う画面のコピーに重ねて描いてフェードし（レイヤー付きウィンドウの X11 はディザの領域を使う）、Wayland はレイヤー付きサーフェスで透明度と領域を描く。AnimateWindow の AW_BLEND・AW_SLIDE も実装 | あり（XP のセッション） |
+
+### XP のソースとの照合で見つけた API の修正（0176〜0178）
+
+| 番号 | 内容 | opt-in |
+|---|---|---|
+| 0176 | kernelbase: FindNextChangeNotification が FindFirstChangeNotification で指定したフィルターとサブツリー範囲を保って監視を再開する。XP のシェルはファイル名、フォルダー名、最終書き込み、属性を監視する。Wine はサイズ変更だけを監視し、サブツリーも無効にして再開していた | なし |
+| 0177 | shell32: rename の通知を移動元と移動先の両方を監視する登録へ届け、NewDelivery の共有メモリーを PIDL の整列分も確保する。XP の scnotify.cpp は二つの PIDL を照合していた | なし |
+| 0178 | user32: XP の AnimateWindow と同じく、未知のフラグやモードのない要求を拒否し、子ウィンドウの AW_BLEND を拒否する。Wine は AW_SLIDE だけの要求を両方向に展開し、無効な AW_BLEND でもウィンドウの状態を変えることがあった | あり（XP のセッション） |
 
 
 ## 並び順の考え方

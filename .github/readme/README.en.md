@@ -132,7 +132,7 @@ and **XP Explorer** ([xp-explorer/](../../xp-explorer/README.md)), which opens X
 ```text
 LightDM ─ XP Welcome greeter (greeter/)
    └─ XP Shell session (session/supervisor.py)
-        ├─ Wine 11.0 + 151 patches (wine/patches/)
+        ├─ Wine 11.0 + 178 patches (wine/patches/)
         │    └─ XP's explorer.exe, shell32.dll, … (extracted from the ISO; ReactOS's or Windows 7's in their sessions)
         ├─ bridge-wm: an X11 WM + Win32 proxy windows (bridge-wm/)
         │    (Wayland session: a patched labwc instead of the WM, wayland/)

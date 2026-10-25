@@ -1,0 +1,156 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] kernelbase: rearm change notifications with their original filter
+
+Purpose: keep repeated directory watches responsive to the changes they were created for.
+XP behavior: FindFirstChangeNotification installs a filter and subtree scope on a waitable handle; FindNextChangeNotification rearms that same watch. XP's shell uses this to watch file names, directory names, last writes and attributes (shell32/scnotify.cpp).
+Wine before: FindNextChangeNotification rearmed with FILE_NOTIFY_CHANGE_SIZE and subtree disabled, and concurrent watches shared one IO_STATUS_BLOCK.
+Change: retain each handle's filter, subtree flag and status block; use them for every rearm and remove the state when the watch closes.
+Evidence: XP source at Source/XPSP1/NT/base/win32/client/filefind.c documents the retained filter contract; shell32/scnotify.cpp calls FindNextChangeNotification without recreating the watch.
+Scope: all processes.
+---
+dlls/kernelbase/file.c | 89 ++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 76 insertions(+), 13 deletions(-)
+
+diff --git a/dlls/kernelbase/file.c b/dlls/kernelbase/file.c
+--- a/dlls/kernelbase/file.c
++++ b/dlls/kernelbase/file.c
+@@ -1129,11 +1129,44 @@
+ }
+ 
+ 
++/* FindNextChangeNotification must rearm the directory watch with the same
++ * filter and subtree flag as FindFirstChangeNotification. Keep those values
++ * and the asynchronous status block alongside the handle. */
++struct change_notification
++{
++    struct change_notification *next;
++    HANDLE handle;
++    DWORD filter;
++    BOOL subtree;
++    IO_STATUS_BLOCK iosb;
++};
++
++static SRWLOCK change_notifications_lock = SRWLOCK_INIT;
++static struct change_notification *change_notifications;
++
+ /****************************************************************************
+  *	FindCloseChangeNotification   (kernelbase.@)
+  */
+ BOOL WINAPI DECLSPEC_HOTPATCH FindCloseChangeNotification( HANDLE handle )
+ {
++    struct change_notification **cursor, *notification;
++
++    RtlAcquireSRWLockExclusive( &change_notifications_lock );
++    for (cursor = &change_notifications; *cursor; cursor = &(*cursor)->next)
++    {
++        if ((*cursor)->handle != handle) continue;
++        if (!CloseHandle( handle ))
++        {
++            RtlReleaseSRWLockExclusive( &change_notifications_lock );
++            return FALSE;
++        }
++        notification = *cursor;
++        *cursor = notification->next;
++        RtlReleaseSRWLockExclusive( &change_notifications_lock );
++        HeapFree( GetProcessHeap(), 0, notification );
++        return TRUE;
++    }
++    RtlReleaseSRWLockExclusive( &change_notifications_lock );
+     return CloseHandle( handle );
+ }
+ 
+@@ -1150,13 +1183,6 @@
+ }
+ 
+ 
+-/*
+- * NtNotifyChangeDirectoryFile may write back to the IO_STATUS_BLOCK
+- * asynchronously.  We don't care about the contents, but it can't
+- * be placed on the stack since it will go out of scope when we return.
+- */
+-static IO_STATUS_BLOCK dummy_iosb;
+-
+ /****************************************************************************
+  *	FindFirstChangeNotificationW   (kernelbase.@)
+  */
+@@ -1164,6 +1190,8 @@
+ {
+     UNICODE_STRING nt_name;
+     OBJECT_ATTRIBUTES attr;
++    IO_STATUS_BLOCK iosb;
++    struct change_notification *notification;
+     NTSTATUS status;
+     HANDLE handle = INVALID_HANDLE_VALUE;
+ 
+@@ -1175,21 +1203,42 @@
+         return handle;
+     }
+ 
++    if (!(notification = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*notification) )))
++    {
++        RtlFreeUnicodeString( &nt_name );
++        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
++        return handle;
++    }
++
+     InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
+-    status = NtOpenFile( &handle, FILE_LIST_DIRECTORY | SYNCHRONIZE, &attr, &dummy_iosb,
++    status = NtOpenFile( &handle, FILE_LIST_DIRECTORY | SYNCHRONIZE, &attr, &iosb,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT );
+     RtlFreeUnicodeString( &nt_name );
+ 
+-    if (!set_ntstatus( status )) return INVALID_HANDLE_VALUE;
+-
+-    status = NtNotifyChangeDirectoryFile( handle, NULL, NULL, NULL, &dummy_iosb, NULL, 0, filter, subtree );
++    if (!set_ntstatus( status ))
++    {
++        HeapFree( GetProcessHeap(), 0, notification );
++        return INVALID_HANDLE_VALUE;
++    }
++
++    notification->iosb.Status = STATUS_PENDING;
++    status = NtNotifyChangeDirectoryFile( handle, NULL, NULL, NULL, &notification->iosb, NULL, 0, filter, subtree );
+     if (status != STATUS_PENDING)
+     {
+         NtClose( handle );
++        HeapFree( GetProcessHeap(), 0, notification );
+         SetLastError( RtlNtStatusToDosError(status) );
+         return INVALID_HANDLE_VALUE;
+     }
++
++    notification->handle = handle;
++    notification->filter = filter;
++    notification->subtree = subtree;
++    RtlAcquireSRWLockExclusive( &change_notifications_lock );
++    notification->next = change_notifications;
++    change_notifications = notification;
++    RtlReleaseSRWLockExclusive( &change_notifications_lock );
+     return handle;
+ }
+ 
+@@ -1199,8 +1248,22 @@
+  */
+ BOOL WINAPI DECLSPEC_HOTPATCH FindNextChangeNotification( HANDLE handle )
+ {
+-    NTSTATUS status = NtNotifyChangeDirectoryFile( handle, NULL, NULL, NULL, &dummy_iosb,
+-                                                   NULL, 0, FILE_NOTIFY_CHANGE_SIZE, 0 );
++    struct change_notification *notification;
++    NTSTATUS status;
++
++    RtlAcquireSRWLockExclusive( &change_notifications_lock );
++    for (notification = change_notifications; notification; notification = notification->next)
++        if (notification->handle == handle) break;
++    if (!notification)
++    {
++        RtlReleaseSRWLockExclusive( &change_notifications_lock );
++        SetLastError( ERROR_INVALID_HANDLE );
++        return FALSE;
++    }
++    notification->iosb.Status = STATUS_PENDING;
++    status = NtNotifyChangeDirectoryFile( handle, NULL, NULL, NULL, &notification->iosb,
++                                          NULL, 0, notification->filter, notification->subtree );
++    RtlReleaseSRWLockExclusive( &change_notifications_lock );
+     if (status == STATUS_PENDING) return TRUE;
+     return set_ntstatus( status );
+ }
