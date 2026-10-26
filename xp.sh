@@ -155,7 +155,11 @@ if language == 'ja':
 open(path, 'w').write(json.dumps(settings, indent=2) + '\n')
 EOF
     echo "$display" > "$state/display"
-    Xephyr "$display" -screen "$size" -dpi 96 -title "XP Shell (debug, $display)" -no-host-grab \
+    # The window's screen has the XP shell's DPI (LogPixels), for the Linux
+    # applications that size their text by its millimetres (session/dpi.py).
+    dpi=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import dpi; print(dpi.prefix_dpi(sys.argv[2]))' \
+        "$root/session" "$prefix" 2>/dev/null || echo 96)
+    Xephyr "$display" -screen "$size" -dpi "$dpi" -title "XP Shell (debug, $display)" -no-host-grab \
         -nolisten tcp > "$state/xephyr.log" 2>&1 &
     xephyr=$!
     trap 'kill $xephyr 2>/dev/null || true' EXIT

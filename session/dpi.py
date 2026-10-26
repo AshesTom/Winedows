@@ -64,10 +64,50 @@ def environment(dpi, wayland=False):
 
     On Wayland, applications take each output's scale from the compositor."""
     env = {'XCURSOR_SIZE': str(cursor_size(dpi))}
-    scale = dpi // DEFAULT
+    scale = window_scale(dpi)
     if scale >= 2 and not wayland:
         env.update(GDK_SCALE=str(scale), GDK_DPI_SCALE=f'{1 / scale:g}')
     return env
+
+
+def window_scale(dpi):
+    """GTK's whole window scale for DPI: 2 from 192 DPI on."""
+    return max(1, dpi // DEFAULT)
+
+
+def xsettings(dpi, cursor_theme=None):
+    """The XSETTINGS (name: int or str) that give X11 applications the same DPI,
+    scale and cursor as the environment, also those started without it.
+
+    As gnome-settings-daemon: Xft/DPI is the whole DPI (Qt, Chromium), and
+    GTK, scaled by Gdk/WindowScalingFactor, takes Gdk/UnscaledDPI instead
+    (with GDK_SCALE set it keeps Xft/DPI and GDK_DPI_SCALE)."""
+    scale = window_scale(dpi)
+    settings = {'Xft/DPI': dpi * 1024, 'Gdk/WindowScalingFactor': scale,
+                'Gdk/UnscaledDPI': dpi * 1024 // scale, 'Gtk/CursorThemeSize': cursor_size(dpi)}
+    if cursor_theme:
+        settings['Gtk/CursorThemeName'] = cursor_theme
+    return settings
+
+
+def set_screen_dpi(d, dpi):
+    """Give the X screen of Xlib display D the physical size of DPI (what xrandr --dpi does).
+
+    Toolkits that size points by the screen's millimetres (Tk, Xt, core
+    fonts) then follow it too. Xorg takes it; Xephyr keeps the size from its
+    -dpi option (xp.sh)."""
+    from Xlib import error
+    from Xlib.ext import randr
+    screen = d.screen()
+    width, height = screen.width_in_pixels, screen.height_in_pixels
+    mm = (round(width * 25.4 / dpi), round(height * 25.4 / dpi))
+    if (screen.width_in_mms, screen.height_in_mms) == mm or not d.has_extension('RANDR'):
+        return
+    try:
+        randr.set_screen_size(screen.root, width, height, *mm)
+        d.sync()
+    except error.XError:
+        pass
 
 
 # The resources set for ClearType; the marker lets a later session with

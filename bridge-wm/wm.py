@@ -3,6 +3,7 @@
 import argparse
 import ctypes
 import fcntl
+import json
 import os
 from pathlib import Path
 import select
@@ -44,8 +45,9 @@ class Inotify:
 
 
 class Manager:
-    def __init__(self, ipc, redirect=True):
+    def __init__(self, ipc, redirect=True, xsettings=None):
         self.ipc = ipc.resolve()
+        self.xsettings = xsettings or {}
         self.ipc.mkdir(mode=0o700, parents=True, exist_ok=True)
         stat = self.ipc.stat()
         if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
@@ -140,6 +142,8 @@ class Manager:
     def own_xsettings(self):
         """Hide GTK header-bar window buttons; the Win32 frame already has them.
 
+        The supervisor's settings (--xsettings) give the XP shell's DPI, scale
+        and cursor to applications that read them here (session/dpi.py).
         Only claims an unowned XSETTINGS selection, so an existing settings
         daemon keeps control. GTK falls back to its defaults for other keys.
         """
@@ -148,9 +152,16 @@ class Manager:
             return
         def pad(data):
             return data + b'\0' * (-len(data) % 4)
-        name, value = b'Gtk/DecorationLayout', b':'
-        entry = struct.pack('<BBH', 1, 0, len(name)) + pad(name) + struct.pack('<II', 0, len(value)) + pad(value)
-        settings = struct.pack('<B3xII', 0, 0, 1) + entry
+        entries = []
+        for name, value in {**self.xsettings, 'Gtk/DecorationLayout': ':'}.items():
+            name = name.encode()
+            if isinstance(value, int):
+                entries.append(struct.pack('<BBH', 0, 0, len(name)) + pad(name) + struct.pack('<Ii', 0, value))
+            else:
+                value = value.encode()
+                entries.append(struct.pack('<BBH', 1, 0, len(name)) + pad(name) +
+                               struct.pack('<II', 0, len(value)) + pad(value))
+        settings = struct.pack('<B3xII', 0, 0, len(entries)) + b''.join(entries)
         kind = self.atom('_XSETTINGS_SETTINGS')
         self.support.change_property(kind, kind, 8, settings)
         self.support.set_selection_owner(selection, X.CurrentTime)
@@ -1277,8 +1288,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ipc', required=True, type=Path)
     parser.add_argument('--no-composite', action='store_true', help="leave Wine's windows unredirected")
+    parser.add_argument('--xsettings', type=json.loads, default={},
+                        help='XSETTINGS to publish, as a JSON object of integers and strings')
     args = parser.parse_args()
-    wm = Manager(args.ipc, redirect=not args.no_composite)
+    wm = Manager(args.ipc, redirect=not args.no_composite, xsettings=args.xsettings)
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: setattr(wm, 'running', False))
     wm.run()

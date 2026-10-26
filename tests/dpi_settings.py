@@ -85,6 +85,16 @@ class Environment(unittest.TestCase):
         self.assertEqual(dpi.environment(192)['GDK_DPI_SCALE'], '0.5')
         self.assertEqual(dpi.environment(288)['GDK_SCALE'], '3')
 
+    def test_xsettings(self):
+        self.assertEqual(dpi.xsettings(120, 'win4wine-xp'),
+                         {'Xft/DPI': 120 * 1024, 'Gdk/WindowScalingFactor': 1, 'Gdk/UnscaledDPI': 120 * 1024,
+                          'Gtk/CursorThemeSize': 32, 'Gtk/CursorThemeName': 'win4wine-xp'})
+        # GTK scaled by 2 takes the unscaled DPI, as with GDK_SCALE and GDK_DPI_SCALE.
+        settings = dpi.xsettings(192)
+        self.assertEqual((settings['Xft/DPI'], settings['Gdk/WindowScalingFactor'], settings['Gdk/UnscaledDPI'],
+                          settings['Gtk/CursorThemeSize']), (192 * 1024, 2, 96 * 1024, 64))
+        self.assertNotIn('Gtk/CursorThemeName', settings)
+
     def test_wayland_leaves_scale_to_outputs(self):
         self.assertNotIn('GDK_SCALE', dpi.environment(192, wayland=True))
         self.assertEqual(dpi.environment(192, wayland=True)['XCURSOR_SIZE'], '64')

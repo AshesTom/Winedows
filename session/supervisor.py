@@ -122,6 +122,8 @@ class Session:
             raise SystemExit('Invalid recovery limits')
         self.d = display.Display()
         dpi.set_xft(self.d, self.dpi, self.cleartype)
+        if not self.compositor:
+            dpi.set_screen_dpi(self.d, self.dpi)
         self.class_atom = self.d.intern_atom('_WIN4WINE_CLASS')
         # The supervisor sleeps until a top-level window changes, a child
         # exits or a signal comes; signal handlers write to this pipe.
@@ -606,7 +608,9 @@ class Session:
             self.configure_outputs()
         self.show_welcome('logon')
         if not self.compositor:
-            wm = self.spawn(['python3', str(ROOT / 'bridge-wm/wm.py'), '--ipc', str(self.ipc)] +
+            settings = dpi.xsettings(self.dpi, self.cursor_theme)
+            wm = self.spawn(['python3', str(ROOT / 'bridge-wm/wm.py'), '--ipc', str(self.ipc),
+                             '--xsettings', json.dumps(settings)] +
                             ([] if self.composite else ['--no-composite']), 'wm')
             time.sleep(.5)
             if wm.poll() is not None:
