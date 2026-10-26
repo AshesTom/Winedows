@@ -89,6 +89,11 @@ function control_SetOperationMode(sUuidOperationID, lCommand){
 	return true;
 }
 
+// a page of the update, in the Linux system's browser
+function fnOpenDetails(sURL){
+	if(/^https:\/\/github\.com\/[^"]+$/.test(sURL)) g_oShell.Run("\"C:\\xp\\bin\\linux-launch.exe\" xdg-open \"" + sURL + "\"", 0, false);
+}
+
 function control_RebootMachine(){
 	g_oShell.Run("\"C:\\xp\\bin\\linux-launch.exe\" systemctl reboot", 0, false);
 }
@@ -251,11 +256,12 @@ function fnAddUpdateNode(oProduct, oUpdate, sGroup){
 		fnNewElement(oGroup, "title", sGroup);
 	}
 	oItem = fnNewCatalogNode(oGroup, "item", "u_" + oUpdate.kind + "_" + oUpdate.name.replace(/[^A-Za-z0-9_]/g, "_"), oUpdate.name);
-	fnNewElement(oItem, "title", oUpdate.name + " " + oUpdate.version);
+	fnNewElement(oItem, "title", oUpdate.title || (oUpdate.name + " " + oUpdate.version));
 	fnNewElement(oItem, "size", oUpdate.size);
 	fnNewElement(oItem, "priority", (oUpdate.category == "critical") ? "1" : "4");
 	fnNewElement(oItem, "description", oUpdate.description);
 	if(oUpdate.old != "") fnNewElement(oItem, "installedVersion", oUpdate.old);
+	if(oUpdate.details) fnNewElement(oItem, "details", "").setAttribute("href", oUpdate.details);
 	return oItem;
 }
 
@@ -328,5 +334,9 @@ function fnEndInstall(oState){
 	}
 	fnUpdateTOCNumbers();
 	fnPostData(sXML, conConsumerURL + "status.asp?" + conQueryString);
-	if(bInstalled && g_bNeedsReboot) window.setTimeout("fnConfirmReboot()", 1000);
+	if(bInstalled && g_bNeedsReboot){
+		window.setTimeout("fnConfirmReboot()", 1000);
+	}else if(bInstalled && oState.restart){
+		window.setTimeout("window.alert(L_WinedowsRestart_Text)", 1000);
+	}
 }

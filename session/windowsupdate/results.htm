@@ -48,6 +48,8 @@ function fnUpdateHTML(oPosted, iSubPage){
 	if(oNode != null) sHTML += L_InstalledVersion_Text + " " + fnEscape(oNode.text) + "<br />";
 	oNode = oItem.selectSingleNode("description");
 	if(oNode != null && oNode.text != "") sHTML += "<span>" + fnEscape(oNode.text) + "</span><br />";
+	oNode = oItem.selectSingleNode("details/@href");
+	if(oNode != null) sHTML += "<a href=\"\" class=\"sys-link-normal\" onclick=\"parent.fnOpenDetails('" + fnEscape(oNode.text) + "');return false;\">" + parent.L_ReadMore_Text + "</a><br />";
 	sHTML += "<span class=\"dependencies\" style=\"display: none;\"></span><br style=\"display: none;\" />";
 	if(iSubPage == parent.conResultsBasket){
 		sHTML += "<div class=\"buttons\"><span style=\"visibility: hidden;\"></span><button onclick=\"parent.fnRemoveFromBasket(this);\">" + L_Remove_Text + "</button></div>";

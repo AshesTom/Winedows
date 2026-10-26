@@ -7,11 +7,15 @@ C:\\xp\\windowsupdate\\state (Wine's WScript.Shell cannot read a program's
 output):
 
   xp_update.py scan       scan.json: the system's available updates
-                          (pacman's checkupdates, Flatpak's), by XP's categories
+                          (pacman's checkupdates, Flatpak's), by XP's categories,
+                          and Winedows XP's (this checkout's GitHub releases)
   xp_update.py install    install.json: installs them all in a terminal with
                           XP's console look (sudo pacman -Syu, flatpak update),
                           as Arch Linux updates the whole system at once
-  xp_update.py history    history.json: the package manager's past updates
+  xp_update.py history    history.json: the package manager's past updates, and
+                          Winedows XP's
+  xp_update.py winedows TAG   install's step for Winedows XP's own updates: the
+                          releases of this checkout's repository on GitHub
   xp_update.py page       puts the site in the prefix (prefix/extras.py's stage):
                           Windows Update's site of XP (version 4), from the
                           Internet Archive, with the engine of this checkout
@@ -28,11 +32,19 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = 'drive_c/xp/windowsupdate'
 STATE = PAGE + '/state'
 PACMAN_LOG = Path('/var/log/pacman.log')
+# Winedows XP's own updates: the releases of this checkout's repository on
+# GitHub (its origin, or XP_UPDATE_REPO=owner/name), each one a cumulative update.
+RELEASES = 'https://api.github.com/repos/{}/releases?per_page=100'
+WINEDOWS_TITLE = 'Cumulative Security Update for Winedows XP (KB{})'
+# The updates of Winedows XP this computer installed, for the history.
+INSTALLED = 'installed.json'
 # Windows Update's categories (version 4, 2002) for the system's packages.
 CRITICAL = re.compile(r'^(linux(-[a-z0-9]+)*|glibc|lib32-glibc|systemd.*|openssl.*|sudo|pacman|.*-keyring|gnupg|'
                       r'openssh|polkit|dbus.*|.*-ucode|ca-certificates.*|gnutls|krb5|pam|shadow|coreutils)$')
@@ -112,6 +124,56 @@ def flatpak_updates():
     return updates
 
 
+def git(*args, timeout=120):
+    return subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, text=True, timeout=timeout)
+
+
+def project_repository():
+    """owner/name of this checkout on GitHub."""
+    if os.environ.get('XP_UPDATE_REPO'):
+        return os.environ['XP_UPDATE_REPO']
+    url = git('remote', 'get-url', 'origin').stdout.strip()
+    match = re.search(r'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$', url)
+    return match.group(1) if match else None
+
+
+def kb_numbers(releases):
+    """{tag: KB number}: the day it was published (YYMMDD, UTC) and its rank
+    that day, so 26 October 2026's first is KB2610261 and its second
+    KB2610262; an older release always has a smaller number."""
+    numbers, days = {}, {}
+    for release in sorted(releases, key=lambda r: r['published_at']):
+        day = release['published_at'][2:10].replace('-', '')
+        days[day] = days.get(day, 0) + 1
+        numbers[release['tag_name']] = f'{day}{days[day]}'
+    return numbers
+
+
+def winedows_updates():
+    """[update]: the releases whose tag this checkout does not contain yet."""
+    repository = project_repository()
+    if not repository:
+        return []
+    request = urllib.request.Request(RELEASES.format(repository), headers={'Accept': 'application/vnd.github+json',
+                                                                          'User-Agent': 'win4wine-windows-update'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        releases = [r for r in json.load(response) if not r['draft'] and not r['prerelease'] and r['published_at']]
+    if not releases:
+        return []
+    git('fetch', '--quiet', '--tags', f'https://github.com/{repository}.git')
+    numbers = kb_numbers(releases)
+    updates = []
+    for release in sorted(releases, key=lambda r: r['published_at']):
+        tag = release['tag_name']
+        if git('merge-base', '--is-ancestor', f'refs/tags/{tag}', 'HEAD').returncode == 0:
+            continue
+        name = (release['name'] or tag).partition(': ')[2] or release['name'] or tag
+        updates.append(dict(name=f'winedows-{tag}', title=WINEDOWS_TITLE.format(numbers[tag]), old='', version=tag,
+                            size=0, description=f'Winedows XP {tag}: {name}', details=release['html_url'],
+                            repository='Winedows XP', kind='winedows', category='critical', kb=numbers[tag]))
+    return updates
+
+
 def system_name():
     """The distribution's name (os-release), the site's "Windows"."""
     try:
@@ -130,22 +192,40 @@ def scan(state):
         updates = pacman_updates(lambda percent: write(state, 'scan', dict(names, status='working', progress=percent)))
         write(state, 'scan', dict(names, status='working', progress=85))
         updates += flatpak_updates()
+        write(state, 'scan', dict(names, status='working', progress=90))
+        try:
+            updates = winedows_updates() + updates
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+            print(f'Winedows XP updates: {e}', file=sys.stderr)
         write(state, 'scan', dict(names, status='done', progress=100, updates=updates))
     except (OSError, RuntimeError, subprocess.SubprocessError) as e:
         write(state, 'scan', dict(names, status='error', error=str(e), updates=[]))
 
 
 def install(state, prefix):
-    """All the updates, in a terminal: sudo asks for the password there."""
+    """The updates the last scan found, in a terminal: sudo asks for the
+    password there. Winedows XP's are cumulative: this checkout goes to the
+    newest release, and Wine is built again when its patches changed."""
     write(state, 'install', dict(status='working'))
     result = state / '.install-exit'
     result.unlink(missing_ok=True)
-    steps = ['sudo pacman -Syu']
-    if shutil.which('flatpak'):
+    try:
+        updates = json.loads((state / 'scan.json').read_text())['updates']
+    except (OSError, ValueError, KeyError):
+        updates = []
+    kinds = {u['kind'] for u in updates}
+    steps = []
+    if 'pacman' in kinds or not updates:
+        steps.append('sudo pacman -Syu')
+    if 'flatpak' in kinds:
         steps.append('flatpak update -y')
-    script = (f'echo "Windows Update is installing the updates of the Linux system."; echo; '
+    winedows = [u for u in updates if u['kind'] == 'winedows']
+    if winedows:
+        steps.append(f'{shlex.quote(sys.executable)} {shlex.quote(__file__)} winedows {shlex.quote(winedows[-1]["version"])}'
+                     f' --prefix {shlex.quote(str(prefix))}')
+    script = (f'echo "Windows Update is installing the updates."; echo; '
               f'status=0; for step in {" ".join(shlex.quote(s) for s in steps)}; do echo "> $step"; '
-              f'$step || status=$?; echo; done; echo $status > {shlex.quote(str(result))}; '
+              f'eval "$step" || status=$?; echo; done; echo $status > {shlex.quote(str(result))}; '
               f'read -r -p "Press Enter to close this window." _')
     subprocess.run([sys.executable, str(ROOT / 'session/xp_cmd.py'), str(prefix), '--title', 'Windows Update',
                     '--icon', 'wupdmgr', '--run', script])
@@ -154,7 +234,41 @@ def install(state, prefix):
     except (OSError, ValueError):
         code = -1       # closed before it ended
     result.unlink(missing_ok=True)
-    write(state, 'install', dict(status='done', exit=code))
+    write(state, 'install', dict(status='done', exit=code, restart=bool(winedows) and code == 0))
+
+
+def install_winedows(state, tag):
+    """This checkout at release TAG (its updates since are cumulative), the
+    Wine and the bridge it builds; the prefix takes the rest at the next
+    logon (xp.sh run, the session's additions)."""
+    print(f'Winedows XP {tag}')
+    if git('merge', '--ff-only', f'refs/tags/{tag}', timeout=600).returncode:
+        print(f'{ROOT} has changes of its own that {tag} does not contain: update it with git yourself.')
+        return 1
+    local = ROOT / '.local'
+    digest = subprocess.run([sys.executable, str(ROOT / 'wine/patch-state.py'), '--digest', str(ROOT / 'wine/patches')],
+                            capture_output=True, text=True).stdout.strip()
+    built = local / 'wine-install/win4wine-patches'
+    if not built.is_file() or built.read_text().strip() != digest:
+        print('Building Wine (log: .local/wine-build.log); this takes a long time')
+        with open(local / 'wine-build.log', 'w') as log:
+            if subprocess.run([str(ROOT / 'wine/build.sh')], stdout=log, stderr=subprocess.STDOUT,
+                              env=dict(os.environ, JOBS=str(os.cpu_count() or 1))).returncode:
+                print('The Wine build failed; see .local/wine-build.log')
+                return 1
+    if subprocess.run([str(ROOT / 'bridge-wm/build.sh')]).returncode:
+        return 1
+    try:
+        installed = json.loads((state / INSTALLED).read_text())
+    except (OSError, ValueError):
+        installed = []
+    scan_updates = json.loads((state / 'scan.json').read_text()).get('updates', [])
+    for update in scan_updates:
+        if update['kind'] == 'winedows':
+            installed.append(dict(date=time.strftime('%Y-%m-%d %H:%M'), title=update['title'], source='iu_site'))
+    (state / INSTALLED).write_text(json.dumps(installed))
+    print('Log off, and then log on again, to finish installing Winedows XP\'s update.')
+    return 0
 
 
 def history(state):
@@ -171,6 +285,11 @@ def history(state):
             entries.append(dict(date=stamp[:16].replace('T', ' '), action=action, name=name,
                                 title=f"{name} {versions.split(' -> ')[-1]}", source='pacman',
                                 category=category(name)))
+    try:
+        entries += json.loads((state / INSTALLED).read_text())
+    except (OSError, ValueError):
+        pass
+    entries.sort(key=lambda e: e['date'])
     write(state, 'history', dict(status='done', entries=entries[::-1][:300]))
 
 
@@ -260,6 +379,8 @@ def site_application(text):
                .replace('var conCatalogURL = "/catalog/en/";', 'var conCatalogURL = "";'))
     strings += ('var L_InstallAllText_Text = "The updates of the Linux system are installed together: '
                 'Windows Update will install all |UPDATES| updates.\\n\\nTo continue, click OK.";\r\n')
+    strings += ('var L_WinedowsRestart_Text = "To finish installing the update of Winedows XP, log off, '
+                'and then log on again.";\r\n')
     title = re.search(r'<title>.*?</title>', text).group(0)
     script = '\t\t<script language="{}" type="text/{}" src="{}"></script>\r\n'
     frame = ' application="yes" frameborder="0"'
@@ -351,7 +472,8 @@ if this page stays, check the connection to the Internet, and then start the ses
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=('scan', 'install', 'history', 'page'))
+    parser.add_argument('command', choices=('scan', 'install', 'history', 'page', 'winedows'))
+    parser.add_argument('tag', nargs='?', help="winedows: the release to install (install's own step)")
     parser.add_argument('--prefix', type=Path, default=os.environ.get('WINEPREFIX'))
     args = parser.parse_args()
     if not args.prefix:
@@ -361,6 +483,8 @@ def main():
         scan(state)
     elif args.command == 'install':
         install(state, Path(args.prefix))
+    elif args.command == 'winedows':
+        sys.exit(install_winedows(state, args.tag))
     elif args.command == 'page':
         install_page(args.prefix)
     else:
