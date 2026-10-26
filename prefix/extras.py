@@ -881,6 +881,15 @@ def xp_user_defaults(prefix, wine):
         subprocess.run([wine, 'reg', 'add', key, '/v', name, '/t', kind, '/d', value, '/f'], env=env,
                        stdout=subprocess.DEVNULL, check=False)
 
+    # Once per prefix: the user's later choices in Display Properties (its
+    # Appearance page, a theme's colours, Effects) stay. A prefix that had
+    # the additions before has had these.
+    marker = r'HKCU\Software\Win4Wine\Profile'
+    if query(marker, 'XPUserDefaults'):
+        return
+    if state(prefix):
+        add(marker, 'XPUserDefaults', 'REG_DWORD', '1')
+        return
     desktop = r'HKCU\Control Panel\Desktop'
     mask = query(desktop, 'UserPreferencesMask')
     if len(mask) >= 2 and int(mask[:2], 16) & 0x20:
@@ -891,6 +900,7 @@ def xp_user_defaults(prefix, wine):
     if query(themes, 'ThemeActive') == '1':
         add(r'HKCU\Control Panel\Colors', 'InfoText', 'REG_SZ', '0 0 0')
         add(r'HKCU\Control Panel\Colors', 'InfoWindow', 'REG_SZ', '255 255 225')
+    add(marker, 'XPUserDefaults', 'REG_DWORD', '1')
 
 
 # The categories of XP's Control Panel (its category view's "or pick a
