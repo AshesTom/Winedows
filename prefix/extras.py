@@ -22,6 +22,7 @@ import json
 import os
 import re
 from pathlib import Path
+import pwd
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '36'
+VERSION = '37'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe', 'linux-launch.exe')
@@ -78,6 +79,17 @@ FILE_TYPES = ('zipfldr.dll',)
 # XP's Printers and Faxes folder: its printui.dll (Wine's has only stubs,
 # and XP's shell32 stopped on RegisterPrintNotify), native in XP Explorer.
 PRINTERS = ('printui.dll',)
+# XP's System Properties (assets/sysdm) in syswow64, which Wine lacks: My
+# Computer's Properties, Win+Pause and the Control Panel's System open it.
+# sysdm.cpl has the General, Hardware and Advanced pages and loads Computer
+# Name (netid.dll) and System Restore (srrstr.dll); Remote (remotepg.dll) and
+# Automatic Updates (wuaucpl.cpl) are property sheet extensions.
+SYSDM = ('sysdm.cpl', 'netid.dll', 'srrstr.dll', 'remotepg.dll')
+# The extensions of System Properties, as remotepg.dll's DllRegisterServer and
+# wuaueng.dll's REGINST (InstallPropSheetKeys) register them.
+SYSDM_EXTENSIONS = (('{F0152790-D56E-4445-850E-4F3117DB740C}', 'Remote Sessions CPL Extension', 'remotepg.dll'),
+                    ('{5F327514-6C5E-4d60-8F16-D07FA08A78ED}', 'Auto Update Property Sheet Extension',
+                     'wuaucpl.cpl'))
 WINDOWS_UPDATE = r'C:\xp\windowsupdate\default.hta'
 # Milliseconds from Wine's services start to XP's own services (DelayedAutoStart).
 AUTOSTART_DELAY = 5000
@@ -116,6 +128,25 @@ def registry(xpx):
         for dll in ('appwiz.cpl', 'inetcpl.cpl', 'inetcplc', 'wuaucpl.cpl'):
             r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll,
                   'native' if program == 'xp-explorer.exe' else 'native,builtin')
+    # System Properties, from XP Explorer (My Computer, Win+Pause, the Control
+    # Panel) and from control.exe.
+    for program in ('xp-explorer.exe', 'rundll32.exe'):
+        for dll in tuple(name.removesuffix('.dll') for name in SYSDM):
+            r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll,
+                  'native' if program == 'xp-explorer.exe' else 'native,builtin')
+    for clsid, name, dll in SYSDM_EXTENSIONS:
+        r.add('HKCR\\CLSID\\' + clsid, None, name)
+        r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', None, r'C:\windows\system32' + '\\' + dll)
+        r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', 'ThreadingModel', 'Apartment')
+        r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved', clsid, name)
+        r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Controls Folder\System\shellex'
+              r'\PropertySheetHandlers' + '\\' + name, None, clsid)
+    # System Restore turned off (sr.inf's key, DisableSR set): Wine has no
+    # service to monitor the drives, and srrstr.dll would turn it on with
+    # srclient.dll's EnableSR, which Wine lacks.
+    restore = r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+    r.add(restore, 'DisableSR', '1', 'REG_DWORD')
+    r.add(restore + r'\Cfg', 'DiskPercent', '12', 'REG_DWORD')
     for clsid, name in APPWIZ_CLASSES:
         r.add('HKCR\\CLSID\\' + clsid, None, name)
         r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', None, r'%SystemRoot%\system32\appwiz.cpl',
@@ -270,6 +301,9 @@ def copy_files(assets, prefix):
     for name in PRINTERS:
         if (assets / 'printers' / name).is_file():
             shutil.copyfile(assets / 'printers' / name, native / name)
+    if (assets / 'sysdm/sysdm.cpl').is_file():
+        for name in SYSDM:
+            shutil.copyfile(assets / 'sysdm' / name, native / name)
     if (assets / 'filetypes/hivecls.inf').is_file():
         for name in FILE_TYPES:
             shutil.copyfile(assets / 'filetypes' / name, native / name)
@@ -903,6 +937,26 @@ def xp_user_defaults(prefix, wine):
     add(marker, 'XPUserDefaults', 'REG_DWORD', '1')
 
 
+def registered_owner(prefix, wine):
+    """The name this copy of XP is registered to, which About Windows shows
+    under its licence ("...End-User License Agreement to:") and System
+    Properties under "Registered to:". XP's setup asks for it; Wine leaves
+    it empty, and both had blank lines in its place. The Linux account's
+    full name, or its login, while it is empty: a name set since stays."""
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
+    env.pop('WINEARCH', None)
+    key = r'HKLM\Software\Microsoft\Windows NT\CurrentVersion'
+    out = subprocess.run([wine, 'reg', 'query', key, '/v', 'RegisteredOwner', '/reg:32'], env=env,
+                         capture_output=True, text=True).stdout
+    if re.search(r'RegisteredOwner\s+REG_SZ\s+\S', out):
+        return
+    account = pwd.getpwuid(os.getuid())
+    owner = account.pw_gecos.split(',')[0].strip() or account.pw_name
+    for view in ('/reg:32', '/reg:64'):
+        subprocess.run([wine, 'reg', 'add', key, '/v', 'RegisteredOwner', '/t', 'REG_SZ', '/d', owner, '/f', view],
+                       env=env, stdout=subprocess.DEVNULL, check=False)
+
+
 # The categories of XP's Control Panel (its category view's "or pick a
 # Control Panel icon"): 1 Appearance and Themes, 2 Printers and Other
 # Hardware, 3 Network and Internet Connections, 4 Sounds, Speech and Audio
@@ -969,7 +1023,7 @@ def stage(prefix, xpx=None):
     xp_update.install_page(prefix, wait=False)
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
     sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY + FILE_TYPES + PRINTERS +
-               (NETCON if netcon else ())]
+               SYSDM + (NETCON if netcon else ())]
     sources += [BRIDGE / 'netcon' / name for name in NETCON_BRIDGE] if netcon else []
     for source in sources:
         name, target = source.name, system / source.name
@@ -1077,6 +1131,7 @@ def apply(prefix, wine):
     step("XP's programs and All Programs")
     xp_programs(assets, prefix, wine, xpx)
     xp_user_defaults(prefix, wine)
+    registered_owner(prefix, wine)
     step("XP's Control Panel categories")
     control_panel(assets, prefix, wine, xpx)
     stop(wine, prefix)

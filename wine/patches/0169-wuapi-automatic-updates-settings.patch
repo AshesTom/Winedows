@@ -17,14 +17,15 @@ on; GetAUOptionsEx was a stub, and opening Automatic Updates ended
 rundll32.
 Change: an IAutomaticUpdatesSettings that reads and writes those values
 (the 64-bit view); get_ServiceEnabled answers TRUE and EnableService
-succeeds; GetAUOptionsEx fills the option, day and hour.
+succeeds; GetAUOptionsEx fills the option, day and hour, and tells
+an administrator so (the Automatic Updates tab of System Properties).
 Scope: every Wine application (documented interface; a stub before).
 ---
  dlls/wuapi/updates.c      | 241 ++++++++++++++++++++++++++++-
  dlls/wuaueng/Makefile.in  |   1 +
- dlls/wuaueng/main.c       |  26 ++++
+ dlls/wuaueng/main.c       |  55 ++++
  dlls/wuaueng/wuaueng.spec |   2 +-
- 4 files changed, 265 insertions(+), 5 deletions(-)
+ 4 files changed, 294 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/wuapi/updates.c b/dlls/wuapi/updates.c
 index 249f07a..02dfb97 100644
@@ -313,16 +314,36 @@ index 9783fe0..88dd323 100644
  #include "wine/debug.h"
  
  WINE_DEFAULT_DEBUG_CHANNEL(wuaueng);
-@@ -32,3 +33,28 @@ BOOL WINAPI WUCheckForUpdatesAtShutdown(DWORD flags)
+@@ -32,3 +33,57 @@ BOOL WINAPI WUCheckForUpdatesAtShutdown(DWORD flags)
      TRACE("(%#lx)\n", flags);
      return FALSE;
  }
 +
++/* Whether the caller is a member of the Administrators, whom XP's wuaueng
++ * lets change the settings. */
++static BOOL is_administrator(void)
++{
++    SID_IDENTIFIER_AUTHORITY nt = {SECURITY_NT_AUTHORITY};
++    BOOL member = FALSE;
++    PSID sid;
++
++    if (!AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
++                                  0, 0, 0, 0, 0, 0, &sid))
++        return FALSE;
++    if (!CheckTokenMembership(NULL, sid, &member)) member = FALSE;
++    FreeSid(sid);
++    return member;
++}
++
 +/* The options of Automatic Updates as XP's Automatic Updates applet
 + * (wuaucpl.cpl) reads them: SIZE is that of the structure it passes (0x2c,
 + * or 0x54 for the larger one), which begins with the option (AUOptions),
-+ * the day and the hour of the scheduled installation; the rest (whether a
-+ * policy sets them, and its own fields) stays zero. */
++ * the day and the hour of the scheduled installation. In the larger one,
++ * XP's sets 0x2c, 0x34 and 0x38 for an administrator (no policy here) and
++ * 0x3c always: the applet's property sheet extension adds the Automatic
++ * Updates tab of System Properties only with 0x2c, and enables its choices
++ * with the others. The rest (whether a policy sets them, and the applet's
++ * own fields) stays zero. */
 +HRESULT WINAPI GetAUOptionsEx(DWORD size, DWORD *options)
 +{
 +    static const WCHAR key[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update";
@@ -340,6 +361,15 @@ index 9783fe0..88dd323 100644
 +    length = sizeof(value);
 +    options[2] = !RegGetValueW(HKEY_LOCAL_MACHINE, key, L"ScheduledInstallTime", RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY,
 +                               NULL, &value, &length) && value < 24 ? value : 3;
++    if (size == 0x54)
++    {
++        BOOL administrator = is_administrator();
++
++        options[0x2c / sizeof(DWORD)] = administrator;
++        options[0x34 / sizeof(DWORD)] = administrator;
++        options[0x38 / sizeof(DWORD)] = administrator;
++        options[0x3c / sizeof(DWORD)] = TRUE;
++    }
 +    return S_OK;
 +}
 diff --git a/dlls/wuaueng/wuaueng.spec b/dlls/wuaueng/wuaueng.spec

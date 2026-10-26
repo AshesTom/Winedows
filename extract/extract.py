@@ -122,6 +122,10 @@ FILES = {
     # Printers and Faxes: XP's shell32 enumerates printers and follows them
     # through printui.dll, which Wine has as stubs (prefix/extras.py PRINTERS).
     'printui.dll': 'printers',
+    # XP's System Properties (sysdm.cpl) and the pages it loads: Computer
+    # Name (netid.dll), System Restore (srrstr.dll) and Remote (remotepg.dll)
+    # (prefix/extras.py SYSDM).
+    **dict.fromkeys(('sysdm.cpl', 'netid.dll', 'srrstr.dll', 'remotepg.dll'), 'sysdm'),
     # XP's Windows Classic theme for Display Properties (CLASSIC.THE_ on the CD).
     'classic.the': 'themes',
     **dict.fromkeys(('tahoma.ttf', 'tahomabd.ttf', 'msgothic.ttc', 'marlett.ttf',
@@ -155,7 +159,7 @@ RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
                 'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
-                'help', 'apps', 'filetypes', 'printers')
+                'help', 'apps', 'filetypes', 'printers', 'sysdm')
 
 
 def setup_sources(paths):
@@ -346,7 +350,7 @@ def missing_groups(output):
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
               'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help',
               'apps': 'apps/programs/Messenger/msmsgs.exe', 'filetypes': 'filetypes/hivecls.inf',
-              'printers': 'printers/printui.dll'}
+              'printers': 'printers/printui.dll', 'sysdm': 'sysdm/sysdm.cpl'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 
