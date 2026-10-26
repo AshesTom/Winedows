@@ -119,6 +119,9 @@ FILES = {
     **dict.fromkeys(('hivecls.inf', 'zipfldr.dll', 'msiexec.exe'), 'filetypes'),
     # Image thumbnails and previews in folder windows (and Windows Picture and Fax Viewer).
     'shimgvw.dll': 'shell',
+    # Printers and Faxes: XP's shell32 enumerates printers and follows them
+    # through printui.dll, which Wine has as stubs (prefix/extras.py PRINTERS).
+    'printui.dll': 'printers',
     # XP's Windows Classic theme for Display Properties (CLASSIC.THE_ on the CD).
     'classic.the': 'themes',
     **dict.fromkeys(('tahoma.ttf', 'tahomabd.ttf', 'msgothic.ttc', 'marlett.ttf',
@@ -152,7 +155,7 @@ RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
                 'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
-                'help', 'apps', 'filetypes')
+                'help', 'apps', 'filetypes', 'printers')
 
 
 def setup_sources(paths):
@@ -342,7 +345,8 @@ def missing_groups(output):
               'programs': 'programs/tourstart.exe', 'tour': 'tour/mmTour/tour.exe',
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
               'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help',
-              'apps': 'apps/programs/Messenger/msmsgs.exe', 'filetypes': 'filetypes/hivecls.inf'}
+              'apps': 'apps/programs/Messenger/msmsgs.exe', 'filetypes': 'filetypes/hivecls.inf',
+              'printers': 'printers/printui.dll'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 

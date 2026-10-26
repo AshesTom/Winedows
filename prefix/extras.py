@@ -33,7 +33,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '35'
+VERSION = '36'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe', 'linux-launch.exe')
@@ -75,6 +75,9 @@ NETCON_CLASSES = ('{BA126AD1-2166-11D1-B1D0-00805FC1270E}', '{BA126AE5-2166-11D1
 # XP's Compressed (zipped) Folders in syswow64 (Wine has no zipfldr.dll):
 # .zip files with its icon, opened as folders, and Send To.
 FILE_TYPES = ('zipfldr.dll',)
+# XP's Printers and Faxes folder: its printui.dll (Wine's has only stubs,
+# and XP's shell32 stopped on RegisterPrintNotify), native in XP Explorer.
+PRINTERS = ('printui.dll',)
 WINDOWS_UPDATE = r'C:\xp\windowsupdate\default.hta'
 # Milliseconds from Wine's services start to XP's own services (DelayedAutoStart).
 AUTOSTART_DELAY = 5000
@@ -105,7 +108,7 @@ def registry(xpx):
         r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', dll, 'native')
     for dll in xpx.NATIVE + cpl + INTL_NATIVE:
         r.add(r'HKCU\Software\Wine\AppDefaults\rundll32.exe\DllOverrides', dll, 'native,builtin')
-    for dll in INTL_NATIVE:
+    for dll in INTL_NATIVE + tuple(name.removesuffix('.dll') for name in PRINTERS):
         r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', dll, 'native')
     # Add or Remove Programs and the Security Center's items, from the Control
     # Panel and from control.exe, which hands them to rundll32 (Wine patch 0171).
@@ -264,6 +267,9 @@ def copy_files(assets, prefix):
     if (assets / 'netcon/wzcdlg.dll').is_file() and (assets / 'tray/netshell.dll').is_file():
         for name in NETCON:
             shutil.copyfile(assets / ('tray' if name == 'netshell.dll' else 'netcon') / name, native / name)
+    for name in PRINTERS:
+        if (assets / 'printers' / name).is_file():
+            shutil.copyfile(assets / 'printers' / name, native / name)
     if (assets / 'filetypes/hivecls.inf').is_file():
         for name in FILE_TYPES:
             shutil.copyfile(assets / 'filetypes' / name, native / name)
@@ -952,7 +958,7 @@ def stage(prefix, xpx=None):
     import xp_update
     xp_update.install_page(prefix, wait=False)
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
-    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY + FILE_TYPES +
+    sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY + FILE_TYPES + PRINTERS +
                (NETCON if netcon else ())]
     sources += [BRIDGE / 'netcon' / name for name in NETCON_BRIDGE] if netcon else []
     for source in sources:
