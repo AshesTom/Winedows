@@ -10,7 +10,11 @@ would (H:\\ is the home, Z:\\ the root of the Linux system), and the commands
 of the Linux system.
 
   xp_cmd.py [PREFIX]      the prefix (default: $WINEPREFIX) gives XP's files
+  --title TITLE           the window's title (default: the shortcut's name)
+  --icon PROGRAM          whose icon the window shows (default: cmd.exe)
+  --run COMMAND           run COMMAND with bash instead of the prompt
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -127,8 +131,8 @@ def icon_file(exe, target, side=32):
     target.write_bytes(out + b''.join(image for *_, image in entries))
 
 
-def prepare(prefix):
-    """The font configuration and the icon, made once in CACHE."""
+def prepare(prefix, program='cmd'):
+    """The font configuration and PROGRAM's icon, made once in CACHE."""
     CACHE.mkdir(parents=True, exist_ok=True)
     try:
         assets = Path(json.loads((prefix / 'xp-shell.json').read_text())['assets'])
@@ -152,14 +156,14 @@ def prepare(prefix):
   <selectfont><acceptfont><pattern><patelt name="family"><string>{FONT}</string></patelt></pattern></acceptfont></selectfont>
 </fontconfig>
 ''')
-    icon = CACHE / 'cmd.xpm'
+    icon = CACHE / f'{program}.xpm'
     if not icon.is_file():
-        for exe in (prefix / 'drive_c/windows/syswow64/cmd.exe', assets / 'apps/system32/cmd.exe'):
+        for exe in (prefix / f'drive_c/windows/syswow64/{program}.exe', assets / f'apps/system32/{program}.exe'):
             if exe.is_file() and shutil.which('magick'):
                 try:
-                    icon_file(exe, CACHE / 'cmd.ico')
-                    subprocess.run(['magick', str(CACHE / 'cmd.ico'), str(icon)], check=True, capture_output=True,
-                                   timeout=30)
+                    icon_file(exe, CACHE / f'{program}.ico')
+                    subprocess.run(['magick', str(CACHE / f'{program}.ico'), str(icon)], check=True,
+                                   capture_output=True, timeout=30)
                     break
                 except (ValueError, StopIteration, struct.error, subprocess.SubprocessError, OSError):
                     icon.unlink(missing_ok=True)
@@ -167,16 +171,22 @@ def prepare(prefix):
 
 
 def main():
-    prefix = Path(sys.argv[1] if len(sys.argv) > 1 else os.environ.get('WINEPREFIX', ROOT / '.local/prefix'))
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('prefix', nargs='?', type=Path, default=Path(os.environ.get('WINEPREFIX', ROOT / '.local/prefix')))
+    parser.add_argument('--title')
+    parser.add_argument('--icon', default='cmd')
+    parser.add_argument('--run')
+    args = parser.parse_args()
+    prefix, program = args.prefix, args.icon.lower().removesuffix('.exe')
     try:
         language = json.loads((prefix / 'xp-shell.json').read_text()).get('language', 'en')
     except (OSError, ValueError):
         language = 'en'
-    fonts, icon = prepare(prefix)
+    fonts, icon = prepare(prefix, program)
     env = dict(os.environ, XP_CMD_PREFIX=str(prefix))
     for name in ('WINEDEBUG', 'WINEDLLOVERRIDES', 'WIN4WINE_EXTERNAL_SHELL', 'WIN4WINE_FOLDER_SHELL'):
         env.pop(name, None)     # the session's Wine settings, not the user's
-    title = TITLE.get(language, TITLE['en'])
+    title = args.title or TITLE.get(language, TITLE['en'])
     resources = [f'XTerm*color{i}: {colour}' for i, colour in enumerate(PALETTE)] + [
         'XTerm*cursorUnderLine: true', 'XTerm*cursorBlink: true', 'XTerm*scrollBar: false',
         'XTerm*saveLines: 300', 'XTerm*internalBorder: 0', 'XTerm*borderWidth: 0',
@@ -192,11 +202,14 @@ def main():
         command += ['-fa', 'Lucida Console,DejaVu Sans Mono:pixelsize=12']
     for resource in resources:
         command += ['-xrm', resource]
-    command += ['-e', 'bash', '--rcfile', str(ROOT / 'session/xp-cmd.bashrc'), '-i']
+    if args.run:
+        command += ['-e', 'bash', '-c', args.run]
+    else:
+        command += ['-e', 'bash', '--rcfile', str(ROOT / 'session/xp-cmd.bashrc'), '-i']
     env['XP_CMD_TITLE'] = title
     terminal = subprocess.Popen(command, env=env)
     if icon:
-        set_icon(terminal, CACHE / 'cmd.ico')
+        set_icon(terminal, CACHE / f'{program}.ico')
     sys.exit(terminal.wait())
 
 

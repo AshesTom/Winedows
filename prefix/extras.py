@@ -33,7 +33,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '33'
+VERSION = '35'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe', 'linux-launch.exe')
@@ -75,6 +75,7 @@ NETCON_CLASSES = ('{BA126AD1-2166-11D1-B1D0-00805FC1270E}', '{BA126AE5-2166-11D1
 # XP's Compressed (zipped) Folders in syswow64 (Wine has no zipfldr.dll):
 # .zip files with its icon, opened as folders, and Send To.
 FILE_TYPES = ('zipfldr.dll',)
+WINDOWS_UPDATE = r'C:\xp\windowsupdate\default.hta'
 # Milliseconds from Wine's services start to XP's own services (DelayedAutoStart).
 AUTOSTART_DELAY = 5000
 
@@ -773,7 +774,8 @@ def xp_programs(assets, prefix, wine, xpx):
         # The shortcuts that XP Explorer makes itself stay (Network Connections);
         # the Command Prompt's is made again for the Linux one.
         command_prompt = target.lower().endswith('\\cmd.exe')
-        if exists(f'{folder}\\{item["name"]}.lnk') and not command_prompt:
+        windows_update = target.lower().endswith('\\wupdmgr.exe')
+        if exists(f'{folder}\\{item["name"]}.lnk') and not (command_prompt or windows_update):
             continue
         icon = item.get('icon', '')
         if command_prompt:
@@ -782,6 +784,11 @@ def xp_programs(assets, prefix, wine, xpx):
             target, arguments = r'C:\xp\bin\linux-launch.exe', f'python3 "{ROOT / "session/xp_cmd.py"}"'
             item = dict(item, directory='H:\\')
             icon = icon or r'%SystemRoot%\system32\cmd.exe,0'
+        if windows_update:
+            # Windows Update's site is gone: the Internet Archive's, for the
+            # Linux system's updates (session/xp_update.py), in XP's mshta.exe.
+            target, arguments = r'C:\windows\system32\mshta.exe', WINDOWS_UPDATE
+            icon = icon or r'%SystemRoot%\system32\wupdmgr.exe,0'
         # XP's explorer.exe is C:\xp\xp-explorer.exe here; Wine's keeps its name.
         target, icon = (EXPLORER if value.lower() == r'c:\windows\explorer.exe' else value for value in (target, icon))
         icon = icon.replace(r'C:\windows\explorer.exe', EXPLORER)
@@ -940,6 +947,10 @@ def stage(prefix, xpx=None):
             shutil.copyfile(source, temporary)
             temporary.replace(target)
     system = prefix / 'drive_c/windows/syswow64'
+    # Windows Update's site and its helper's paths (session/xp_update.py).
+    sys.path.insert(0, str(ROOT / 'session'))
+    import xp_update
+    xp_update.install_page(prefix, wait=False)
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
     sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY + FILE_TYPES +
                (NETCON if netcon else ())]
