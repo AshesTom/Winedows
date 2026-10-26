@@ -53,6 +53,20 @@ class PrefixDpi(unittest.TestCase):
         self.assertEqual(dpi.prefix_dpi(Path(tempfile.mkdtemp())), 96)
 
 
+class PrefixUiFont(unittest.TestCase):
+    def test_message_font(self):
+        directory = Path(tempfile.mkdtemp())
+        # XP's MessageFont: Tahoma, -11 pixels at 96 DPI, as the registry keeps it.
+        face = 'Tahoma'.encode('utf-16-le').hex(',')
+        (directory / 'user.reg').write_text(
+            'WINE REGISTRY Version 2\n\n[Control Panel\\\\Desktop\\\\WindowMetrics] 1\n"AppliedDPI"=dword:00000060\n'
+            '"MessageFont"=hex:f5,ff,ff,ff,' + ','.join(['00'] * 12) + ',90,01,00,00,\\\n  ' +
+            ','.join(['00'] * 8) + ',' + face + ',' + ','.join(['00'] * (64 - 12)) + '\n')
+        self.assertEqual(dpi.prefix_ui_font(directory), ('Tahoma', 8))
+        self.assertIsNone(dpi.prefix_ui_font(Path(tempfile.mkdtemp())))
+        self.assertEqual(dpi.xsettings(96, font=('Tahoma', 8))['Gtk/FontName'], 'Tahoma 8')
+
+
 class PrefixClearType(unittest.TestCase):
     def prefix(self, values):
         directory = Path(tempfile.mkdtemp())

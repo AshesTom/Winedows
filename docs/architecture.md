@@ -209,7 +209,9 @@ Wine の上で動く Win32 のプロセスです。Linux の窓 1 つごとに�
   192 以上では GTK の `GDK_SCALE` も設定します。X の画面の物理的な大きさもその DPI にします（Xorg は RandR、
   `xp.sh run` の Xephyr は `-dpi`）。Tk などの、画面のミリメートルで文字の大きさを決めるアプリのためです。
 - bridge-wm の XSETTINGS にも同じ値を載せます（`Xft/DPI`、`Gdk/WindowScalingFactor`、`Gdk/UnscaledDPI`、
-  `Gtk/CursorThemeSize`、`Gtk/CursorThemeName`）。セッションの環境変数を受け継がずに起動したアプリも同じ大きさになります。
+  `Gtk/CursorThemeSize`、`Gtk/CursorThemeName`）。`Gtk/FontName` は `linux_font` を XP のメッセージの字体
+  （`WindowMetrics` の `MessageFont`、英語の XP では Tahoma 8 ポイント）の大きさにしたもので、デスクトップの大きな字体の
+  代わりになります。Qt は GTK のプラットフォームテーマ（`QT_QPA_PLATFORMTHEME=gtk3`、利用者が決めていなければ）で同じ字体を使います。セッションの環境変数を受け継がずに起動したアプリも同じ大きさになります。
 - 96 と 120 DPI で、メモ帳の横の GTK 3/4、Qt 5/6、Electron、Firefox、Tk の文字の大きさが合うことを確かめています
   （Qt 6、Electron、Firefox は 120 DPI で全体を 1.25 倍に、GTK と Qt 5 は文字を 120 DPI で描きます）。
 - ようこそ画面の DPI は `/etc/win4wine/greeter.json` の `dpi` で決めます（XP でもマシン全体の設定です）。

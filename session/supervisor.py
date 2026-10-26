@@ -100,6 +100,13 @@ class Session:
         # Linux applications take the XP shell's UI font: MS UI Gothic on
         # Japanese XP, Tahoma on English XP (the prefix's "language").
         self.linux_font = config.get('linux_font', 'Tahoma' if self.language() == 'en' else 'MS UI Gothic')
+        # Their default font is it at the size of XP's message font (Tahoma
+        # 8 pt), through XSETTINGS (bridge-wm); Qt takes it there with its GTK
+        # platform theme, unless the user chose another.
+        ui_font = dpi.prefix_ui_font(self.prefix)
+        self.ui_font = ui_font and (self.linux_font or ui_font[0], ui_font[1])
+        if self.ui_font and not self.compositor and not os.environ.get('QT_QPA_PLATFORMTHEME'):
+            self.env['QT_QPA_PLATFORMTHEME'] = 'gtk3'
         self.linux_menu = config.get('linux_menu', True)
         self.composite = config.get('composite', True)
         # Wine's ExitWindowsEx records log off / shut down / restart here,
@@ -608,7 +615,7 @@ class Session:
             self.configure_outputs()
         self.show_welcome('logon')
         if not self.compositor:
-            settings = dpi.xsettings(self.dpi, self.cursor_theme)
+            settings = dpi.xsettings(self.dpi, self.cursor_theme, self.ui_font)
             wm = self.spawn(['python3', str(ROOT / 'bridge-wm/wm.py'), '--ipc', str(self.ipc),
                              '--xsettings', json.dumps(settings)] +
                             ([] if self.composite else ['--no-composite']), 'wm')
