@@ -31,6 +31,14 @@ def language(prefix):
     except (OSError, ValueError):
         return 'ja'
 
+def progress(percent, step):
+    """How far the logon is, for the Welcome screen: session/supervisor.py
+    gives a pipe for it and passes the line on to greeter/xp-splash.py."""
+    try:
+        os.write(int(os.environ['WIN4WINE_PROGRESS_FD']), f'progress {percent} {step}\n'.encode())
+    except (KeyError, ValueError, OSError):
+        pass
+
 def prepare(prefix, wine):
     inf = wine.parent.parent / 'share/wine/wine.inf'
     timestamp = prefix / '.update-timestamp'
@@ -47,13 +55,8 @@ def prepare(prefix, wine):
                WINEDLLOVERRIDES='explorer,shell32,shdocvw,browseui,shlwapi,comctl32,uxtheme=b;mscoree,mshtml=',
                WINEDEBUG=os.environ.get('WINEDEBUG', '-all'))
     env.pop('WINEARCH', None)  # The existing prefix decides.
-    def run(*args, timeout=120):
-        subprocess.run([str(wine), *registry.shell_view(args)], env=env, check=True, timeout=timeout,
-                       stdout=subprocess.DEVNULL)
-    def exists(key, name):
-        return subprocess.run([str(wine), *registry.shell_view(('reg', 'query', key, '/v', name))], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              timeout=120).returncode == 0
+    # One regedit import for the profile's values, not a `wine reg` each.
+    batch = registry.Batch(wine, prefix, env)
     # Wine upgrades may replace both DLL images and shell COM registrations.
     # Complete that update before restoring the native shell profile.
     print('Updating dedicated prefix Wine/XP registry profile', flush=True)
@@ -61,8 +64,11 @@ def prepare(prefix, wine):
         if not wine_current:
             # After a Wine install changes, the update installs every DLL
             # again; on a slow or busy machine it takes minutes.
-            run('wineboot', '-u', timeout=600)
-        registry.install(run, exists, language(prefix))
+            progress(0, 'Updating the prefix for this Wine build')
+            batch.run('wineboot', '-u', timeout=600)
+        progress(0 if wine_current else 70, "The XP shell's registry settings")
+        registry.install(batch.run, batch.exists, language(prefix))
+        batch.flush()
         current = timestamp.read_text().strip() if timestamp.is_file() else ''
         temp = version.with_suffix('.tmp')
         temp.write_text(f'{registry.VERSION} {current}\n')
@@ -281,12 +287,15 @@ if __name__ == '__main__':
         raise SystemExit('Not a dedicated XP prefix')
     if args.wine:
         prepare(prefix, args.wine.resolve(strict=True))
+    progress(85, "XP's files")
     stage(prefix, args.wine.resolve(strict=True) if args.wine else None)
     # XP Explorer's additions (prefix/extras.py): IE6, Display Properties, DirectUser...
     import extras
     if extras.state(prefix):
         extras.stage(prefix)
+    progress(92, 'Pictures and wallpaper')
     stage_media(prefix, args.wine.resolve(strict=True) if args.wine else None)
     stage_quick_launch(prefix)
     if args.wine:
+        progress(96, 'Special folders')
         stage_folders(prefix, args.wine.resolve(strict=True))

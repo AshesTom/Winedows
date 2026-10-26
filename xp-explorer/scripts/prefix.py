@@ -773,8 +773,11 @@ def install_ie(assets, prefix, wine):
         shutil.copyfile(controls, ie / 'comctl32.dll')
     search = copy_search(assets, prefix)
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', WINEDLLOVERRIDES='mscoree=')
-    # Bring the prefix up to date with this Wine first.
-    subprocess.run([wine, 'wineboot', '-u'], env=env)
+    # Bring the prefix up to date with this Wine first: an update afterwards
+    # would register Wine's mshtml and wmp over IE6's and the player's. An
+    # up-to-date prefix skips it (8 s).
+    if not up_to_date(prefix, wine):
+        subprocess.run([wine, 'wineboot', '-u'], env=env)
     wineserver = str(Path(shutil.which(wine) or wine).resolve().with_name('wineserver'))
     # Then with the wineserver stopped (KnownDlls), XP's files go in place.
     subprocess.run([wineserver, '-k'], env=env)
@@ -787,8 +790,7 @@ def install_ie(assets, prefix, wine):
             reg.write_text(text, encoding='utf-16')
             subprocess.run([wine, r'C:\windows\syswow64\regedit.exe', '/S', 'Z:' + str(reg).replace('/', '\\')],
                            env=env, check=True)
-    for dll in IE_REGISTER:
-        subprocess.run([wine, r'C:\windows\syswow64\regsvr32.exe', '/s', f'{folder}\\{dll}'], env=env)
+    register(wine, env, [f'{folder}\\{dll}' for dll in IE_REGISTER])
     if search:
         register_search(wine, env)
     install_wmp(assets, prefix, wine, env)
@@ -826,8 +828,7 @@ def register_search(wine, env):
     agent = r'C:\windows\msagent'
     subprocess.run([wine, agent + r'\agentsvr.exe', '/regserver'], env=env)
     # agentctl.dll runs "AgentSvr /REGSERVER" from the search path.
-    for dll in AGENT_REGISTER:
-        subprocess.run([wine, regsvr32, '/s', f'{agent}\\{dll}'], env=dict(env, WINEPATH=agent))
+    register(wine, dict(env, WINEPATH=agent), [f'{agent}\\{dll}' for dll in AGENT_REGISTER])
     srchui = r'C:\windows\srchasst\srchui.dll'
     subprocess.run([wine, regsvr32, '/s', srchui], env=env)
     subprocess.run([wine, regsvr32, '/s', '/n', '/i', srchui], env=env)
@@ -896,9 +897,7 @@ def install_wmp(assets, prefix, wine, env):
             reg.write_text(text, encoding='utf-16')
             subprocess.run([wine, r'C:\windows\syswow64\regedit.exe', '/S', 'Z:' + str(reg).replace('/', '\\')],
                            env=env, check=True)
-    for dll in WMP_REGISTER:
-        subprocess.run([wine, r'C:\windows\syswow64\regsvr32.exe', '/s',
-                        rf'C:\Program Files (x86)\Windows Media Player\{dll}'], env=env)
+    register(wine, env, [rf'C:\Program Files (x86)\Windows Media Player\{dll}' for dll in WMP_REGISTER])
     # What XP's first start runs after them (wmp.inf's WMPDelay.Actions,
     # OE_WMPWMP7_Install_20): the media file types, from the player's list of
     # extensions that wmp.inf wrote.
@@ -915,6 +914,16 @@ def install_wmp(assets, prefix, wine, env):
         r.add(verb + r'\command', None, player + r' /Play "%1"', 'REG_EXPAND_SZ')
     for extension in WMP_EXTENSIONS:
         r.add(rf'HKCR\{extension}\OpenWithList\wmplayer.exe', None, '')
+    # The player compares the wmp.dll it loads with the version recorded here.
+    # Its registration records the wmp.dll that the search path finds first:
+    # Wine's in syswow64 (12.0.7601), and the player then asked to be
+    # reinstalled ("wmp.dll has a version number of 9.0.0.4503 where
+    # 12.0.7601.16982 was expected").
+    for name in ('wmp.dll', 'wmplayer.exe'):
+        version = file_version(source / name)
+        if version:
+            r.add(r'HKLM\Software\Microsoft\MediaPlayer\Setup\Installed Versions', name, version.hex(),
+                  'REG_BINARY')
     with tempfile.TemporaryDirectory() as temp:
         reg = Path(temp) / 'wmp-shell.reg'
         reg.write_text(r.text(), encoding='utf-16')
@@ -927,14 +936,44 @@ def install_wmp(assets, prefix, wine, env):
                   description='Windows Media Player')
 
 
+def register(wine, env, dlls):
+    """regsvr32 /s on DLLS in one Wine process, as a start of each took 0.3 s;
+    regsvr32 goes on after a DLL that fails. One at a time again if that
+    process ended with an error, for one that brought it down."""
+    regsvr32 = r'C:\windows\syswow64\regsvr32.exe'
+    if subprocess.run([wine, regsvr32, '/s', *dlls], env=env).returncode:
+        for dll in dlls:
+            subprocess.run([wine, regsvr32, '/s', dll], env=env)
+
+
+def up_to_date(prefix, wine):
+    """Whether Wine has updated PREFIX with this Wine's wine.inf, as Wine checks
+    before it runs wineboot -u on its own."""
+    install = Path(shutil.which(wine) or wine).resolve().parents[1]
+    try:
+        stamp = (prefix / '.update-timestamp').read_text().split()[0]
+        return stamp == str(int((install / 'share/wine/wine.inf').stat().st_mtime))
+    except (OSError, IndexError):
+        return False
+
+
+def file_version(path):
+    """A PE image's file version as Windows records it: VS_FIXEDFILEINFO's
+    dwFileVersionMS and dwFileVersionLS, little-endian. None without one."""
+    data = path.read_bytes()
+    at = data.find(b'\xbd\x04\xef\xfe')
+    return data[at + 8:at + 16] if at >= 0 else None
+
+
 def wine_build(wine):
     """An identifier of the Wine build: win4wine's patch digest, or the version."""
     install = Path(shutil.which(wine) or wine).resolve().parents[1]
-    # "+media5": IE6, Windows Media Player 9 (with its decoders and file types)
-    # and its Start menu integration, and the Search Companion.
+    # "+media6": IE6, Windows Media Player 9 (with its decoders, file types and
+    # its own wmp.dll's recorded version) and its Start menu integration, and
+    # the Search Companion.
     if (install / 'win4wine-patches').is_file():
-        return (install / 'win4wine-patches').read_text().strip() + '+media5'
-    return subprocess.run([wine, '--version'], capture_output=True, text=True).stdout.strip() + '+media5'
+        return (install / 'win4wine-patches').read_text().strip() + '+media6'
+    return subprocess.run([wine, '--version'], capture_output=True, text=True).stdout.strip() + '+media6'
 
 
 def wallpaper(assets, prefix, size=None):

@@ -607,11 +607,14 @@ class Session:
         # while the session sets its keyboard and Start menu, as XP's
         # Welcome screen goes through them before the shell starts.
         self.status('starting', step='prefix')
-        subprocess.run(['python3', str(ROOT / script), *command, str(self.prefix), '--wine', self.wine], check=True)
+        self.stage([*command, str(self.prefix), '--wine', self.wine], script)
         self.tell_welcome('applying')
         self.status('starting', step='settings')
+        self.tell_welcome('progress 0 Keyboard layout')
         self.keyboard()
+        self.tell_welcome('progress 30 Sounds')
         self.repair_sound_scheme()
+        self.tell_welcome('progress 70 Start menu')
         self.start_user_picture()
         if self.linux_menu:
             self.start_linux_menu()
@@ -670,6 +673,24 @@ class Session:
                 self.fallback(wm)
                 return
             time.sleep(1)
+
+    def stage(self, args, script):
+        """The shell's staging step, its progress (prefix/stage.py) passed on to
+        the Welcome screen. Through a pipe of its own: the wineserver that the
+        step may start would hold its output open, and Python's subprocesses
+        do not pass the pipe on."""
+        read, write = os.pipe()
+        try:
+            process = subprocess.Popen(['python3', str(ROOT / script), *args], pass_fds=(write,),
+                                       env=dict(os.environ, WIN4WINE_PROGRESS_FD=str(write)))
+        finally:
+            os.close(write)
+        with os.fdopen(read, 'rb') as lines:
+            for line in lines:
+                if line.startswith(b'progress '):
+                    self.tell_welcome(line.decode(errors='replace').strip())
+        if process.wait():
+            raise subprocess.CalledProcessError(process.returncode, process.args)
 
     def restart_input_method(self, restarts):
         """Restart an input method that exited, at most three times in two minutes."""

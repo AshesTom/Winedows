@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a build, keep its whole output in a log and show only how far it is.
 
-    scripts/progress.py LOG NAME -- COMMAND [ARG...]
+    scripts/progress.py [--append] LOG NAME -- COMMAND [ARG...]
 
 On a terminal, a status line (step, bar, count, elapsed time and an estimate of
 the time left) and the build's last few lines are redrawn in place; elsewhere a
@@ -9,7 +9,9 @@ line is printed for each step and every 10 percent. The exit status is the
 command's. The build scripts announce their steps with lines starting with
 ">>> "; ">>> Compiling N files" gives the number of compiler runs to count
 (WIN4WINE_PROGRESS is set for them, so they count only then), and ninja's own
-"[n/m]" counts are used as they are.
+"[n/m]" counts are used as they are. A step announced as ">>> (n/m) STEP" is
+the n-th of m (prefix/extras.py). --append adds to the log instead of
+replacing it.
 """
 import os
 import re
@@ -22,6 +24,7 @@ import time
 TAIL = 4                        # lines of the build's output under the status line
 STEP = re.compile(r'^>>> (.*)')
 TOTAL = re.compile(r'^Compiling (\d+) files')
+COUNTED = re.compile(r'^\((\d+)/(\d+)\) (.*)')
 NINJA = re.compile(r'^\[(\d+)/(\d+)\] (.*)')
 COMPILE = re.compile(r' -c -o (\S+)')
 OUTPUT = re.compile(r'^(\S+)(?: .*)? -o (\S+)')
@@ -77,12 +80,17 @@ class Status:
         self.update()
 
     def set_step(self, step):
-        match = TOTAL.match(step)
+        match, counted = TOTAL.match(step), COUNTED.match(step)
         self.step, self.step_start = step, time.monotonic()
         self.done, self.total, self.shown = 0, int(match.group(1)) if match else 0, -1
         self.exact = False
+        if counted:
+            self.step, self.exact = counted.group(3), True
+            self.done, self.total = int(counted.group(1)) - 1, int(counted.group(2))
+            self.shown = self.done * 100 // self.total // 10
         if not self.tty:
-            print(f'{self.name}: {step}', flush=True)
+            percent = f' ({self.percent()}%)' if counted else ''
+            print(f'{self.name}: {self.step}{percent}', flush=True)
         self.update(force=True)
 
     def percent(self):
@@ -138,13 +146,15 @@ class Status:
 
 def main():
     args = sys.argv[1:]
+    append = args[:1] == ['--append']
+    args = args[append:]
     if len(args) < 4 or args[2] != '--':
         sys.exit(__doc__.strip().splitlines()[2].strip())
     log, name, command = args[0], args[1], args[3:]
     tty = sys.stdout.isatty() and os.environ.get('TERM') not in (None, '', 'dumb')
     status = Status(name, tty)
     env = dict(os.environ, WIN4WINE_PROGRESS='1')
-    with open(log, 'wb') as out:
+    with open(log, 'ab' if append else 'wb') as out:
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, env=env)
         # The terminal's Ctrl+C reaches the build too; wait for it to stop.

@@ -5,7 +5,9 @@ The session supervisor runs this. 'logon' shows the user's picture with
 "Loading your personal settings...", as XP does after a logon, and follows
 the words read from stdin: 'applying' ("Applying your personal settings...")
 and 'welcome' (XP's big "welcome" alone, while the shell starts), until it is
-terminated. 'logoff' shows "Logging off..." and changes its line for each
+terminated. A line 'progress PERCENT STEP' adds the percentage to the line and
+the step under it, once the settings have taken more than PROGRESS_AFTER
+seconds. 'logoff' shows "Logging off..." and changes its line for each
 word read ('logoff', 'saving', 'shutdown'). It exits with status 2 when the Welcome
 screen's files are not set up (greeter/install.sh), so the session goes on
 without it. The window stays above the windows mapped after it.
@@ -17,10 +19,13 @@ import pwd
 import select
 import signal
 import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 STATUS = {'loading': 1682, 'applying': 1679, 'logoff': 1691, 'saving': 1687, 'shutdown': 1684}
+# A quick logon shows XP's line alone.
+PROGRESS_AFTER = 3
 
 
 def user_picture(name, home):
@@ -86,20 +91,43 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGTERM, finish)
     words = sys.stdin.fileno()
+    pending = b''
+    started = time.monotonic()
+    base, progress = screen.status, None    # progress: (percent, step) not shown yet
+
+    def show_progress():
+        nonlocal progress
+        percent, step = progress
+        progress = None
+        screen.status, screen.detail = f'{base} {percent}%', step
+        show()
     while True:
         fds = [d.fileno()] + ([words] if words is not None else [])
-        ready, _, _ = select.select(fds, [], [], None if not d.pending_events() else 0)
+        wait = max(0, started + PROGRESS_AFTER - time.monotonic()) if progress else None
+        ready, _, _ = select.select(fds, [], [], wait if not d.pending_events() else 0)
         if words in ready:
-            line = os.read(words, 256).decode(errors='replace').split()
-            if not line:
+            chunk = os.read(words, 4096)
+            if not chunk:
                 words = None  # The supervisor is gone; stay until the X server ends.
-            for word in line:
-                if word == 'welcome' and args.mode == 'logon':
-                    screen.mode = 'welcome'
-                    show()
-                elif word in STATUS:
-                    screen.status = assets.string('winlogon', STATUS[word])
-                    show()
+            *lines, pending = (pending + chunk).split(b'\n')
+            for line in lines:
+                line = line.decode(errors='replace').strip()
+                if line.startswith('progress '):
+                    _, percent, *step = line.split(' ', 2)
+                    progress = (percent, step[0] if step else '')
+                    if time.monotonic() - started >= PROGRESS_AFTER:
+                        show_progress()
+                    continue
+                for word in line.split():
+                    if word == 'welcome' and args.mode == 'logon':
+                        screen.mode = 'welcome'
+                        show()
+                    elif word in STATUS:
+                        base = screen.status = assets.string('winlogon', STATUS[word])
+                        screen.detail, progress = '', None
+                        show()
+        elif progress and time.monotonic() - started >= PROGRESS_AFTER:
+            show_progress()
         while d.pending_events():
             event = d.next_event()
             # Stay above what the session maps or raises meanwhile, as XP's Welcome screen does.

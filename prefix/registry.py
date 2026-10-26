@@ -1,7 +1,10 @@
 """Minimal native shell COM registrations absent from Wine's generated prefix."""
 import os
+from pathlib import Path
 import pwd
 import struct
+import subprocess
+import tempfile
 
 VERSION = 29
 FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\JapaneseXPLuna'
@@ -26,6 +29,109 @@ def shell_view(args):
     if not args or args[0] != 'reg' or any(arg in ('/reg:32', '/reg:64') for arg in args):
         return args
     return (*args, '/reg:32')
+
+
+class Batch:
+    """install()'s run and exists for a prefix: its `reg add` and `reg delete`
+    go in one regedit import per registry view (a `wine reg` each took 0.2 s,
+    half a minute for the profile at each logon after a Wine update), and
+    exists() asks `reg query` once per key. Any other command runs as it
+    comes, after what was queued. flush() imports what is left."""
+    ROOTS = {'HKCU': 'HKEY_CURRENT_USER', 'HKLM': 'HKEY_LOCAL_MACHINE', 'HKCR': 'HKEY_CLASSES_ROOT',
+             'HKU': 'HKEY_USERS'}
+
+    def __init__(self, wine, prefix, env, timeout=120):
+        self.wine, self.env, self.timeout = str(wine), env, timeout
+        # 32-bit regedit writes the XP shell's view (shell_view's /reg:32).
+        wow64 = (Path(prefix) / 'drive_c/windows/syswow64').is_dir()
+        self.regedit = {'32': r'C:\windows\syswow64\regedit.exe' if wow64 else 'regedit', '64': 'regedit'}
+        self.queued = []        # (view, key, name, kind, data); kind None deletes the value
+        self.known = {}         # (view, key) -> value names, lowercase
+
+    def run(self, *args, timeout=None):
+        args = shell_view(args)
+        if args[:2] in (('reg', 'add'), ('reg', 'delete')) and ('/v' in args or '/ve' in args):
+            view = '64' if '/reg:64' in args else '32'
+            name = None if '/ve' in args else args[args.index('/v') + 1]
+            kind = data = None
+            if args[1] == 'add':
+                kind = args[args.index('/t') + 1] if '/t' in args else 'REG_SZ'
+                data = args[args.index('/d') + 1] if '/d' in args else ''
+            self.queued.append((view, args[2], name, kind, data))
+            return
+        self.flush()
+        subprocess.run([self.wine, *args], env=self.env, check=True, timeout=timeout or self.timeout,
+                       stdout=subprocess.DEVNULL)
+
+    __call__ = run
+
+    def exists(self, key, name):
+        view = '32'  # shell_view's
+        for queued_view, queued_key, queued_name, kind, _ in reversed(self.queued):
+            if (queued_view, queued_key.lower(), (queued_name or '').lower()) == (view, key.lower(), name.lower()):
+                return kind is not None
+        if (view, key.lower()) not in self.known:
+            # Into a file: a wineserver that this command starts keeps a pipe open.
+            with tempfile.TemporaryFile() as out:
+                code = subprocess.run([self.wine, *shell_view(('reg', 'query', key))], env=self.env, stdout=out,
+                                      stderr=subprocess.DEVNULL, timeout=self.timeout).returncode
+                out.seek(0)
+                text = out.read().decode('utf-8', 'replace')
+            self.known[view, key.lower()] = value_names(text, key) if code == 0 else set()
+        return name.lower() in self.known[view, key.lower()]
+
+    def text(self, view):
+        def esc(text):
+            return text.replace('\\', '\\\\').replace('"', '\\"')
+        out = ['Windows Registry Editor Version 5.00', '']
+        for queued_view, key, name, kind, data in self.queued:
+            if queued_view != view:
+                continue
+            root, _, rest = key.partition('\\')
+            lhs = '@' if name is None else f'"{esc(name)}"'
+            if kind is None:
+                value = '-'
+            elif kind == 'REG_SZ':
+                value = f'"{esc(data)}"'
+            elif kind == 'REG_DWORD':
+                value = f'dword:{int(data, 0) & 0xffffffff:08x}'
+            elif kind == 'REG_BINARY':
+                value = 'hex:' + ','.join(f'{b:02x}' for b in bytes.fromhex(data))
+            elif kind in ('REG_EXPAND_SZ', 'REG_MULTI_SZ'):
+                # reg's /d separates REG_MULTI_SZ strings with \0
+                strings = data.split('\\0') if kind == 'REG_MULTI_SZ' else [data]
+                raw = ''.join(t + '\0' for t in strings).encode('utf-16le') + b'\0\0' * (kind == 'REG_MULTI_SZ')
+                value = f'hex({2 if kind == "REG_EXPAND_SZ" else 7}):' + ','.join(f'{b:02x}' for b in raw)
+            else:
+                raise ValueError(f'{kind} in a registry batch')
+            out += [f'[{self.ROOTS.get(root.upper(), root)}\\{rest}]', f'{lhs}={value}', '']
+        return '\r\n'.join(out) + '\r\n'
+
+    def flush(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for view in sorted({queued[0] for queued in self.queued}):
+                reg = Path(temp) / f'profile{view}.reg'
+                reg.write_text(self.text(view), encoding='utf-16')
+                subprocess.run([self.wine, self.regedit[view], '/S', 'Z:' + str(reg).replace('/', '\\')],
+                               env=self.env, check=True, timeout=self.timeout)
+        self.queued = []
+        self.known = {}
+
+
+def value_names(output, key):
+    """The value names in `reg query KEY`'s output (its first block: KEY's own
+    values, not its subkeys'), lowercase."""
+    names, own = set(), False
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        if not line.startswith(' '):
+            own = line.strip().lower().endswith(key.partition('\\')[2].lower())
+            continue
+        if own:
+            name = line.strip().split('    ')[0]
+            names.add('' if name == '(Default)' else name.lower())
+    return names
 
 
 def font_profile_defaults():

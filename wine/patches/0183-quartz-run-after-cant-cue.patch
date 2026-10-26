@@ -1,0 +1,40 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] quartz: Run a graph whose filter cannot cue data
+
+Purpose: let Windows Media Player 9 play: it stayed at 0:00 on every file.
+Windows behavior: VFW_S_CANT_CUE is a success code: the filter is paused
+but cannot deliver data while paused. The Filter Graph Manager does not
+wait for such a filter before it runs the graph.
+Wine before: Run() skipped the asynchronous wait only when a filter
+answered VFW_S_CANT_CUE at once. The player's WMRenderer Source Filter
+(wmp.dll, over wmvcore) first answers VFW_S_STATE_INTERMEDIATE and then
+VFW_S_CANT_CUE; async_run_cb stopped waiting on that answer without
+starting the graph, so the DirectSound renderer stayed paused with its
+first samples and never wrote to its buffer.
+Change: async_run_cb takes VFW_S_CANT_CUE as a paused filter, as Run()
+does.
+Evidence: +quartz trace of wmplayer.exe 9.0.0.4503 playing an MP3: the
+source returns 0x40268 after 0x40237, graph_start was never called and the
+renderer wrote no data; with the change the graph runs and the elapsed
+time advances.
+Scope: all programs.
+---
+ dlls/quartz/filtergraph.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/dlls/quartz/filtergraph.c b/dlls/quartz/filtergraph.c
+index 17e5bb1..6ddf9bf 100644
+--- a/dlls/quartz/filtergraph.c
++++ b/dlls/quartz/filtergraph.c
+@@ -1855,6 +1855,11 @@ static void CALLBACK async_run_cb(TP_CALLBACK_INSTANCE *instance, void *context,
+             if (SUCCEEDED(hr) && state != State_Paused)
+                 ERR("Filter %p reported incorrect state %u.\n", filter->filter, state);
+ 
++            /* A filter that cannot cue data has paused all the same; as in
++             * Run(), it is not waited for. */
++            if (hr == VFW_S_CANT_CUE)
++                hr = S_OK;
++
+             if (hr != S_OK)
+                 break;
+         }

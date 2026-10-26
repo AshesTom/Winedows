@@ -180,3 +180,4 @@
 0180-win32u-xp-layered-fade-without-compositor.patch
 0181-uxtheme-xp-default-system-colors.patch
 0182-user32-kludge-min-rect.patch
+0183-quartz-run-after-cant-cue.patch

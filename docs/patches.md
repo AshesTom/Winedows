@@ -1,6 +1,6 @@
 # Wine のパッチ
 
-`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 182 本のパッチがあります。
+`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 183 本のパッチがあります。
 当てるのは `wine/build.sh` で、実際の適用は `wine/patch-state.py` が行います（途中まで当たったソースにも、足りない分だけを当てます）。
 
 番号の付け直しや、以前の番号との対応表は [history/patch-history.md](history/patch-history.md) にあります。
@@ -13,7 +13,7 @@ prefix の補助ツールがこの変数を設定します。同じ Wine で普�
 
 - 判定は 0019 が加える `include/wine/win4wine.h` の `win4wine_external_shell()` に 1 つにまとめています。
   ntdll は Rtl の関数で、wow64.dll（0023）は ntdll の関数で同じ変数を読みます。
-- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173、0176、0177、0182）、普通のアプリの見た目と動作を変えない 0025・0026、
+- opt-in なしで効くのは、文書化された Win32 の挙動の修正（0001〜0018、0084、0085、0086、0091、0144〜0146、0152〜0154、0156、0157、0161、0163、0169、0172、0173、0176、0177、0182、0183）、普通のアプリの見た目と動作を変えない 0025・0026、
   Windows 7 のシェルが呼ぶ API と Wine の修正（0094〜0112）の多くと、版 4 のスタイルでだけ効くテーマの修正（0113〜0119）です。
 - 0024 は `WIN4WINE_SESSION_REQUEST` があるときだけ効きます。
 - 0090 は、さらに `WIN4WINE_FOLDER_SHELL` があるときだけ効きます（ReactOS のシェルのセッションだけが設定します）。
@@ -302,6 +302,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0180 | win32u: XP のセッションで合成マネージャーが無いとき（`WIN4WINE_COMPOSITED` が無い）、一定の透明度のレイヤー付きウィンドウ（SetLayeredWindowAttributes の LWA_ALPHA、ピクセルごとのアルファの無い UpdateLayeredWindow の ULW_ALPHA）を、同じプロセスの下のウィンドウのサーフェスと混ぜて画面に送る（送るたびに読み直すので、下で描き直された画素も透ける）。スタートメニューの「すべてのプログラム」の AnimateWindow(AW_BLEND) と選択項目の SysFader が、X11 の不透明度の無視（0175 ではディザの穴）ではなく XP と同じくなめらかにフェードする。SetLayeredWindowAttributes で透明度が変わった窓は描き直す（自分のスレッドならすぐ）。XP のツールチップと通知領域のバルーンはタイマーで透明度だけを変えてフェードし、混ぜた画素が X11 の窓の画像（窓自身の画素）に残るので、バルーンが出たときの下の画面の写しのままだった | あり（XP のセッション） |
 | 0181 | uxtheme: XP のセッションで、ビジュアル スタイルが名前を挙げないシステム カラーを XP の uxtheme の既定値（loader.cpp の DefaultColors。ツールチップは 255 255 225 の地に黒、リンクは 0 0 128 など）にする。XP は 31 色をすべて設定するが、Wine はスタイルの色だけを設定し、前の配色の色が残った（Eggplant の後、Luna のツールチップが白地に紫の文字だった）。0160 のリンクの色もこの一つ | あり（XP のセッション） |
 | 0182 | win32u, user32: XP の xxxSendMinRectMessages が shell hook の窓に送る WM_KLUDGEMINRECT（0x008B）の RECT を、WM_SIZING と同じくプロセスの間で行きと帰りに渡す（wow64win の 32 ビットの受け手も）。DefWindowProcA/W は XP の user32（clmsg.c）と同じく、RECT を二つの POINTS にした SHELLHOOKINFO で窓自身に "SHELLHOOK" の HSHELL_GETMINRECT を送り、シェルが書いた矩形を戻す。XP のタスク バンドはその窓のタスクバーのボタン（まとめたときはグループのボタン）の矩形を答える。0052 のアニメーションがこれでボタンへ飛ぶ（以前はタスク バンドの左端 160 画素に向かっていた） | なし |
+| 0183 | quartz: フィルター グラフの非同期の実行で、フィルターが VFW_S_CANT_CUE（一時停止はしたがデータを先に送れない）を返したら、Run() と同じく待たずにグラフを実行する。Windows Media Player 9 の WMRenderer Source Filter は VFW_S_STATE_INTERMEDIATE の後に VFW_S_CANT_CUE を返し、Wine はグラフを実行しないまま待つのをやめていたので、DirectSound のレンダラーが一時停止のままで、どのファイルも 0:00 から進まなかった | なし |
 
 
 ## 並び順の考え方

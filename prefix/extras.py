@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import xp_schemes
 
@@ -199,9 +200,13 @@ def keyboard_layouts(assets):
     return texts
 
 
-def regedit(wine, prefix, text):
+def regedit(wine, prefix, *texts):
+    """TEXTS, .reg files' contents, imported in their order by one regedit."""
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
     env.pop('WINEARCH', None)
+    header = 'Windows Registry Editor Version 5.00'
+    text = header + '\r\n\r\n' + '\r\n\r\n'.join(t.lstrip('\ufeff').strip().removeprefix(header).strip('\r\n')
+                                             for t in texts) + '\r\n'
     with tempfile.TemporaryDirectory() as temp:
         reg = Path(temp) / 'extras.reg'
         reg.write_text(text, encoding='utf-16')
@@ -560,7 +565,7 @@ def help_center(assets, prefix, wine, xpx):
     stop(wine, prefix)
 
 
-def user_accounts(prefix, wine):
+def user_accounts(prefix, wine, xpx):
     """XP's User Accounts, where the account picture of the Start menu and
     the Welcome screen is chosen: shgina.dll's user objects and nusrmgr.cpl's
     own (its toolbar) register themselves and their type libraries, as XP's
@@ -570,9 +575,7 @@ def user_accounts(prefix, wine):
         return
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
     env.pop('WINEARCH', None)
-    for name in ('shgina.dll', 'nusrmgr.cpl'):
-        subprocess.run([wine, r'C:\windows\syswow64\regsvr32.exe', '/s', 'C:\\windows\\system32\\' + name],
-                       env=env, check=False)
+    xpx.register(wine, env, [r'C:\windows\system32\shgina.dll', r'C:\windows\system32\nusrmgr.cpl'])
 
 
 def network_connections(prefix, wine):
@@ -902,8 +905,7 @@ def control_panel(assets, prefix, wine, xpx):
     texts.append(xpreg.hive_entries(text, 'HKCR', tuple('CLSID\\' + c for c in CONTROL_PANEL_CLASSES), extra=module))
     texts.append(xpreg.hive_entries(text, 'HKLM', tuple(namespace + '\\' + c for c in CONTROL_PANEL_CLASSES),
                                     extra=module))
-    for t in texts:
-        regedit(wine, prefix, t)
+    regedit(wine, prefix, *texts)
 
 
 def stage(prefix, xpx=None):
@@ -946,6 +948,26 @@ def wanted(xpx, wine):
     return f'{VERSION} {xpx.wine_build(wine)}'
 
 
+STEPS = 12
+
+
+class Steps:
+    """apply()'s steps as scripts/progress.py counts them ("(n/total)" after
+    its ">>> "), each followed in the log by the time it took. setup.sh and
+    xp.sh run two more after apply(): session/linux_apps.py and pins.py."""
+    def __init__(self, total=STEPS + 2):
+        self.total, self.done, self.start = total, 0, None
+
+    def __call__(self, name=None):
+        now = time.monotonic()
+        if self.start is not None:
+            print(f'    {now - self.start:.1f} s', flush=True)
+        self.start = now
+        if name:
+            self.done += 1
+            print(f'>>> ({self.done}/{self.total}) {name}', flush=True)
+
+
 def apply(prefix, wine):
     config = json.loads((prefix / 'xp-shell.json').read_text())
     assets = Path(config['assets'])
@@ -953,25 +975,21 @@ def apply(prefix, wine):
     if missing:
         raise SystemExit(f'Missing {", ".join(missing)}: run bridge-wm/build.sh first')
     xpx = xp_explorer()
+    step = Steps()
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', WINEDLLOVERRIDES='mscoree,mshtml=')
     env.pop('WINEARCH', None)
-    print('* XP Explorer additions: files', flush=True)
+    step("XP's files and the helpers")
     stop(wine, prefix)
     copy_files(assets, prefix)
     # XP's shell keeps the icons it extracted in IconCache.db; drop it so that
     # it extracts them again with this Wine (16x16 images: patch 0151).
     for cache in (prefix / 'drive_c/users').glob('*/AppData/Local/IconCache.db'):
         cache.unlink(missing_ok=True)
-    print('* XP Explorer additions: registry', flush=True)
-    regedit(wine, prefix, registry(xpx).text())
-    regedit(wine, prefix, xpx.xp_registrations(assets))
-    # Before IE6, Windows Media Player and XP's programs, which register
-    # their own types over these, as on XP.
-    for text in file_types(assets, prefix):
-        regedit(wine, prefix, text)
-    if (assets / 'intl/input.dll').is_file():
-        for text in keyboard_layouts(assets):
-            regedit(wine, prefix, text)
+    step('Registry and file types')
+    # File types before IE6, Windows Media Player and XP's programs, which
+    # register their own types over these, as on XP.
+    regedit(wine, prefix, registry(xpx).text(), xpx.xp_registrations(assets), *file_types(assets, prefix),
+            *(keyboard_layouts(assets) if (assets / 'intl/input.dll').is_file() else ()))
     # The Linux system's layout becomes XP's input language, once.
     subprocess.run([sys.executable, str(ROOT / 'session/keyboard.py'), 'seed', str(prefix), '--wine', wine],
                    check=False)
@@ -980,13 +998,13 @@ def apply(prefix, wine):
     stage(prefix, xpx)
     # SHGetSetSettings writes the task pane setting where XP's shell32 reads it.
     subprocess.run([wine, r'C:\xp\bin\startmenu.exe', 'webview'], env=env, check=False)
-    print("* XP's sounds, Explorer settings, image previews and Network Connections", flush=True)
+    step("XP's sounds, Explorer settings, image previews and Network Connections")
     xpx.xp_defaults(assets, prefix, wine, folders=False)
     stop(wine, prefix)
-    print("* XP's Windows XP and Windows Classic themes", flush=True)
+    step("XP's Windows XP and Windows Classic themes")
     themes(assets, prefix, wine)
     stop(wine, prefix)
-    print('* Internet Explorer 6 and Windows Media Player 9', flush=True)
+    step('Internet Explorer 6 and Windows Media Player 9')
     xpx.install_ie(assets, prefix, wine)
     # Its wineboot registers XP's shell32 again, whose My Computer icon is
     # %SystemRoot%\Explorer.exe,0: Wine's explorer.exe, a blank page. Ours is
@@ -998,28 +1016,30 @@ def apply(prefix, wine):
             '[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CLSID\\'
             '{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\DefaultIcon]\r\n'
             '@="C:\\\\xp\\\\xp-explorer.exe,0"\r\n')
-    stop(wine, prefix)
-    print("* XP's Security Center", flush=True)
+    # Without a restart of the wineserver (a cold start took up to 4 s): the
+    # Security Center adds files that no running program has loaded.
+    step("XP's Security Center")
     security_center(assets, prefix, wine, xpx)
     # IE6's wineboot may have put Wine's files back: XP's go in place again
     # (with the wineserver stopped) before they register.
     stop(wine, prefix)
     stage(prefix, xpx)
-    print("* XP's User Accounts", flush=True)
-    user_accounts(prefix, wine)
-    print("* XP's Network Connections", flush=True)
+    step("XP's User Accounts")
+    user_accounts(prefix, wine, xpx)
+    step("XP's Network Connections")
     network_connections(prefix, wine)
-    print("* XP's Start menu programs", flush=True)
+    step("XP's Start menu programs")
     start_menu_programs(assets, prefix, wine, xpx)
-    print("* XP's programs and All Programs", flush=True)
+    step("XP's programs and All Programs")
     xp_programs(assets, prefix, wine, xpx)
     xp_user_defaults(prefix, wine)
-    print("* XP's Control Panel categories", flush=True)
+    step("XP's Control Panel categories")
     control_panel(assets, prefix, wine, xpx)
     stop(wine, prefix)
-    print("* XP's Help and Support Center", flush=True)
+    step("XP's Help and Support Center")
     help_center(assets, prefix, wine, xpx)
     stage(prefix, xpx)
+    step()
     (prefix / MARKER).write_text(wanted(xpx, wine) + '\n')
 
 

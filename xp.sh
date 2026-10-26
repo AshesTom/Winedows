@@ -67,11 +67,16 @@ add_extras() {
     need xvfb-run
     echo "Adding the XP Explorer additions to the prefix (log: .local/prefix.log)"
     stop_prefix
-    xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
+    # Its steps and percentage on the terminal, the rest in the log; the
+    # wineserver ends with them, as it holds their output.
+    python3 "$root/scripts/progress.py" --append "$local/prefix.log" 'XP Explorer additions' -- \
+        xvfb-run -a -s '-screen 0 1280x800x24' bash -c '
         python3 "$1/prefix/extras.py" "$2" --wine "$3" &&
+        echo ">>> (13/14) Linux programs in All Programs" &&
         python3 "$1/session/linux_apps.py" "$2" --wine "$3" &&
-        python3 "$1/xp-explorer/scripts/pins.py" "$2" --wine "$3"' _ "$root" "$prefix" "$wine" \
-        >> "$local/prefix.log" 2>&1 ||
+        echo ">>> (14/14) The Start menu'"'"'s pinned programs" &&
+        python3 "$1/xp-explorer/scripts/pins.py" "$2" --wine "$3"
+        status=$?; WINEPREFIX=$2 "${3%/*}/wineserver" -k 2>/dev/null; exit $status' _ "$root" "$prefix" "$wine" ||
         { tail -20 "$local/prefix.log" >&2; echo 'The XP Explorer additions failed; see .local/prefix.log' >&2; exit 1; }
     stop_prefix
 }

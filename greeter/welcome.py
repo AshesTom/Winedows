@@ -577,6 +577,7 @@ class Screen:
         self.prompt = True         # whether the selected account shows its password box
         self.error = False
         self.status = ''
+        self.detail = ''           # a second, regular line under the status
         self.power_hover = False
         self.dialog = False        # the "Turn off computer" dialog
         self.dialog_hover = None   # 'standby' | 'off' | 'restart' | 'cancel'
@@ -859,6 +860,11 @@ class Screen:
             layout = self.text.layout(self.status, self.pt(int(a.string('logonui', 46) or 9)), bold=True,
                                       family=a.account_face)
             self.text.draw(cr, layout, name_x, fy + self.text.size(name)[1], tint(STATUS))
+            if self.detail:
+                detail = self.text.layout(self.detail, self.pt(int(a.string('logonui', 46) or 9)),
+                                          family=a.account_face)
+                self.text.draw(cr, detail, name_x, fy + self.text.size(name)[1] + self.text.size(layout)[1],
+                               tint(STATUS))
         if alpha < 1:
             self.fade(target, area, under, 96)
         if selected and self.mode == 'list' and (self.prompt or self.error):
