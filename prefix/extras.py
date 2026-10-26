@@ -33,10 +33,10 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '31'
+VERSION = '33'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
-           'xpnetcon.exe')
+           'xpnetcon.exe', 'linux-launch.exe')
 # XP's Regional and Language Options and what it loads (assets/intl), native
 # in rundll32 and in XP Explorer, whose Control Panel lists it.
 INTL = ('intl.cpl', 'input.dll', 'syssetup.dll', 'sfcfiles.dll')
@@ -75,6 +75,8 @@ NETCON_CLASSES = ('{BA126AD1-2166-11D1-B1D0-00805FC1270E}', '{BA126AE5-2166-11D1
 # XP's Compressed (zipped) Folders in syswow64 (Wine has no zipfldr.dll):
 # .zip files with its icon, opened as folders, and Send To.
 FILE_TYPES = ('zipfldr.dll',)
+# Milliseconds from Wine's services start to XP's own services (DelayedAutoStart).
+AUTOSTART_DELAY = 5000
 
 
 def xp_explorer():
@@ -233,13 +235,11 @@ def copy_files(assets, prefix):
     for path in [assets / 'system32/duser.dll', *(assets / 'cpl').glob('*'), *(assets / 'shell').glob('*')]:
         if path.is_file():
             shutil.copyfile(path, native / path.name)
-    # XP's Windows Classic theme for Display Properties. A prefix has both
-    # Wine's windows/resources/themes and win4wine's Resources/Themes; on
-    # Linux they are two folders, and Display Properties lists one of them.
+    # XP's Windows Classic theme for Display Properties, in Wine's folder
+    # (stage.py's merge_folder_twins: on Linux "Resources" would be another).
     windows = prefix / 'drive_c/windows'
-    for name in ('Resources/Themes', 'resources/themes'):
-        if (assets / 'themes').is_dir() and (windows / name).is_dir():
-            shutil.copytree(assets / 'themes', windows / name, dirs_exist_ok=True)
+    if (assets / 'themes').is_dir():
+        shutil.copytree(assets / 'themes', windows / 'resources/themes', dirs_exist_ok=True)
     # XP's wallpapers where its setup puts them: the JPEG ones in
     # Web\Wallpaper, the bitmaps in the Windows folder (extract.py).
     for group, target in (('web', windows / 'Web/Wallpaper'), ('windows', windows)):
@@ -436,6 +436,13 @@ def security_center(assets, prefix, wine, xpx):
         r.add(services + name, 'DisplayName', display)
         r.add(services + name, 'ImagePath', svchost, 'REG_EXPAND_SZ')
         r.add(services + name + r'\Parameters', 'ServiceDll', 'C:\\xp\\wsc\\' + dll, 'REG_EXPAND_SZ')
+    # XP's services start a few seconds after Wine's own (DelayedAutoStart):
+    # Wine starts the others one after the other before its first program
+    # runs, which made every session wait 3 s longer for its shell; the
+    # Security Center's alerts then come once the shell is up.
+    for name in ('SharedAccess', 'wscsvc', 'TermService', 'wuauserv'):
+        r.add(services + name, 'DelayedAutoStart', '1', 'REG_DWORD')
+    r.add(r'HKLM\System\CurrentControlSet\Control', 'AutoStartDelay', str(AUTOSTART_DELAY), 'REG_DWORD')
     # As on XP, after the RPC service; Terminal Services tells it the user's
     # session, which Wine starts only on demand.
     r.add(services + 'wscsvc', 'DependOnService', ['RpcSs', 'SharedAccess', 'TermService'], 'REG_MULTI_SZ')
@@ -549,6 +556,8 @@ def help_center(assets, prefix, wine, xpx):
     run(HELPCTR + r'\Binaries\HelpSvc.exe', '/svchost', 'helpsvc', '/regserver')
     run('reg', 'add', r'HKLM\System\CurrentControlSet\Services\helpsvc', '/v', 'ImagePath', '/t', 'REG_EXPAND_SZ',
         '/d', r'C:\windows\syswow64\svchost.exe -k helpsvc', '/f')
+    run('reg', 'add', r'HKLM\System\CurrentControlSet\Services\helpsvc', '/v', 'DelayedAutoStart', '/t',
+        'REG_DWORD', '/d', '1', '/f')
     run(HELPCTR + r'\Binaries\HelpHost.exe', '/regserver')
     run(HELPCTR + r'\Binaries\HelpCtr.exe', '/regserver')
     run(r'C:\windows\syswow64\regsvr32.exe', '/s', HELPCTR + r'\Binaries\brpinfo.dll')
@@ -761,10 +770,18 @@ def xp_programs(assets, prefix, wine, xpx):
             continue
         if item['display']:
             names.setdefault(drive / folder[3:].replace('\\', '/'), {})[item['name'] + '.lnk'] = item['display']
-        # The shortcuts that XP Explorer makes itself stay (Network Connections).
-        if exists(f'{folder}\\{item["name"]}.lnk'):
+        # The shortcuts that XP Explorer makes itself stay (Network Connections);
+        # the Command Prompt's is made again for the Linux one.
+        command_prompt = target.lower().endswith('\\cmd.exe')
+        if exists(f'{folder}\\{item["name"]}.lnk') and not command_prompt:
             continue
         icon = item.get('icon', '')
+        if command_prompt:
+            # XP's Command Prompt is the Linux system's: a terminal with the
+            # console's look (session/xp_cmd.py), started in the home (H:\).
+            target, arguments = r'C:\xp\bin\linux-launch.exe', f'python3 "{ROOT / "session/xp_cmd.py"}"'
+            item = dict(item, directory='H:\\')
+            icon = icon or r'%SystemRoot%\system32\cmd.exe,0'
         # XP's explorer.exe is C:\xp\xp-explorer.exe here; Wine's keeps its name.
         target, icon = (EXPLORER if value.lower() == r'c:\windows\explorer.exe' else value for value in (target, icon))
         icon = icon.replace(r'C:\windows\explorer.exe', EXPLORER)

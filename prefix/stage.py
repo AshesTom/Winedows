@@ -119,6 +119,47 @@ def stage(prefix, wine=None):
         finally:
             path.unlink(missing_ok=True)
 
+# Folders that Wine's wineboot makes in lower case and that XP's files and
+# installers name with capitals (Windows\Resources\Themes).
+FOLDER_TWINS = ('windows/resources', 'windows/resources/themes')
+
+def merge(source, target):
+    """Move SOURCE's entries into the folder TARGET; of two files, the newer stays."""
+    for entry in list(source.iterdir()):
+        there = target / entry.name
+        if entry.is_dir() and not entry.is_symlink() and there.is_dir():
+            merge(entry, there)
+            entry.rmdir()
+        elif not there.exists() or entry.stat().st_mtime > there.stat().st_mtime:
+            if there.is_dir() and not there.is_symlink():
+                shutil.rmtree(there)
+            os.replace(entry, there)
+        elif entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+def merge_folder_twins(prefix):
+    """One folder for the names that differ only in case.
+
+    On Linux "Resources" and Wine's "resources" are two folders: Wine opens
+    one, while a program or installer that named the other wrote there; a
+    theme installed in Resources\\Themes was not in Display Properties. The
+    capitalised one goes into Wine's; Wine finds that one for either name (a
+    link would be listed as a second folder)."""
+    drive = prefix / 'drive_c'
+    for relative in FOLDER_TWINS:
+        folder = drive / relative
+        if not folder.is_dir():
+            continue
+        for twin in folder.parent.iterdir():
+            if twin.name != folder.name and twin.name.lower() == folder.name:
+                if twin.is_dir() and not twin.is_symlink():
+                    merge(twin, folder)
+                    twin.rmdir()
+                else:
+                    twin.unlink()
+
 def stage_media(prefix, wine=None):
     """Copy XP's default wallpaper and user pictures from the local extraction.
 
@@ -288,6 +329,7 @@ if __name__ == '__main__':
     if args.wine:
         prepare(prefix, args.wine.resolve(strict=True))
     progress(85, "XP's files")
+    merge_folder_twins(prefix)
     stage(prefix, args.wine.resolve(strict=True) if args.wine else None)
     # XP Explorer's additions (prefix/extras.py): IE6, Display Properties, DirectUser...
     import extras

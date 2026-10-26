@@ -446,6 +446,33 @@ def make_icon(name, target):
     return True
 
 
+# The package managers' databases: their queries are kept until one changes.
+PACKAGE_DATABASES = ('/var/lib/pacman/local', '/var/lib/dpkg/status', '/var/lib/rpm', '/usr/lib/sysimage/rpm')
+
+
+def cached_packages(cache, paths):
+    """packages(PATHS), from CACHE while the package database is unchanged
+    (pacman's queries took 0.9 s at every session start)."""
+    stamp = []
+    for database in PACKAGE_DATABASES:
+        try:
+            stamp.append(f'{database} {os.stat(database).st_mtime_ns}')
+        except OSError:
+            pass
+    try:
+        saved = json.loads(cache.read_text())
+        if saved['stamp'] == stamp and all(str(path) in saved['found'] for path in paths):
+            return {path: tuple(saved['found'][str(path)]) for path in paths}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    found = packages(paths)
+    temp = cache.with_suffix('.tmp')
+    temp.write_text(json.dumps({'stamp': stamp, 'found': {str(path): found.get(path, ('',) * 3 + (0, '', ''))
+                                                          for path in paths}}))
+    temp.replace(cache)
+    return found
+
+
 def packages(paths):
     """{desktop entry path: (manager, package, version, size in KiB, URL,
     description)} from the system's package manager; Flatpak's exported
@@ -718,7 +745,7 @@ class Menu:
         script = self.state_dir / 'remove.sh'
         if not script.is_file() or script.read_text() != REMOVE_SCRIPT:
             script.write_text(REMOVE_SCRIPT)
-        found = packages([Path(item['source']) for item in links.values()])
+        found = cached_packages(self.state_dir / 'packages.json', [Path(item['source']) for item in links.values()])
         programs = {}
         for file_id, item in sorted(links.items()):
             manager, package, version, size, url, summary = found.get(Path(item['source']), ('',) * 3 + (0, '', ''))

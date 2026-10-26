@@ -594,6 +594,9 @@ def repair_navigating_sound(prefix, wine):
             pass
 
 
+INTERNET_SETTINGS = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
+
+
 def xp_defaults(assets, prefix, wine, folders=True):
     """XP's own defaults for the shell, from the user's files: its sounds
     (Windows\\Media and HIVEDEF.INF's sound scheme), HIVESFT.INF's Explorer
@@ -640,8 +643,12 @@ def xp_defaults(assets, prefix, wine, folders=True):
         hivesft = xpreg.read_inf(inf / 'hivesft.inf')
         # Controls Folder\Desk: with its page handler, XP's Display Properties
         # applies visual styles and color schemes (themeui's ApplyPressed).
+        # The security zones' SP2 values: without "Secure drag source" (180D),
+        # XP's folders refused every file dropped on them (a move or a copy
+        # by drag and drop did nothing, without a message).
         texts.append(xpreg.hive_entries(hivesft, 'HKLM', (EXPLORER, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions',
-                                                          r'SOFTWARE\Microsoft\Windows\CurrentVersion\Controls Folder\Desk'),
+                                                          r'SOFTWARE\Microsoft\Windows\CurrentVersion\Controls Folder\Desk',
+                                                          INTERNET_SETTINGS + r'\Zones', INTERNET_SETTINGS + r'\LockDown_zones'),
                                         (EXPLORER + r'\Shell Folders', EXPLORER + r'\User Shell Folders')))
     # Prefixes made before these shell classes were included need them too.
     # In particular, XP's Start menu Run item is registered as a shell class;

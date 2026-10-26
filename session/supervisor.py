@@ -21,6 +21,7 @@ from xml.sax.saxutils import escape
 from Xlib import X, display, error
 
 import dpi
+import saved_registry
 from wineenv import SHELLS, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -351,7 +352,7 @@ class Session:
         the other silent events are silent on a fresh XP too. Never wipes
         the mirror when a query fails or the effective event is silent."""
         base = r'HKCU\AppEvents\Schemes\Apps'
-        if self.shell['marker'] != 'xp-shell.json':
+        if self.shell['marker'] != 'xp-shell.json' or self.sound_scheme_repaired():
             return
         # This migration does not depend on the sound scheme: older prefixes
         # launched folder windows in a separate process, which produced a
@@ -401,6 +402,24 @@ class Session:
                 subprocess.run([self.wine, 'reg', 'add', base + leaf,
                                 '/ve', '/t', 'REG_EXPAND_SZ', '/d', sound, '/f'],
                                env=self.env, stdout=log, stderr=subprocess.STDOUT, timeout=60, check=False)
+
+    def sound_scheme_repaired(self):
+        """Whether the saved registry has what repair_sound_scheme writes, as
+        it has after the first session: then no Wine program runs for it."""
+        if saved_registry.server_running(self.prefix):
+            return False
+        def read(key, name=None):
+            return saved_registry.user_value(self.prefix, key, name)
+        if read(r'Software\Microsoft\Windows\CurrentVersion\Explorer\BrowseNewProcess', 'BrowseNewProcess') != 'no':
+            return False
+        apps = r'AppEvents\Schemes\Apps'
+        current = read(apps + r'\Explorer\Navigating\.Current')
+        default = read(apps + r'\Explorer\Navigating\.Default')
+        if read(r'AppEvents\Schemes') == '.Default' and not current and default:
+            return False
+        sound = current or default
+        return not sound or all(read(apps + leaf) == sound for leaf in
+                                (r'\xp-explorer\Navigating\.Current', r'\xp-explorer\Navigating\.Default'))
 
     def status(self, state, **extra):
         record = dict(state=state, time=time.time(), **extra)

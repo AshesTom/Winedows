@@ -6,7 +6,7 @@ import struct
 import subprocess
 import tempfile
 
-VERSION = 29
+VERSION = 30
 FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\JapaneseXPLuna'
 # The classic fonts of a new prefix (prefix/theme-settings.c classic-initialize).
 CLASSIC_FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\XPClassic'
@@ -16,6 +16,9 @@ UNIX_ROOT = '{9D20AAE8-0625-44B0-9CA7-71889C2254D9}'
 # calls on the reference machines: Japanese XP uses MS UI Gothic 9pt, English
 # XP Tahoma 8pt (captions bold in both).
 CLASSIC_FONTS = {'ja': ('MS UI Gothic', -12), 'en': ('Tahoma', -11)}
+# My Computer's names of the drives that are Linux folders, per language of the XP media.
+DRIVE_LABELS = {'en': {'Z': 'Linux File System', 'H': 'Home Folder'},
+                'ja': {'Z': 'Linux ファイル システム', 'H': 'ホーム フォルダ'}}
 
 
 def shell_view(args):
@@ -423,6 +426,13 @@ def install(run, exists, language='ja'):
     run('reg', 'add', explore + r'\ddeexec', '/v', 'NoActivateHandler', '/t', 'REG_SZ', '/d', '', '/f')
     run('reg', 'add', explore + r'\ddeexec\application', '/ve', '/t', 'REG_SZ', '/d', 'Folders', '/f')
     run('reg', 'add', explore + r'\ddeexec\topic', '/ve', '/t', 'REG_SZ', '/d', 'AppProperties', '/f')
+
+    # The drives of the Linux system: Z: is its root folder and H: the user's
+    # home (create.py); XP's shell names them from DriveIcons instead of
+    # "Local Disk", as it does for drives whose volume has no label.
+    for letter, label in DRIVE_LABELS['ja' if japanese else 'en'].items():
+        run('reg', 'add', rf'HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\DriveIcons\{letter}\DefaultLabel',
+            '/ve', '/t', 'REG_SZ', '/d', label, '/f')
 
     # Wine's builtin ShellExecute handles executable extensions directly;
     # native XP ShellExecute requires their explicit association.

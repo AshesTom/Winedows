@@ -30,7 +30,8 @@ if not reactos and not (prefix / 'xp-shell.json').is_file():
     raise SystemExit('Not a dedicated XP prefix')
 if reactos and (args.theme or args.menu or args.font_smoothing):
     raise SystemExit("The ReactOS shell has the classic look and Start menu only; give --dpi alone")
-if args.theme == 'luna' and not (prefix / 'drive_c/windows/Resources/Themes/Luna/luna.msstyles').is_file():
+if args.theme == 'luna' and not any((prefix / f'drive_c/windows/{name}/Luna/luna.msstyles').is_file()
+                                   for name in ('resources/themes', 'Resources/Themes')):
     raise SystemExit('Luna must be extracted from your local XP media first')
 theme_helper = Path(__file__).resolve().parents[1] / '.local/bridge/theme-settings.exe'
 if args.theme and not theme_helper.is_file():

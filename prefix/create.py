@@ -68,7 +68,8 @@ def create(assets, dest, home, wine):
     for font in (assets / 'fonts').glob('*'):
         shutil.copyfile(font, dest / 'drive_c/windows/Fonts' / font.name)
     if (assets / 'themes').exists():
-        shutil.copytree(assets / 'themes', dest / 'drive_c/windows/Resources/Themes', dirs_exist_ok=True)
+        # Into Wine's folder: on Linux a "Resources" beside it would be a second one.
+        shutil.copytree(assets / 'themes', dest / 'drive_c/windows/resources/themes', dirs_exist_ok=True)
     for manifest in (assets / 'sxs').rglob('controls.man'):
         identity = ET.parse(manifest).getroot().find('{urn:schemas-microsoft-com:asm.v1}assemblyIdentity')
         dll = manifest.with_name('comctl32.dll')
