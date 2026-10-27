@@ -1,0 +1,3 @@
+LIBRARY shortcuts.cpl
+EXPORTS
+    CPlApplet=CPlApplet@16

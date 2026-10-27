@@ -51,6 +51,15 @@ if ! fresh "$root/.local/bridge/xptray.exe" "$helpers/xptray.c" "$helpers/xptray
         -mwindows -lcomctl32 -lgdi32 -luser32 -lkernel32
     rm -f "$root/.local/bridge/xptray.res"
 fi
+# Control Panel's Keyboard Shortcuts item (bridge-wm/hotkeys.py runs them).
+wm=$root/bridge-wm
+if ! fresh "$root/.local/bridge/shortcuts.cpl" "$wm/shortcuts.c" "$wm/shortcuts.rc" "$wm/shortcuts.h" \
+        "$wm/shortcuts.manifest" "$wm/shortcuts.def"; then
+    i686-w64-mingw32-windres -I "$wm" "$wm/shortcuts.rc" -O coff -o "$root/.local/bridge/shortcuts.res"
+    compile "$root/.local/bridge/shortcuts.cpl" -std=gnu11 -shared "$wm/shortcuts.c" "$wm/shortcuts.def" \
+        "$root/.local/bridge/shortcuts.res" -lcomctl32 -lcomdlg32 -luser32 -lkernel32
+    rm -f "$root/.local/bridge/shortcuts.res"
+fi
 # XP's Volume Control (sndvol32) on the Linux sound server, for xptray.exe.
 compile "$root/.local/bridge/xpmix.dll" -std=gnu11 -shared "$helpers/xpmix.c" "$helpers/xpmix.def" -lwinmm
 # XP's Security Center service (wscsvc.dll) loads these from beside it: its

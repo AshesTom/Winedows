@@ -9,7 +9,8 @@ import select
 import signal
 import struct
 from Xlib import X, XK, Xatom, Xutil, display, error, protocol
-from Xlib.ext import composite
+from Xlib.ext import composite, xtest
+from hotkeys import Hotkeys
 from icons import payload as icon_payload
 
 IN_CLOSE_WRITE, IN_MOVED_TO = 0x8, 0x80
@@ -133,6 +134,9 @@ class Manager:
             self.root.grab_key(code, X.AnyModifier, True, X.GrabModeAsync, X.GrabModeSync)
         for modifiers in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
             self.root.grab_key(self.escape, X.ControlMask | modifiers, True, X.GrabModeAsync, X.GrabModeSync)
+        # The media keys and the user's shortcuts (hotkeys.py)
+        self.hotkeys = Hotkeys(self.d, self.root)
+        self.shell_combo_used = False
         for w in self.root.query_tree().children:
             if w.get_attributes().map_state == X.IsViewable:
                 self.manage(w)
@@ -421,7 +425,10 @@ class Manager:
 
     def shell_combo_event(self, e):
         """A key while the WM holds the keyboard for the Windows key."""
-        if e.type == X.KeyPress and e.detail not in self.super_codes:
+        if e.type == X.KeyPress and e.detail not in self.super_codes and self.hotkeys.press(e):
+            # A shortcut with the Windows key: the shell gets none of it.
+            self.shell_combo_used = True
+        elif e.type == X.KeyPress and e.detail not in self.super_codes:
             keysym = self.d.keycode_to_keysym(e.detail, 0)
             vk = VIRTUAL_KEYS.get(keysym)
             if vk is None and (XK.XK_a <= keysym <= XK.XK_z or XK.XK_0 <= keysym <= XK.XK_9):
@@ -431,8 +438,10 @@ class Manager:
             if vk is not None:
                 self.shell_combo.append(vk)
         elif e.type == X.KeyRelease and e.detail in self.super_codes:
-            self.write_shell_keys('windows', self.shell_combo)
+            if not self.shell_combo_used:
+                self.write_shell_keys('windows', self.shell_combo)
             self.shell_combo = None
+            self.shell_combo_used = False
 
     def write_shell_keys(self, kind, keys):
         self.shell_keys += 1
@@ -1211,6 +1220,13 @@ class Manager:
             self.shell_key(e)
         elif self.switch is not None and e.type in (X.KeyPress, X.KeyRelease):
             self.switch_event(e)
+        elif e.type == X.KeyPress and self.hotkeys.press(e):
+            if e.state & X.Mod4Mask:
+                # The shell saw the Windows key go down: another key before it
+                # goes up, or it would open the Start menu.
+                control = self.d.keysym_to_keycode(XK.XK_Control_L)
+                xtest.fake_input(self.d, X.KeyPress, control)
+                xtest.fake_input(self.d, X.KeyRelease, control)
         elif e.type == X.KeyPress and e.detail == self.d.keysym_to_keycode(XK.string_to_keysym('F4')):
             if self.active in self.clients:
                 self.close(self.clients[self.active]['w'])
@@ -1288,6 +1304,7 @@ class Manager:
                     dirty = max(dirty, self.changes_bridge(e))
                 except error.XError:
                     dirty = 2  # A client may disappear between any two requests.
+            self.hotkeys.check()
             if any(name.endswith('.cmd') or name == 'frames.tsv' for name in changes.names()):
                 dirty = 2
             if dirty:

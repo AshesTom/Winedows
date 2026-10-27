@@ -27,6 +27,8 @@ FILES = {
     # Icons and dialog templates of the notification area's network, battery
     # and volume icons (xp-explorer/helpers/xptray.c).
     **dict.fromkeys(('stobject.dll', 'powercfg.cpl', 'batmeter.dll', 'netshell.dll', 'sndvol32.exe', 'xpsp2res.dll'), 'tray'),
+    # XP's keyboard icon, for the session's Keyboard Shortcuts item (bridge-wm/shortcuts.c).
+    'main.cpl': 'keyboard',
     # Internet Explorer 6 for the desktop's Internet icon, installed beside its
     # iexplore.exe (prefix/extras.py), never over Wine's system DLLs.
     **dict.fromkeys(('iexplore.exe', 'mshtml.dll', 'mshtmled.dll', 'mshtmler.dll', 'mshtml.tlb', 'jscript.dll',
@@ -164,7 +166,7 @@ RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
                 'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
-                'help', 'apps', 'filetypes', 'printers', 'oobe')
+                'help', 'apps', 'filetypes', 'printers', 'oobe', 'keyboard')
 
 
 def setup_sources(paths):
@@ -355,7 +357,7 @@ def missing_groups(output):
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
               'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help',
               'apps': 'apps/programs/Messenger/msmsgs.exe', 'filetypes': 'filetypes/hivecls.inf',
-              'printers': 'printers/printui.dll', 'oobe': 'oobe/msobshel.htm'}
+              'printers': 'printers/printui.dll', 'oobe': 'oobe/msobshel.htm', 'keyboard': 'keyboard/main.cpl'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 

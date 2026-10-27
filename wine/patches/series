@@ -184,3 +184,4 @@
 0184-dlls-xp-comctl32-v6-imports.patch
 0185-win32u-drawiconex-flicker-free-height.patch
 0186-ntdll-folder-settings-in-prefix.patch
+0187-user32-external-copied-files-as-paths.patch
