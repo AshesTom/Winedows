@@ -173,7 +173,9 @@ def shown(entry):
         return False
     if boolean(entry, 'NoDisplay') or boolean(entry, 'Hidden'):
         return False
-    desktops = [d for d in os.environ.get('XDG_CURRENT_DESKTOP', '').split(':') if d]
+    # The session's own name, not the one added for the wallet (session/wallet.py)
+    desktops = [d for d in (os.environ.get('WIN4WINE_DESKTOP') or os.environ.get('XDG_CURRENT_DESKTOP', '')).split(':')
+                if d]
     only = strings(entry, 'OnlyShowIn')
     if only and not set(only) & set(desktops):
         return False

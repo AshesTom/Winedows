@@ -22,6 +22,7 @@ from Xlib import X, display, error
 
 import dpi
 import saved_registry
+import wallet
 from wineenv import SHELLS, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +73,10 @@ class Session:
         # Opt-in: the proxy snaps windows to half of the screen (Win+arrows, dragging to an edge).
         if config.get('window_snap'):
             self.env['WIN4WINE_WINDOW_SNAP'] = '1'
+        # Browsers and Electron applications keep their keys in the user's
+        # wallet, chosen from the desktop's name (session/wallet.py).
+        self.wallet = wallet.detect(config.get('wallet', 'auto'))
+        self.env.update(wallet.environment(self.wallet, self.env))
         self.input_method = config.get('input_method')
         if self.input_method not in (None, 'fcitx5'):
             raise SystemExit('Unsupported input_method')
@@ -198,6 +203,20 @@ class Session:
         # (on-the-spot); fcitx5 offers XIM clients only over-the-spot otherwise,
         # which shows it in the candidate window. Wine gives the caret's place.
         self.fcitx_option(base / 'conf/xim.conf', None, {'UseOnTheSpot': 'True'})
+        # Without a profile fcitx5 makes one with the us layout, and keeps it in
+        # the other desktops too (its autostart entry): the system's layout and Mozc.
+        profile = base / 'profile'
+        if not profile.exists():
+            import keyboard
+            system = keyboard.system()
+            layout = '-'.join(part for part in (system['layout'].split(',')[0],
+                                                system['variant'].split(',')[0]) if part)
+            profile.parent.mkdir(parents=True, exist_ok=True)
+            temporary = profile.with_name('profile.win4wine')
+            temporary.write_text(f'[Groups/0]\nName=Default\nDefault Layout={layout}\nDefaultIM=mozc\n\n'
+                                 f'[Groups/0/Items/0]\nName=keyboard-{layout}\nLayout=\n\n'
+                                 f'[Groups/0/Items/1]\nName=mozc\nLayout=\n\n[GroupOrder]\n0=Default\n')
+            temporary.replace(profile)
 
     @staticmethod
     def fcitx_option(config, section, wanted):
@@ -638,6 +657,9 @@ class Session:
         # Linux tray icons (StatusNotifierItem) reach the XP notification
         # area through the proxy; the input method shows its mode there.
         self.spawn(['python3', str(ROOT / 'bridge-wm/tray.py'), '--ipc', str(self.ipc)], 'tray')
+        # Before any application asks the wallet for its keys
+        with (self.state / 'wallet.log').open('ab') as log:
+            wallet.unlock(self.wallet, self.env, log)
         im = self.start_input_method()
         im_restarts = deque()
         # Install only the shell family in this dedicated prefix. Runtime overrides select them.
