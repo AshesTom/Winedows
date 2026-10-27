@@ -102,6 +102,26 @@ class Session:
             self.env.update(XCURSOR_THEME=self.cursor_theme)
         else:
             self.cursor_theme = None
+        # Qt applications draw their widgets with the shell's current visual
+        # style and system colours (qt-style/, built by scripts/setup.sh); it
+        # reads them from this prefix and follows Display Properties' changes.
+        styles = ROOT / '.local/qt-style'
+        if config.get('qt_style', True) and (styles / 'styles/libwin4wine-xp.so').is_file():
+            self.env['QT_PLUGIN_PATH'] = os.pathsep.join(
+                filter(None, (str(styles), self.env.get('QT_PLUGIN_PATH'))))
+            self.env.update(QT_STYLE_OVERRIDE='Win4Wine-XP', WIN4WINE_PREFIX=str(self.prefix))
+        # GTK 3 applications take a theme made from the same style
+        # (qt-style/tools/gtktheme.cpp), which XSETTINGS names (bridge-wm owns
+        # it) so that they follow its changes; the Wayland session names it
+        # in GTK_THEME, read when an application starts. XP's scroll bars are
+        # always shown.
+        self.gtk_theme = ROOT / '.local/qt-style/bin/xpstyle-gtk'
+        if config.get('gtk_style', True) and self.gtk_theme.is_file():
+            self.env.update(WIN4WINE_PREFIX=str(self.prefix), GTK_OVERLAY_SCROLLING='0')
+            if self.compositor:
+                self.env['GTK_THEME'] = 'Win4Wine-XP'
+        else:
+            self.gtk_theme = None
         # Linux applications take the XP shell's UI font: MS UI Gothic on
         # Japanese XP, Tahoma on English XP (the prefix's "language").
         self.linux_font = config.get('linux_font', 'Tahoma' if self.language() == 'en' else 'MS UI Gothic')
@@ -657,6 +677,9 @@ class Session:
         # Linux tray icons (StatusNotifierItem) reach the XP notification
         # area through the proxy; the input method shows its mode there.
         self.spawn(['python3', str(ROOT / 'bridge-wm/tray.py'), '--ipc', str(self.ipc)], 'tray')
+        # The GTK 3 theme, after the WM has claimed XSETTINGS
+        if self.gtk_theme:
+            self.spawn([str(self.gtk_theme), '--watch'], 'gtk-theme')
         # Before any application asks the wallet for its keys
         with (self.state / 'wallet.log').open('ab') as log:
             wallet.unlock(self.wallet, self.env, log)

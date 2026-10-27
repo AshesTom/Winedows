@@ -143,6 +143,8 @@ Restart the display manager (or reboot).
 | `welcome_screen` | `true` | show XP's screens after login and while logging off (Windows 7's "Welcome", "Logging off" and so on for the Windows 7 shell) |
 | `oobe` | `true` | show XP's Windows Welcome (intro video, music, first setup pages) in the prefix's first session; when done it writes `oobe.json` in the prefix (delete it to see it again) |
 | `cursor_theme` | `win4wine-xp` | cursor theme; `null` for none |
+| `qt_style` | `true` | Qt applications draw their widgets with the shell's current visual style and system colours ([qt-style/](../../qt-style/README.md)), and follow Display Properties' changes; `false` keeps Qt's own style |
+| `gtk_style` | `true` | GTK 3 applications take a theme made from the same style (XSETTINGS names it, so they follow its changes; the Wayland session sets it when they start) and always-visible scroll bars; `false` keeps the user's GTK theme |
 | `shutdown_command`, `reboot_command` | `systemctl poweroff` / `reboot` | commands run by Turn Off Computer |
 | `outputs` | (none) | the Wayland session's settings per output, e.g. `{"HDMI-A-1": {"scale": 1.5}, "DP-1": {"scale": 1, "position": "2560,0"}}` (`mode` too; `wlr-randr` lists the names) |
 | `shell` | `xp` | `reactos` for ReactOS's shell (setup.sh writes it into `reactos-session.json`) |
