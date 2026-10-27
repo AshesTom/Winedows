@@ -181,6 +181,8 @@ arch_packages() {
         # the session: X, the WM and tray bridge, recovery terminal, root cursor
         xorg-server xorg-xsetroot xorg-setxkbmap xterm python python-xlib
         python-gobject glib2 gdk-pixbuf2 librsvg
+        # Windows Welcome at the first session: its pages, intro video and music (WMV and WMA)
+        python-cairo pango gstreamer gst-plugins-base gst-plugins-good gst-plugins-ugly gst-libav
     )
     # 7z: 7zip, unless p7zip (which conflicts with it) already gives one
     command -v 7z >/dev/null || packages+=(7zip)
@@ -233,6 +235,9 @@ else
         # the session: X, the WM and tray bridge, recovery terminal, root cursor
         xserver-xorg x11-xserver-utils x11-xkb-utils xterm python3 python3-xlib
         python3-gi gir1.2-glib-2.0 gir1.2-gdkpixbuf-2.0 librsvg2-common
+        # Windows Welcome at the first session: its pages, intro video and music (WMV and WMA)
+        python3-gi-cairo gir1.2-pango-1.0 gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base
+        gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly gstreamer1.0-libav
         locales
     )
     if [[ $wayland == yes ]]; then

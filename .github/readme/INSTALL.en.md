@@ -141,6 +141,7 @@ Restart the display manager (or reboot).
 | `linux_font` | `MS UI Gothic` (`Tahoma` for English XP) | font of Linux applications; `null` leaves it alone |
 | `linux_menu` | `true` | list Linux applications in the Start menu |
 | `welcome_screen` | `true` | show XP's screens after login and while logging off (Windows 7's "Welcome", "Logging off" and so on for the Windows 7 shell) |
+| `oobe` | `true` | show XP's Windows Welcome (intro video, music, first setup pages) in the prefix's first session; when done it writes `oobe.json` in the prefix (delete it to see it again) |
 | `cursor_theme` | `win4wine-xp` | cursor theme; `null` for none |
 | `shutdown_command`, `reboot_command` | `systemctl poweroff` / `reboot` | commands run by Turn Off Computer |
 | `outputs` | (none) | the Wayland session's settings per output, e.g. `{"HDMI-A-1": {"scale": 1.5}, "DP-1": {"scale": 1, "position": "2560,0"}}` (`mode` too; `wlr-randr` lists the names) |

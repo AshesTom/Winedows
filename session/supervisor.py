@@ -111,6 +111,8 @@ class Session:
         self.processes = []
         # XP's Welcome screen covers the shell's start and the session's end (greeter/xp-splash.py).
         self.welcome_screen = config.get('welcome_screen', True) and self.shell['welcome']
+        # XP's Windows Welcome (intro video, music, first pages) before the prefix's first shell.
+        self.oobe = config.get('oobe', True) and self.shell['welcome']
         self.welcome = None
         self.powering_off = False
         self.wine_envs = [self.env]
@@ -469,6 +471,22 @@ class Session:
                 pass
             time.sleep(0.05)
 
+    def windows_welcome(self):
+        """XP's Windows Welcome, as XP showed it once after setup (greeter/xp-oobe.py).
+
+        It runs until its Finish, which writes the prefix's oobe.json; until
+        then each session shows it again. Without its files it ends at once."""
+        if not self.oobe or (self.prefix / 'oobe.json').exists():
+            return
+        if self.cursor_theme and shutil.which('xsetroot') and not self.compositor:
+            subprocess.run(['xsetroot', '-cursor_name', 'left_ptr'], env=self.env, check=False)
+        self.status('oobe')
+        oobe = self.spawn([sys.executable, str(ROOT / 'greeter/xp-oobe.py'), str(self.prefix),
+                           '--wine', self.wine], 'oobe')
+        while not self.stopping and oobe.poll() is None:
+            self.wait((oobe,))
+        self.halt(oobe)
+
     def tell_welcome(self, word):
         """Change the Welcome screen's line: 'applying' and 'welcome' while
         the session starts, 'saving' and 'shutdown' while it ends."""
@@ -604,6 +622,9 @@ class Session:
             # win4wine's labwc manages the windows; it ends the session when this exits.
             wm = None
             self.configure_outputs()
+        self.windows_welcome()
+        if self.stopping:
+            return
         self.show_welcome('logon')
         if not self.compositor:
             wm = self.spawn(['python3', str(ROOT / 'bridge-wm/wm.py'), '--ipc', str(self.ipc)] +

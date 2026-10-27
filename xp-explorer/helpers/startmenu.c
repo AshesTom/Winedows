@@ -346,24 +346,40 @@ static int recent(XPStartMenuPin *pins)
     DWORD managed_count = read_list(L"Pins", managed, MAX_LIST), seed_count = read_list(L"Seeds", seeds, MAX_LIST);
     DWORD wanted = 6, size = sizeof(wanted), chosen_count = 0;
 
-    /* XP's setup populates the lower column with familiar programs until
-     * enough usage history exists. Use the shortcuts installed by extras.py
-     * (XP's own, Windows Messenger itself rather than MSN's setup); after
-     * that, UserAssist's most-used programs take their places. */
-    if (!seed_count)
+    /* XP's first logon fills the six slots from its default list (the
+     * PROMFU32 strings of xpsp1res.dll, read by CreateInitialMFU in
+     * explorer\desktop2\proglist.cpp), in its order, skipping the shortcuts
+     * that are not there and the Internet and E-mail programs only. Internet
+     * Explorer, first in that list, is the browser XP leaves out; Set Program
+     * Access and Defaults is in the right column here. MSN is the shortcut
+     * msnmsn.inf names. After that, UserAssist's most-used programs take
+     * their places. */
+    BOOL xp_defaults = !seed_count;
+    if (xp_defaults)
     {
         static const WCHAR *defaults[] = {
+            L"Accessories\\Media Center\\Media Center.lnk",
+            L"Windows Journal.lnk",
+            L"Get Going with Tablet PC.lnk",
+            L"Get Online with MSN.lnk",
+            L"MSN Explorer.lnk",
+            L"MSN.lnk",
             L"Windows Media Player.lnk",
             L"Windows Messenger.lnk",
             L"Accessories\\Tour Windows XP.lnk",
+            L"Accessories\\Windows Movie Maker.lnk",
             L"Accessories\\System Tools\\Files and Settings Transfer Wizard.lnk"
         };
+        static const int folders[] = { CSIDL_PROGRAMS, CSIDL_COMMON_PROGRAMS };
         WCHAR folder[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_COMMON_PROGRAMS, NULL, SHGFP_TYPE_CURRENT, folder)))
-            for (unsigned i = 0; i < ARRAYSIZE(defaults) && seed_count < MAX_LIST; i++)
+        for (unsigned i = 0; i < ARRAYSIZE(defaults) && seed_count < MAX_LIST; i++)
+            for (unsigned j = 0; j < ARRAYSIZE(folders); j++)
             {
+                if (FAILED(SHGetFolderPathW(NULL, folders[j], NULL, SHGFP_TYPE_CURRENT, folder))) continue;
                 swprintf(seeds[seed_count], MAX_PATH, L"%ls\\%ls", folder, defaults[i]);
-                if (GetFileAttributesW(seeds[seed_count]) != INVALID_FILE_ATTRIBUTES) seed_count++;
+                if (GetFileAttributesW(seeds[seed_count]) == INVALID_FILE_ATTRIBUTES) continue;
+                seed_count++;
+                break;
             }
     }
 
@@ -394,8 +410,9 @@ static int recent(XPStartMenuPin *pins)
     {
         WCHAR target[MAX_PATH];
         BOOL dup = FALSE;
+        /* XP's own defaults include MSN's setup ("Get Online with MSN"). */
         if (GetFileAttributesW(seeds[i]) == INVALID_FILE_ATTRIBUTES || !link_target(seeds[i], target) ||
-            is_excluded(seeds[i]) || is_excluded(target) || is_setup(target))
+            is_excluded(seeds[i]) || is_excluded(target) || (!xp_defaults && is_setup(target)))
             continue;
         for (DWORD j = 0; j < chosen_count; j++) if (!_wcsicmp(targets[j], target)) dup = TRUE;
         if (dup) continue;
