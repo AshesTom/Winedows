@@ -13,6 +13,7 @@ from pathlib import Path
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -471,6 +472,63 @@ class Session:
                                 '/ve', '/t', 'REG_EXPAND_SZ', '/d', sound, '/f'],
                                env=self.env, stdout=log, stderr=subprocess.STDOUT, timeout=60, check=False)
 
+    def tray_defaults(self):
+        """XP's notification area hides the icons that stay inactive (the
+        Hide inactive icons setting); the volume, network and power icons
+        of xptray, which the system's own icons are on XP, are set to
+        Always show once, as a user does in Customize Notifications. The
+        shell reads its icons' settings (IconStreams, a record per icon it
+        has shown: the program, the icon's ID, the setting) when it starts;
+        they are there from the second session on."""
+        key = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\TrayNotify'
+        marker = (r'HKCU\Software\win4wine', 'TrayDefaults')
+        if self.shell['marker'] != 'xp-shell.json':
+            return
+        if (not saved_registry.server_running(self.prefix)
+                and saved_registry.user_value(self.prefix, marker[0][5:], marker[1]) == '1'):
+            return
+        try:
+            query = subprocess.run([self.wine, 'reg', 'query', key, '/v', 'IconStreams'], env=self.env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False, text=True)
+            done = subprocess.run([self.wine, 'reg', 'query', marker[0], '/v', marker[1]], env=self.env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False, text=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if done.returncode == 0 and 'REG_SZ' in done.stdout and done.stdout.split('REG_SZ', 1)[1].strip() == '1':
+            return
+        stream = next((line.split('REG_BINARY', 1)[1].strip() for line in query.stdout.splitlines()
+                       if 'REG_BINARY' in line), '') if query.returncode == 0 else ''
+        try:
+            data = bytearray.fromhex(stream)
+        except ValueError:
+            return
+        # A 20-byte header (its size, ..., the count of records, their offset),
+        # then records of 1084 bytes: the program's path (260 UTF-16 characters),
+        # the icon's ID, the setting (0 hide when inactive, 1 always hide, 2 always show).
+        if len(data) < 20:
+            return
+        header, count, offset = struct.unpack_from('<I8xII', data)
+        size = 1084
+        if header != 20 or offset != 20 or len(data) < offset + count * size:
+            return
+        found = False
+        for i in range(count):
+            at = offset + i * size
+            path = data[at:at + 520].decode('utf-16-le', 'replace').split('\0', 1)[0]
+            uid, = struct.unpack_from('<I', data, at + 520)
+            if path.lower().endswith('\\xptray.exe') and uid in (1, 2, 3):  # power, network, volume
+                struct.pack_into('<I', data, at + 524, 2)
+                found = True
+        if not found:
+            return
+        try:
+            for args in (['add', key, '/v', 'IconStreams', '/t', 'REG_BINARY', '/d', data.hex().upper(), '/f'],
+                         ['add', marker[0], '/v', marker[1], '/d', '1', '/f']):
+                subprocess.run([self.wine, 'reg', *args], env=self.env, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=60, check=True)
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            pass
+
     def sound_scheme_repaired(self):
         """Whether the saved registry has what repair_sound_scheme writes, as
         it has after the first session: then no Wine program runs for it."""
@@ -728,6 +786,7 @@ class Session:
         self.keyboard()
         self.tell_welcome('progress 30 Sounds')
         self.repair_sound_scheme()
+        self.tray_defaults()
         self.tell_welcome('progress 70 Start menu')
         self.start_user_picture()
         if self.linux_menu:
