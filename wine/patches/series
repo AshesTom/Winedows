@@ -183,3 +183,4 @@
 0183-quartz-run-after-cant-cue.patch
 0184-dlls-xp-comctl32-v6-imports.patch
 0185-win32u-drawiconex-flicker-free-height.patch
+0186-ntdll-folder-settings-in-prefix.patch

@@ -303,6 +303,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0181 | uxtheme: XP のセッションで、ビジュアル スタイルが名前を挙げないシステム カラーを XP の uxtheme の既定値（loader.cpp の DefaultColors。ツールチップは 255 255 225 の地に黒、リンクは 0 0 128 など）にする。XP は 31 色をすべて設定するが、Wine はスタイルの色だけを設定し、前の配色の色が残った（Eggplant の後、Luna のツールチップが白地に紫の文字だった）。0160 のリンクの色もこの一つ | あり（XP のセッション） |
 | 0182 | win32u, user32: XP の xxxSendMinRectMessages が shell hook の窓に送る WM_KLUDGEMINRECT（0x008B）の RECT を、WM_SIZING と同じくプロセスの間で行きと帰りに渡す（wow64win の 32 ビットの受け手も）。DefWindowProcA/W は XP の user32（clmsg.c）と同じく、RECT を二つの POINTS にした SHELLHOOKINFO で窓自身に "SHELLHOOK" の HSHELL_GETMINRECT を送り、シェルが書いた矩形を戻す。XP のタスク バンドはその窓のタスクバーのボタン（まとめたときはグループのボタン）の矩形を答える。0052 のアニメーションがこれでボタンへ飛ぶ（以前はタスク バンドの左端 160 画素に向かっていた） | なし |
 | 0183 | quartz: フィルター グラフの非同期の実行で、フィルターが VFW_S_CANT_CUE（一時停止はしたがデータを先に送れない）を返したら、Run() と同じく待たずにグラフを実行する。Windows Media Player 9 の WMRenderer Source Filter は VFW_S_STATE_INTERMEDIATE の後に VFW_S_CANT_CUE を返し、Wine はグラフを実行しないまま待つのをやめていたので、DirectSound のレンダラーが一時停止のままで、どのファイルも 0:00 から進まなかった | なし |
+| 0186 | ntdll: prefix の `folder-settings/<名前>` がリンクするフォルダー（ホームの ~/Pictures と ~/Music）を system のフォルダーとし、その中に desktop.ini が無ければ `folder-settings/<名前>.ini` を desktop.ini として開く。属性の設定は何も変えず、リンク先には何も書かない（`prefix/stage.py` が XP の InfoTip・IconFile・IconIndex と、CSIDL の名前の LocalizedResourceName（shell32 の 21779 と 21790）を書く）。プロファイルの Pictures と Music はホームへのリンクで desktop.ini が無く、XP のスタートメニューとフォルダーで「マイ ピクチャ」「マイ ミュージック」が「Pictures」「Music」と普通のフォルダーのアイコンだった | なし（prefix の folder-settings） |
 
 
 ## 並び順の考え方
