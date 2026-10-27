@@ -68,6 +68,14 @@ Running GTK 3 applications switch at once. `~/.local/share/themes/Win4Wine-XP`
 links to the current one, for `GTK_THEME` in the Wayland session.
 `session.json`'s `"gtk_style": false` turns it off.
 
+Firefox, GTK 4 and libadwaita applications take their light or dark look from
+the desktop portal's colour scheme (`org.gnome.desktop.interface
+color-scheme`, which KDE sets from its colour scheme): with `prefer-dark`
+Firefox leaves the GTK theme for Adwaita's dark one. XP has no dark mode, so
+the session sets `default` while it runs and gives the user's value back when
+it ends (`session/appearance.py`). The theme's `gtk-dark.css` is the same
+look, for GTK 3 applications that prefer a dark theme.
+
 ## Building and trying it
 
 `scripts/setup.sh` builds it (Qt 6 development files and CMake); by hand:

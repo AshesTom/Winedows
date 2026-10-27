@@ -534,6 +534,12 @@ bool Generator::write()
     if (!file.open(QIODevice::WriteOnly))
         return false;
     file.write(text.toUtf8());
+    // The same look for applications that prefer a dark theme: XP has none.
+    QSaveFile dark(m_dir + QStringLiteral("/gtk-3.0/gtk-dark.css"));
+    if (dark.open(QIODevice::WriteOnly)) {
+        dark.write("@import url(\"gtk.css\");\n");
+        dark.commit();
+    }
     QSaveFile index(m_dir + QStringLiteral("/index.theme"));
     if (index.open(QIODevice::WriteOnly)) {
         index.write("[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Win4Wine XP\nComment=The XP shell's visual style\n\n"
@@ -555,7 +561,7 @@ QString lookId(const Look &look)
         key += name.toUtf8() + '=' + look.colours.value(name).name().toUtf8() + ';';
     QFileInfo style(look.stylePath);
     key += QByteArray::number(style.lastModified().toSecsSinceEpoch());
-    key += "v6";   // bumped when the generator's output changes
+    key += "v7";   // bumped when the generator's output changes
     return QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex().left(10));
 }
 

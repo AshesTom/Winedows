@@ -20,6 +20,7 @@ import time
 from xml.sax.saxutils import escape
 from Xlib import X, display, error
 
+import appearance
 import dpi
 import saved_registry
 import wallet
@@ -680,6 +681,8 @@ class Session:
         # The GTK 3 theme, after the WM has claimed XSETTINGS
         if self.gtk_theme:
             self.spawn([str(self.gtk_theme), '--watch'], 'gtk-theme')
+            # No dark preference, or Firefox leaves the theme (session/appearance.py)
+            appearance.light(self.state, self.env)
         # Before any application asks the wallet for its keys
         with (self.state / 'wallet.log').open('ab') as log:
             wallet.unlock(self.wallet, self.env, log)
@@ -854,6 +857,8 @@ class Session:
                 # system ends the session, as Windows shows it until the power goes off.
                 select.select([self.wakeup[0]], [], [], POWER_OFF_WAIT)
         finally:
+            if self.gtk_theme:
+                appearance.restore(self.state, self.env)
             # The log-off screen leaves its last image as the root window's background.
             self.hide_welcome()
             for f in self.logs:
