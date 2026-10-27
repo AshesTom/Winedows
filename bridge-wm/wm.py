@@ -194,6 +194,17 @@ class Manager:
             return 'dock'
         return 'normal'
 
+    def activates(self, c):
+        """Whether a click or its map gives the client the focus. Wine maps
+        some tooltips as managed windows (the task pane's, ~1 s after a click
+        on a group's arrow): on XP a tooltip never takes the activation, and
+        focusing it made its owner inactive while it was shown."""
+        try:
+            cls = bytes(self.prop(c['w'], '_WIN4WINE_CLASS')).strip(b'\0').lower()
+        except error.XError:
+            return False
+        return cls != b'tooltips_class32'
+
     def overlay_window(self, w):
         """Remember an override-redirect shell window shown above the taskbar.
 
@@ -261,7 +272,7 @@ class Manager:
                 self.configure(client, x=x, y=y, width=width, height=height)
         self.setprop(w, 'WM_STATE', self.atom('WM_STATE'), [1, 0])
         w.map()
-        if client['kind'] in ('normal', 'popup'):
+        if client['kind'] in ('normal', 'popup') and self.activates(client):
             self.focus(w)
         self.restack()
         self.workarea()
@@ -529,6 +540,8 @@ class Manager:
                 return
             w = native['w']
         c = self.clients.get(w.id)
+        if c and not self.activates(c):
+            return
         if c and c['kind'] == 'popup':
             # An XP Start popup needs real X keyboard focus for Wine activation,
             # without becoming the active application task or an Alt+Tab entry.
@@ -614,7 +627,7 @@ class Manager:
             w.kill_client()
 
     def unmanage(self, window_id):
-        self.clients.pop(window_id, None)
+        gone = self.clients.pop(window_id, None)
         self.previous_icons.pop(window_id, None)
         (self.ipc / f'icon-{window_id:x}.argb').unlink(missing_ok=True)
         (self.ipc / f'icon-{window_id:x}-small.argb').unlink(missing_ok=True)
@@ -629,8 +642,13 @@ class Manager:
         if self.active == window_id:
             # Focus the next window still shown, not a minimized one (Wine
             # withdraws a minimized window that it restores, and maps it again).
+            # An owned window gives the activation back to its owner, as on XP.
             self.active = 0
-            self.focus_visible()
+            owner = self.clients.get(gone['owner']) if gone and gone.get('owner') else None
+            if owner and owner['kind'] == 'normal' and not owner['hidden']:
+                self.focus(owner['w'])
+            else:
+                self.focus_visible()
         self.restack()
         self.workarea()
 
