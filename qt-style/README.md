@@ -101,7 +101,7 @@ In a running session, an application started by the session gets it; from
 any terminal:
 
 ```sh
-QT_PLUGIN_PATH=$PWD/.local/qt-style QT_STYLE_OVERRIDE=Win4Wine-XP WIN4WINE_PREFIX=$PWD/.local/prefix dolphin
+QT_PLUGIN_PATH=$PWD/.local/qt-style QT_STYLE_OVERRIDE=Win4WineXP QML_IMPORT_PATH=$PWD/.local/qt-style/qml WIN4WINE_PREFIX=$PWD/.local/prefix dolphin
 ```
 
 `xpstyle-gallery` shows the widgets side by side (`--out F.png` captures

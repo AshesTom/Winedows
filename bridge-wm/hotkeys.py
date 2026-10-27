@@ -145,6 +145,7 @@ class Hotkeys:
         self.d, self.root = d, root
         self.bindings = {}   # (keycode, mask) -> command
         self.grabbed = []
+        self.children = []   # the commands started, reaped as they end
         self.stamp = None
         if not SHORTCUTS.exists():
             self.seed()
@@ -195,7 +196,8 @@ class Hotkeys:
                 self.grabbed.append((code, mask | lock))
 
     def check(self):
-        """Read the file again if it changed."""
+        """Read the file again if it changed; reap the commands that ended."""
+        self.children = [c for c in self.children if c.poll() is None]
         try:
             stamp = SHORTCUTS.stat().st_mtime_ns
         except OSError:
@@ -208,6 +210,7 @@ class Hotkeys:
         command = self.bindings.get((e.detail, e.state & RELEVANT))
         if command is None:
             return False
-        subprocess.Popen(['sh', '-c', command], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+        self.children.append(subprocess.Popen(['sh', '-c', command], stdin=subprocess.DEVNULL,
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                              start_new_session=True))
         return True

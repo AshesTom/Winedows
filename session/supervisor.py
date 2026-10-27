@@ -110,7 +110,10 @@ class Session:
         if config.get('qt_style', True) and (styles / 'styles/libwin4wine-xp.so').is_file():
             self.env['QT_PLUGIN_PATH'] = os.pathsep.join(
                 filter(None, (str(styles), self.env.get('QT_PLUGIN_PATH'))))
-            self.env.update(QT_STYLE_OVERRIDE='Win4Wine-XP', WIN4WINE_PREFIX=str(self.prefix))
+            # Qt Quick takes the same name for its controls' style (qml/Win4WineXP).
+            self.env['QML_IMPORT_PATH'] = os.pathsep.join(
+                filter(None, (str(styles / 'qml'), self.env.get('QML_IMPORT_PATH'))))
+            self.env.update(QT_STYLE_OVERRIDE='Win4WineXP', WIN4WINE_PREFIX=str(self.prefix))
         # GTK 3 applications take a theme made from the same style
         # (qt-style/tools/gtktheme.cpp), which XSETTINGS names (bridge-wm owns
         # it) so that they follow its changes; the Wayland session names it
@@ -190,10 +193,11 @@ class Session:
         fonts, such as MS UI Gothic, serve Linux applications too. The
         system configuration, and through it the user's, still applies.
         With XP's ClearType, fonts are drawn in its RGB subpixel order.
-        Without ClearType, GTK and Qt applications draw text unsmoothed, in
-        whole pixels with the fonts' own hinting, as XP's shell does; the
-        session's environment has FreeType's classic TrueType interpreter
-        for it."""
+        Without ClearType, text is smoothed as XP's Standard smoothing does
+        (grayscale), except XP's UI fonts up to 16 px, which XP draws in whole
+        pixels (Tahoma's gasp table smooths only above that): Tahoma and MS UI
+        Gothic, hinted by the fonts with FreeType's classic TrueType
+        interpreter (the session's environment)."""
         directory = self.state / 'fontconfig'
         directory.mkdir(mode=0o700, exist_ok=True)
         family = escape(self.linux_font)
@@ -210,10 +214,15 @@ class Session:
                 + ('  <match target="font"><edit name="rgba" mode="assign"><const>rgb</const></edit>'
                    '<edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match>\n'
                    if self.cleartype else
-                   '  <match target="font"><edit name="antialias" mode="assign"><bool>false</bool></edit>'
-                   '<edit name="hinting" mode="assign"><bool>true</bool></edit>'
-                   '<edit name="hintstyle" mode="assign"><const>hintfull</const></edit>'
-                   '<edit name="autohint" mode="assign"><bool>false</bool></edit></match>\n')
+                   '  <match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit>'
+                   '<edit name="rgba" mode="assign"><const>none</const></edit></match>\n'
+                   + ''.join(f'  <match target="font"><test name="family"><string>{name}</string></test>'
+                             '<test name="pixelsize" compare="less_eq"><double>16</double></test>'
+                             '<edit name="antialias" mode="assign"><bool>false</bool></edit>'
+                             '<edit name="hinting" mode="assign"><bool>true</bool></edit>'
+                             '<edit name="hintstyle" mode="assign"><const>hintfull</const></edit>'
+                             '<edit name="autohint" mode="assign"><bool>false</bool></edit></match>\n'
+                             for name in ('Tahoma', 'MS UI Gothic', 'MS Shell Dlg', 'MS Shell Dlg 2')))
                 + '</fontconfig>\n')
         target = directory / 'fonts.conf'
         tmp = directory / 'fonts.tmp'

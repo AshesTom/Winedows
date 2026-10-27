@@ -44,4 +44,6 @@ add_executable(xpstyle-gallery tools/gallery.cpp)
 target_link_libraries(xpstyle-gallery PRIVATE win4wine-xp-core)
 
 install(TARGETS win4wine-xp LIBRARY DESTINATION styles)
+# Qt Quick's controls style of the same name (QML_IMPORT_PATH)
+install(DIRECTORY qml/Win4WineXP DESTINATION qml)
 install(TARGETS xpstyle-gallery xpstyle-gtk RUNTIME DESTINATION bin)
