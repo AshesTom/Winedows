@@ -68,6 +68,19 @@ Running GTK 3 applications switch at once. `~/.local/share/themes/Win4Wine-XP`
 links to the current one, for `GTK_THEME` in the Wayland session.
 `session.json`'s `"gtk_style": false` turns it off.
 
+Many applications add CSS of their own (cachyos-hello's buttons have no
+border and rounded corners), at a priority above any theme's. The session's
+GTK module (`gtk-module/`, in `GTK_MODULES`) lays the theme's
+`win4wine.css`, XP's parts alone, just above the applications' CSS (the
+user's own `gtk.css` stays above it) and follows the theme XSETTINGS names.
+Switches, which XP has not, are a field with a push button for a knob.
+
+The parts are XP's to the pixel: a GTK or Qt push button is the same column
+of pixels as the shell's own (uxtheme's), border to border. So that text is
+too, the session's fontconfig draws it as XP's Standard font smoothing does
+(whole pixels up to 16 px, the fonts' own hinting with FreeType's classic
+TrueType interpreter); with ClearType, in its RGB subpixels.
+
 Firefox, GTK 4 and libadwaita applications take their light or dark look from
 the desktop portal's colour scheme (`org.gnome.desktop.interface
 color-scheme`, which KDE sets from its colour scheme): with `prefer-dark`

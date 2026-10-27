@@ -119,6 +119,12 @@ class Session:
         self.gtk_theme = ROOT / '.local/qt-style/bin/xpstyle-gtk'
         if config.get('gtk_style', True) and self.gtk_theme.is_file():
             self.env.update(WIN4WINE_PREFIX=str(self.prefix), GTK_OVERLAY_SCROLLING='0')
+            # Its GTK module lays XP's parts over the applications' own CSS
+            # (qt-style/gtk-module/), which a theme cannot override.
+            modules = ROOT / '.local/qt-style/gtk-3.0'
+            if (modules / 'modules/libwin4wine-xp-gtk.so').is_file():
+                self.env['GTK_PATH'] = os.pathsep.join(filter(None, (str(modules), self.env.get('GTK_PATH'))))
+                self.env['GTK_MODULES'] = ':'.join(filter(None, (self.env.get('GTK_MODULES'), 'win4wine-xp-gtk')))
             if self.compositor:
                 self.env['GTK_THEME'] = 'Win4Wine-XP'
         else:
@@ -159,6 +165,9 @@ class Session:
         self.tray_window = None
         if self.linux_font:
             self.env['FONTCONFIG_FILE'] = str(self.font_config())
+            if not self.cleartype:
+                # Whole-pixel text hinted as Windows hints it (font_config)
+                self.env['FREETYPE_PROPERTIES'] = 'truetype:interpreter-version=35'
         self.status('starting')
 
     def language(self):
@@ -180,7 +189,11 @@ class Session:
         The prefix's Fonts directory is added so that the XP shell's own
         fonts, such as MS UI Gothic, serve Linux applications too. The
         system configuration, and through it the user's, still applies.
-        With XP's ClearType, fonts are drawn in its RGB subpixel order."""
+        With XP's ClearType, fonts are drawn in its RGB subpixel order.
+        With XP's Standard smoothing, text up to 16 px is drawn as XP draws
+        it, in whole pixels with the font's own hinting (Tahoma's gasp table
+        smooths only above that); the session's environment has FreeType's
+        classic TrueType interpreter for it."""
         directory = self.state / 'fontconfig'
         directory.mkdir(mode=0o700, exist_ok=True)
         family = escape(self.linux_font)
@@ -196,7 +209,12 @@ class Session:
                    f'<double>{self.dpi}</double></edit></match>\n')
                 + ('  <match target="font"><edit name="rgba" mode="assign"><const>rgb</const></edit>'
                    '<edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match>\n'
-                   if self.cleartype else '')
+                   if self.cleartype else
+                   '  <match target="font"><test name="pixelsize" compare="less_eq"><double>16</double></test>'
+                   '<edit name="antialias" mode="assign"><bool>false</bool></edit>'
+                   '<edit name="hinting" mode="assign"><bool>true</bool></edit>'
+                   '<edit name="hintstyle" mode="assign"><const>hintfull</const></edit>'
+                   '<edit name="autohint" mode="assign"><bool>false</bool></edit></match>\n')
                 + '</fontconfig>\n')
         target = directory / 'fonts.conf'
         tmp = directory / 'fonts.tmp'

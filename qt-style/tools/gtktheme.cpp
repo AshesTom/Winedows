@@ -148,6 +148,7 @@ private:
     void ranges(QTextStream &css);
     void tabs(QTextStream &css);
     void menus(QTextStream &css);
+    void extras(QTextStream &css);
 
     Look m_look;
     QString m_dir;
@@ -492,6 +493,35 @@ void Generator::tabs(QTextStream &css)
         << "notebook { border: none; background: transparent; padding: 0; }\n\n";
 }
 
+void Generator::extras(QTextStream &css)
+{
+    const QColor window = sys("window", Qt::white), border = sys("buttonshadow", QColor(127, 157, 185));
+    const Part edit{QStringLiteral("edit"), QStringLiteral("edittext"), QStringLiteral("normal"), 1, {}};
+    const QColor field = partColour(edit, "bordercolor", border);
+    // Switches (XP has none): a field with a push button for its knob, the
+    // field in the selection colour when on.
+    css << "switch { border: 1px solid " << rgb(field) << "; border-radius: 0; background-color: " << rgb(window)
+        << "; background-image: none; box-shadow: none; padding: 0; min-width: 34px; min-height: 17px; color: transparent; outline-offset: -3px; }\n"
+        << "switch:checked { background-color: " << rgb(sys("hilight", QColor(49, 106, 197))) << "; }\n"
+        << "switch:disabled { background-color: " << rgb(sys("buttonface", window)) << "; }\n"
+        << "switch image { color: transparent; -gtk-icon-source: none; }\n";
+    const StateRule knob[] = {{"switch slider", "normal", 1}, {"switch:hover slider", "hot", 2},
+                              {"switch:active slider", "pressed", 3}, {"switch:disabled slider", "disabled", 4}};
+    for (const StateRule &r : knob)
+        css << r.selector << " { " << borderImage(QStringLiteral("switch-%1").arg(QLatin1String(r.state)),
+                                                {QStringLiteral("button"), QStringLiteral("pushbutton"), QLatin1String(r.state), r.id, {}}, false)
+            << " min-width: 15px; min-height: 15px; margin: 0; padding: 0; transition: none; }\n";
+    // XP's dialog buttons: 75 x 23 at 96 DPI.
+    const int wide = qMax(0, 75 * m_look.dpi / 96 - 12);
+    css << "dialog .dialog-action-area button, messagedialog .dialog-action-area button, .dialog-action-box button"
+        << " { min-width: " << wide << "px; }\n"
+        // Frames are XP's (the window manager's); no rounded corners or shadows of GTK's own.
+        << "window, window.csd, window.solid-csd, decoration, .titlebar, headerbar"
+        << " { border-radius: 0; box-shadow: none; transition: none; }\n"
+        << "button, check, radio, entry, scrollbar slider, scale slider, notebook tab, switch slider { transition: none; }\n"
+        << "headerbar button.titlebutton { border-image: none; background: transparent; }\n\n";
+}
+
 void Generator::menus(QTextStream &css)
 {
     // XP's flat menus: COLOR_MENU, a COLOR_BTNSHADOW line, COLOR_MENUHILIGHT items.
@@ -514,11 +544,8 @@ void Generator::menus(QTextStream &css)
 bool Generator::write()
 {
     QDir().mkpath(m_dir + QStringLiteral("/gtk-3.0"));
-    QString text;
-    QTextStream css(&text);
-    css << "/* Win4Wine XP: made by xpstyle-gtk from " << (m_r ? m_r->theme().path() : QStringLiteral("Windows Classic"))
-        << " and the session's system colours. Do not edit: it is made again when the shell's look changes. */\n"
-        << "@import url(\"resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained.css\");\n\n";
+    QString rules;
+    QTextStream css(&rules);
     colours(css);
     if (m_r) {
         buttons(css);
@@ -527,26 +554,32 @@ bool Generator::write()
         scrollbars(css);
         ranges(css);
         tabs(css);
+        extras(css);
     }
     menus(css);
     css.flush();
-    QSaveFile file(m_dir + QStringLiteral("/gtk-3.0/gtk.css"));
-    if (!file.open(QIODevice::WriteOnly))
-        return false;
-    file.write(text.toUtf8());
-    // The same look for applications that prefer a dark theme: XP has none.
-    QSaveFile dark(m_dir + QStringLiteral("/gtk-3.0/gtk-dark.css"));
-    if (dark.open(QIODevice::WriteOnly)) {
-        dark.write("@import url(\"gtk.css\");\n");
-        dark.commit();
-    }
+    const QByteArray header = "/* Win4Wine XP: made by xpstyle-gtk from "
+        + (m_r ? m_r->theme().path() : QStringLiteral("Windows Classic")).toUtf8()
+        + " and the session's system colours. Do not edit: it is made again when the shell's look changes. */\n";
+    auto put = [&](const QString &name, const QByteArray &text) {
+        QSaveFile file(m_dir + QStringLiteral("/gtk-3.0/") + name);
+        return file.open(QIODevice::WriteOnly) && file.write(text) == text.size() && file.commit();
+    };
+    // The theme: Adwaita under XP's parts. win4wine.css, XP's parts alone,
+    // is what the session's GTK module (gtk-module/) lays over the
+    // applications' own CSS, which a theme cannot override.
+    const bool ok = put(QStringLiteral("win4wine.css"), header + rules.toUtf8())
+        && put(QStringLiteral("gtk.css"), header + "@import url(\"resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained.css\");\n\n"
+                                               + rules.toUtf8())
+        // The same look for applications that prefer a dark theme: XP has none.
+        && put(QStringLiteral("gtk-dark.css"), "@import url(\"gtk.css\");\n");
     QSaveFile index(m_dir + QStringLiteral("/index.theme"));
     if (index.open(QIODevice::WriteOnly)) {
         index.write("[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Win4Wine XP\nComment=The XP shell's visual style\n\n"
                     "[X-GNOME-Metatheme]\nGtkTheme=" + QDir(m_dir).dirName().toUtf8() + "\n");
         index.commit();
     }
-    return file.commit();
+    return ok;
 }
 
 // An id for a look: a new theme directory (a new name) whenever it changes,
@@ -561,7 +594,7 @@ QString lookId(const Look &look)
         key += name.toUtf8() + '=' + look.colours.value(name).name().toUtf8() + ';';
     QFileInfo style(look.stylePath);
     key += QByteArray::number(style.lastModified().toSecsSinceEpoch());
-    key += "v7";   // bumped when the generator's output changes
+    key += "v8";   // bumped when the generator's output changes
     return QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex().left(10));
 }
 
