@@ -83,6 +83,7 @@ class Manager:
         # Their frames are redirected only while they move (frame_moves).
         self.redirect = redirect and self.d.has_extension('Composite')
         self.previous_classes = None
+        self.previous_owners = None
         self.overlays = {}  # override-redirect shell windows kept above the taskbar and Start menu:
                             # the Start button, the user picture and notification balloons/tooltips
                             # (unmanaged, so every restack would otherwise bury them under the taskbar)
@@ -238,7 +239,8 @@ class Manager:
         client['hidden'] = False
         if client['kind'] == 'normal' and not client['hwnd'] and self.fullscreen(client):
             self.fill_screen(client)
-        elif client['kind'] == 'normal' and client['owner'] and not client['hwnd'] and not client.get('placed'):
+        elif (client['kind'] == 'normal' and client['owner'] and not client['hwnd'] and not client.get('placed')
+              and not self.framed_owned(client)):
             # An owned Linux window has no frame; keep it inside the work area
             # (GTK's file chooser asks for a fixed size, larger than small screens),
             # centred on its owner unless it placed itself (GTK 4 does not).
@@ -299,6 +301,27 @@ class Manager:
             except error.XError:
                 owner = None
             c['owner'] = owner.id if owner else 0
+        if atom in (None, self.atom('_MOTIF_WM_HINTS'), self.atom('_NET_WM_WINDOW_TYPE')):
+            c['undecorated'] = self.undecorated(w)
+
+    def undecorated(self, w):
+        """Whether a window asks for no frame: _MOTIF_WM_HINTS without
+        decorations (client-side decorations, splash screens), or a type that
+        XP gives no caption (splash, notification, menus, tooltips)."""
+        hints = self.prop(w, '_MOTIF_WM_HINTS')
+        if len(hints) >= 3 and hints[0] & 2 and not hints[2]:
+            return True
+        bare = {self.atom(name) for name in (
+            '_NET_WM_WINDOW_TYPE_SPLASH', '_NET_WM_WINDOW_TYPE_NOTIFICATION', '_NET_WM_WINDOW_TYPE_TOOLTIP',
+            '_NET_WM_WINDOW_TYPE_DND', '_NET_WM_WINDOW_TYPE_COMBO', '_NET_WM_WINDOW_TYPE_POPUP_MENU',
+            '_NET_WM_WINDOW_TYPE_DROPDOWN_MENU', '_NET_WM_WINDOW_TYPE_MENU')}
+        return any(t in bare for t in self.prop(w, '_NET_WM_WINDOW_TYPE'))
+
+    def framed_owned(self, c):
+        """An owned window that XP would draw with a caption: a dialog, or an
+        application's second window. Its frame is owned by its owner's (no
+        taskbar button, kept above it), as Win32 owned windows are."""
+        return bool(c['owner']) and not c.get('undecorated') and c['owner'] in self.clients
 
     def configure(self, c, **values):
         """Configure a client and tell it its new root geometry (ICCCM)."""
@@ -872,6 +895,12 @@ class Manager:
                             ax, ay, awidth, aheight = self.area
                             x = ax + left + max(0, (awidth-left-right-width) // 2)
                             y = ay + top + max(0, (aheight-top-bottom-height) // 2)
+                        elif native['owner'] in self.clients and not self.positioned(native):
+                            # A dialog: centred on its owner, inside the work area.
+                            ox, oy, owidth, oheight = self.clients[native['owner']]['geometry'][:4]
+                            ax, ay, awidth, aheight = self.area
+                            x = max(ax + left, min(ox + (owidth - width) // 2, ax + awidth - right - width))
+                            y = max(ay + top, min(oy + (oheight - height) // 2, ay + aheight - bottom - height))
                         elif self.positioned(native):
                             # Keep an explicit position, but keep the first
                             # caption visible above content placed at 0,0.
@@ -991,10 +1020,13 @@ class Manager:
             focused_id = focused.id if hasattr(focused, 'id') else 0
         except error.XError:
             focused_id = 0
+        owners = []
         for i, c in self.clients.items():
             w = c['w']
-            if c['kind'] != 'normal' or c['hwnd'] or c['owner']:
+            if c['kind'] != 'normal' or c['hwnd'] or (c['owner'] and not self.framed_owned(c)):
                 continue
+            if c['owner']:
+                owners.append(f'{i:x}\t{c["owner"]:x}\n')
             if c['icon_dirty']:
                 # The caption's 16x16 icon beside the big one; the proxy
                 # reads both when the big file changes, so it goes last.
@@ -1013,6 +1045,14 @@ class Manager:
                 c['icon_dirty'] = False
             lines.append(f'{i:x}\t{int(c["hidden"])}\t{int(i == self.active and i == focused_id)}\t{c["title"]}\n')
             classes.append(f'{i:x}\t{c.get("class", "")}\n')
+        # The owned windows' owners, read by the proxy before it makes their
+        # frames (windows.tsv keeps its format).
+        text = ''.join(owners)
+        if text != self.previous_owners:
+            temp = self.ipc / 'owners.tmp'
+            temp.write_text(text, encoding='utf-8')
+            temp.replace(self.ipc / 'owners.tsv')
+            self.previous_owners = text
         text = ''.join(classes)
         if text != self.previous_classes:
             temp = self.ipc / 'classes.tmp'

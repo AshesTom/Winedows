@@ -77,9 +77,9 @@ Switches, which XP has not, are a field with a push button for a knob.
 
 The parts are XP's to the pixel: a GTK or Qt push button is the same column
 of pixels as the shell's own (uxtheme's), border to border. So that text is
-too, the session's fontconfig draws it as XP's Standard font smoothing does
-(whole pixels up to 16 px, the fonts' own hinting with FreeType's classic
-TrueType interpreter); with ClearType, in its RGB subpixels.
+too, without ClearType the session's fontconfig draws it unsmoothed (whole
+pixels, the fonts' own hinting with FreeType's classic TrueType
+interpreter), as the shell does; with ClearType, in its RGB subpixels.
 
 Firefox, GTK 4 and libadwaita applications take their light or dark look from
 the desktop portal's colour scheme (`org.gnome.desktop.interface

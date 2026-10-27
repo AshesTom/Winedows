@@ -190,10 +190,10 @@ class Session:
         fonts, such as MS UI Gothic, serve Linux applications too. The
         system configuration, and through it the user's, still applies.
         With XP's ClearType, fonts are drawn in its RGB subpixel order.
-        With XP's Standard smoothing, text up to 16 px is drawn as XP draws
-        it, in whole pixels with the font's own hinting (Tahoma's gasp table
-        smooths only above that); the session's environment has FreeType's
-        classic TrueType interpreter for it."""
+        Without ClearType, GTK and Qt applications draw text unsmoothed, in
+        whole pixels with the fonts' own hinting, as XP's shell does; the
+        session's environment has FreeType's classic TrueType interpreter
+        for it."""
         directory = self.state / 'fontconfig'
         directory.mkdir(mode=0o700, exist_ok=True)
         family = escape(self.linux_font)
@@ -210,8 +210,7 @@ class Session:
                 + ('  <match target="font"><edit name="rgba" mode="assign"><const>rgb</const></edit>'
                    '<edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match>\n'
                    if self.cleartype else
-                   '  <match target="font"><test name="pixelsize" compare="less_eq"><double>16</double></test>'
-                   '<edit name="antialias" mode="assign"><bool>false</bool></edit>'
+                   '  <match target="font"><edit name="antialias" mode="assign"><bool>false</bool></edit>'
                    '<edit name="hinting" mode="assign"><bool>true</bool></edit>'
                    '<edit name="hintstyle" mode="assign"><const>hintfull</const></edit>'
                    '<edit name="autohint" mode="assign"><bool>false</bool></edit></match>\n')
@@ -753,6 +752,10 @@ class Session:
                     self.hide_welcome()
                     if attempt == 1:
                         self.play_sound(self.logon_sound())
+                        # Linux applications' "show in folder" opens the shell's
+                        # explorer, once there is a shell to hand folders to.
+                        self.spawn([sys.executable, str(ROOT / 'session/filemanager.py'), self.wine,
+                                    self.shell['command']], 'file-manager')
                 if ready and not has_tray:
                     break
                 if not ready and (time.monotonic()-started > self.readiness_timeout or shell.poll() is not None):
