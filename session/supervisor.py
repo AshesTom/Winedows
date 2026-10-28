@@ -23,6 +23,7 @@ from Xlib import X, display, error
 
 import appearance
 import dpi
+import icon_theme
 import saved_registry
 import wallet
 from wineenv import SHELLS, environment
@@ -579,6 +580,14 @@ class Session:
         except (OSError, ValueError, KeyError):
             return ROOT / '.local/assets'
 
+    def xp_icon_theme(self):
+        directory = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share') / 'icons' / icon_theme.NAME
+        try:
+            if icon_theme.ensure(self.xp_assets(), directory):
+                print(f'Made the Windows XP icon theme in {directory}', flush=True)
+        except (OSError, ValueError) as e:
+            print(f'The Windows XP icon theme was not made: {e}', file=sys.stderr, flush=True)
+
     def show_welcome(self, mode):
         if not self.welcome_screen:
             return
@@ -773,6 +782,11 @@ class Session:
         # Linux tray icons (StatusNotifierItem) reach the XP notification
         # area through the proxy; the input method shows its mode there.
         self.spawn(['python3', str(ROOT / 'bridge-wm/tray.py'), '--ipc', str(self.ipc)], 'tray')
+        # XP's icons as an icon theme that Control Panel's Icons item offers
+        # Linux applications (session/icon_theme.py), made from the user's
+        # XP files the first time and kept.
+        if self.shell['marker'] == 'xp-shell.json':
+            self.xp_icon_theme()
         # The GTK 3 theme, after the WM has claimed XSETTINGS
         if self.gtk_theme:
             self.spawn([str(self.gtk_theme), '--watch'], 'gtk-theme')

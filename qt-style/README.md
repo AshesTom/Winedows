@@ -89,6 +89,43 @@ the session sets `default` while it runs and gives the user's value back when
 it ends (`session/appearance.py`). The theme's `gtk-dark.css` is the same
 look, for GTK 3 applications that prefer a dark theme.
 
+## Standard and Accurate; icons
+
+Control Panel > Appearance and Themes has two items of the session
+(`session/linuxlook.c`, a `.cpl` of the XP shell's own kind), which write
+`~/.config/win4wine/linux-look.conf`; the style and the GTK generator watch it,
+so open programs follow:
+
+- **GTK/QT Themes**: the **Standard** style is the look described above. The
+  **Accurate** one takes XP's own measures and habits from its sources:
+  no pictures on push buttons that have text (`SH_DialogButtonBox_ButtonsHaveIcons`
+  too) nor in menus (`AA_DontShowIconsInMenus`; in GTK the module hides the
+  images of menu items and labelled buttons, toolbars keep theirs); pop-up menus
+  as user32's `mncomput.c` lays them out (items as high as the menu font,
+  `CYEDGE` and 2 px, separators half of `SM_CYMENUSIZE`, the check mark in the
+  margin before the text, `MNXBORDER`), GTK's pop-overs as XP menus, list rows
+  without GTK's extra spacing, 16 x 16 toolbar pictures. Each style's GTK theme is
+  made once and kept (`Win4Wine-XP-<id>`, `Win4Wine-XP-Accurate-<id>`):
+  switching between them, or a new session, reuses it. It is made again only
+  when it is missing, when the shell's look changes, or with the item's
+  **Rebuild** button (`theme_build`).
+- **Icons**: the icon theme of Linux programs (Qt's `QIcon::themeName`,
+  GTK's `Net/IconThemeName` in XSETTINGS), among the installed ones, or the
+  desktop's. **Windows XP** is made by the session from the user's own XP
+  files (`session/icon_theme.py`, in `~/.local/share/icons/win4wine-xp-icons`,
+  like the cursors): shell32's folders, drives, documents and places, Explorer's
+  and Internet Explorer's toolbar buttons for the common commands, user32's
+  message icons and a few from other XP files, at 16, 24, 32 and 48 pixels;
+  what XP has not comes from Breeze, Adwaita or hicolor. Nothing of Microsoft's
+  is in the repository. `xpstyle-gtk` draws the themes' samples for the item
+  (`~/.cache/win4wine/icon-previews`), as Windows cannot read their SVG.
+
+```
+style=accurate              # or standard (the default)
+icon_theme=win4wine-xp-icons  # a folder of ~/.local/share/icons or /usr/share/icons; none: the desktop's
+theme_build=1               # Rebuild raises it
+```
+
 ## Building and trying it
 
 `scripts/setup.sh` builds it (Qt 6 development files and CMake); by hand:
@@ -128,3 +165,7 @@ them, `--states F.png` draws each part in each state, `--menu F.png` a menu;
 - Only top tabs (`QTabBar::RoundedNorth`) take the style's tab art; others
   are drawn as Windows Classic.
 - Menus follow XP's flat menus (Luna's `FlatMenus`), not the classic 3D ones.
+- The Wayland session gives GTK programs the icon theme only through the
+  desktop's own settings (no XSETTINGS there); Qt programs take it.
+- KDE programs that ask KIconLoader (rather than `QIcon::fromTheme`) for an
+  icon may keep the icon theme of KDE's settings.

@@ -8,7 +8,18 @@
 //   xpstyle-gtk --watch       for the session: keep ~/.local/share/themes/
 //                             Win4Wine-XP-<id> up to date with the shell's
 //                             look and name it in XSETTINGS (Net/ThemeName,
-//                             Gtk/FontName), which GTK 3 follows at once
+//                             Gtk/FontName, Net/IconThemeName), which GTK 3
+//                             follows at once
+//   xpstyle-gtk --icon-previews  draw the installed icon themes' samples
+//                             for Control Panel's Icons item (--watch does too)
+//
+// Control Panel's GTK/QT Themes item chooses the Standard style or the
+// Accurate one (linux-look.conf, session.h): Accurate adds XP's own metrics
+// for menus, lists and pop-overs (user32's, comctl32's), and the GTK module
+// takes the pictures off buttons and menu items. Each style's theme is kept
+// (Win4Wine-XP-<id>, Win4Wine-XP-Accurate-<id>): switching back and forth,
+// or a new session, uses the saved one; it is made again only when it is
+// missing, when the shell's look changes, or when Rebuild asks for it.
 #include "../src/msstyles.h"
 #include "../src/session.h"
 
@@ -16,11 +27,13 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QtGui/qguiapplication_platform.h>
 #include <QPainter>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QSet>
 #include <QTimer>
 
 #include <xcb/xcb.h>
@@ -149,6 +162,7 @@ private:
     void tabs(QTextStream &css);
     void menus(QTextStream &css);
     void extras(QTextStream &css);
+    void accurate(QTextStream &css);
 
     Look m_look;
     QString m_dir;
@@ -541,6 +555,47 @@ void Generator::menus(QTextStream &css)
         << "menu check, menu radio { min-width: 13px; min-height: 13px; margin-right: 4px; }\n\n";
 }
 
+// The Accurate style: what XP's own controls measure, over the rules above.
+void Generator::accurate(QTextStream &css)
+{
+    const auto px = [this](int n) { return n * m_look.dpi / 96; };
+    const QColor menu = sys("menu", Qt::white), text = sys("menutext", Qt::black);
+    const QColor hilight = sys("menuhilight", sys("hilight", Qt::blue)), hilightText = sys("hilighttext", Qt::white);
+    const QColor shadow = sys("buttonshadow", Qt::gray), light = sys("buttonhilight", Qt::white);
+    css << "/* Accurate: Windows XP's metrics */\n"
+        // Pop-up menus (user32's mncomput.c, flat menus): a COLOR_BTNSHADOW
+        // line and 2 px inside it (MNXBORDER); items as high as the menu
+        // font and CYEDGE + 2; the text after the check mark's column
+        // (MNLEFTMARGIN + 13 + MNXSPACE), the check mark in that column.
+        << "menu, .menu, .context-menu { padding: 2px; border: 1px solid " << rgb(shadow) << "; }\n"
+        << "menu menuitem, .menu menuitem { min-height: " << px(13) << "px; padding: 2px " << px(17) << "px 2px " << px(17) << "px; }\n"
+        << "menu menuitem check, menu menuitem radio, .menu menuitem check, .menu menuitem radio"
+        << " { min-width: 13px; min-height: 13px; margin: 0 2px 0 -15px; }\n"
+        << "menu menuitem arrow { min-width: 13px; min-height: 13px; margin-right: -13px; }\n"
+        // Separators: half of SM_CYMENUSIZE, an etched line (BDR_SUNKENOUTER) in its middle.
+        << "menu separator, .menu separator { min-height: 1px; margin: 3px 0 4px 0; background-color: " << rgb(shadow)
+        << "; border-bottom: 1px solid " << rgb(light) << "; }\n"
+        // XP has no pop-overs: the menus that GTK shows in one are XP's menus.
+        << "popover, popover.background, popover.menu { background-color: " << rgb(menu) << "; color: " << rgb(text)
+        << "; border: 1px solid " << rgb(shadow) << "; border-radius: 0; box-shadow: none; padding: 2px; }\n"
+        << "popover modelbutton { min-height: " << px(13) << "px; padding: 2px " << px(17) << "px; border-radius: 0; color: " << rgb(text)
+        << "; background-image: none; border: none; box-shadow: none; }\n"
+        << "popover modelbutton:hover, popover modelbutton:selected { background-color: " << rgb(hilight) << "; color: " << rgb(hilightText) << "; }\n"
+        << "popover modelbutton:disabled { color: " << rgb(sys("graytext", Qt::gray)) << "; }\n"
+        << "popover separator { min-height: 1px; margin: 3px 0 4px 0; background-color: " << rgb(shadow) << "; }\n"
+        << "popover modelbutton check, popover modelbutton radio { min-width: 13px; min-height: 13px; margin: 0 2px 0 -15px; }\n"
+        // Lists: a report view's rows are as high as its text and 2 px
+        // above and below (comctl32's list view), no space between them.
+        << "treeview.view { -GtkTreeView-vertical-separator: 0; -GtkTreeView-horizontal-separator: 4; }\n"
+        << "treeview.view header button { min-height: " << px(15) << "px; }\n"
+        // Tooltips: COLOR_INFOBK in a black line, no rounding (comctl32's tooltips).
+        << "tooltip { padding: 1px 2px; border-radius: 0; }\n"
+        // Window frames are XP's: header bars are a plain band of the dialog's face.
+        << "headerbar { background-color: " << rgb(sys("buttonface", QColor(236, 233, 216))) << "; border: none; min-height: 0; padding: 2px; }\n"
+        // The menu bar: SM_CYMENU high, items twice the average character wider than their text.
+        << "menubar > menuitem { min-height: " << px(15) << "px; padding: 2px " << px(6) << "px; }\n\n";
+}
+
 bool Generator::write()
 {
     QDir().mkpath(m_dir + QStringLiteral("/gtk-3.0"));
@@ -557,6 +612,8 @@ bool Generator::write()
         extras(css);
     }
     menus(css);
+    if (m_look.accurate)
+        accurate(css);
     css.flush();
     const QByteArray header = "/* Win4Wine XP: made by xpstyle-gtk from "
         + (m_r ? m_r->theme().path() : QStringLiteral("Windows Classic")).toUtf8()
@@ -575,7 +632,8 @@ bool Generator::write()
         && put(QStringLiteral("gtk-dark.css"), "@import url(\"gtk.css\");\n");
     QSaveFile index(m_dir + QStringLiteral("/index.theme"));
     if (index.open(QIODevice::WriteOnly)) {
-        index.write("[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Win4Wine XP\nComment=The XP shell's visual style\n\n"
+        index.write(QByteArray("[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Win4Wine XP")
+                    + (m_look.accurate ? " (Accurate)" : "") + "\nComment=The XP shell's visual style\n\n"
                     "[X-GNOME-Metatheme]\nGtkTheme=" + QDir(m_dir).dirName().toUtf8() + "\n");
         index.commit();
     }
@@ -588,6 +646,9 @@ QString lookId(const Look &look)
 {
     QByteArray key = look.stylePath.toUtf8() + '|' + look.colourName.toUtf8() + '|' + look.sizeName.toUtf8() + '|'
         + QByteArray::number(look.dpi) + '|' + QByteArray::number(look.themed);
+    // The Standard style's first build keeps the id it had before the choice existed.
+    if (look.accurate || look.themeBuild)
+        key += '|' + QByteArray::number(look.accurate) + '|' + QByteArray::number(look.themeBuild);
     QStringList names = look.colours.keys();
     names.sort();
     for (const QString &name : std::as_const(names))
@@ -598,9 +659,18 @@ QString lookId(const Look &look)
     return QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex().left(10));
 }
 
-// XSETTINGS: change Net/ThemeName and Gtk/FontName in the settings the
-// session's manager (bridge-wm) publishes, keeping its other settings.
-void publish(const QString &theme, const QString &font)
+// The theme's directory name: Win4Wine-XP-<id>, Win4Wine-XP-Accurate-<id>
+// (the GTK module knows the Accurate style by it).
+QString themePrefix(bool accurate)
+{
+    return accurate ? QStringLiteral("Win4Wine-XP-Accurate-") : QStringLiteral("Win4Wine-XP-");
+}
+
+// XSETTINGS: change Net/ThemeName, Gtk/FontName and Net/IconThemeName in
+// the settings the session's manager (bridge-wm) publishes, keeping its
+// other settings; an empty icon theme takes Net/IconThemeName away (GTK then
+// uses its own setting, the desktop's).
+void publish(const QString &theme, const QString &font, const QString &icons)
 {
     auto *x11 = qGuiApp->nativeInterface<QNativeInterface::QX11Application>();
     if (!x11)
@@ -663,6 +733,10 @@ void publish(const QString &theme, const QString &font)
     QList<QPair<QByteArray, QByteArray>> wanted = {{"Net/ThemeName", theme.toUtf8()}};
     if (!font.isEmpty())
         wanted.append({"Gtk/FontName", font.toUtf8()});
+    if (!icons.isEmpty())
+        wanted.append({"Net/IconThemeName", icons.toUtf8()});
+    else
+        entries.removeIf([](const Entry &e) { return e.name == "Net/IconThemeName"; });
     for (const auto &[name, value] : wanted) {
         bool found = false;
         for (Entry &e : entries)
@@ -691,6 +765,63 @@ QString fontName(const Look &look)
     return QStringLiteral("%1 %2").arg(look.messageFont.family()).arg(qRound(look.messageFont.pointSizeF()));
 }
 
+// Samples of the installed icon themes for Control Panel's Icons item
+// (session/linuxlook.c), which cannot read SVG: a strip of 32 x 32 icons
+// (folder, document, picture, computer, hard disk, Recycle Bin) per theme in
+// ~/.cache/win4wine/icon-previews/<folder>.png, drawn again when the theme
+// changes.
+void iconPreviews()
+{
+    static const QList<QStringList> icons = {
+        {QStringLiteral("folder"), QStringLiteral("inode-directory")},
+        {QStringLiteral("text-x-generic"), QStringLiteral("x-office-document"), QStringLiteral("text-plain")},
+        {QStringLiteral("image-x-generic"), QStringLiteral("image-png")},
+        {QStringLiteral("computer"), QStringLiteral("user-desktop-computer"), QStringLiteral("computer-laptop")},
+        {QStringLiteral("drive-harddisk"), QStringLiteral("drive-harddisk-system")},
+        {QStringLiteral("user-trash"), QStringLiteral("trashcan_empty")},
+    };
+    const int size = 32;
+    const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)
+        + QStringLiteral("/win4wine/icon-previews");
+    QDir().mkpath(cache);
+    // freedesktop's folders (the offscreen platform names none): ~/.icons, then the data folders'.
+    QStringList roots{QDir::homePath() + QStringLiteral("/.icons")};
+    for (const QString &data : QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation))
+        roots << data + QStringLiteral("/icons");
+    const QStringList searchPaths = QIcon::themeSearchPaths();
+    QIcon::setThemeSearchPaths(roots);
+    const QString desktop = QIcon::themeName();
+    QSet<QString> done;
+    for (const QString &root : std::as_const(roots)) {
+        for (const QString &name : QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            const QFileInfo index(root + QLatin1Char('/') + name + QStringLiteral("/index.theme"));
+            if (done.contains(name) || !index.isFile() || name == QLatin1String("hicolor"))
+                continue;
+            done.insert(name);
+            const QFileInfo out(cache + QLatin1Char('/') + name + QStringLiteral(".png"));
+            if (out.exists() && out.lastModified() >= index.lastModified())
+                continue;
+            QIcon::setThemeName(name);
+            QImage strip(size * icons.size(), size, QImage::Format_ARGB32_Premultiplied);
+            strip.fill(Qt::transparent);
+            QPainter painter(&strip);
+            bool any = false;
+            for (int i = 0; i < icons.size(); ++i)
+                for (const QString &icon : icons[i])
+                    if (QIcon::hasThemeIcon(icon)) {
+                        QIcon::fromTheme(icon).paint(&painter, QRect(i * size, 0, size, size));
+                        any = true;
+                        break;
+                    }
+            painter.end();
+            if (any)
+                strip.save(out.filePath());
+        }
+    }
+    QIcon::setThemeName(desktop);
+    QIcon::setThemeSearchPaths(searchPaths);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -710,30 +841,40 @@ int main(int argc, char **argv)
     }
     if (const int i = args.indexOf(QStringLiteral("--out")); i >= 0 && i + 1 < args.size())
         return Generator(Session::instance()->look(), args[i + 1]).write() ? 0 : 1;
+    if (args.contains(QStringLiteral("--icon-previews"))) {
+        iconPreviews();
+        return 0;
+    }
     if (!args.contains(QStringLiteral("--watch"))) {
-        fprintf(stderr, "Usage: xpstyle-gtk --out DIR | --watch\n");
+        fprintf(stderr, "Usage: xpstyle-gtk --out DIR | --watch | --icon-previews\n");
         return 2;
     }
     const QString themes = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/themes");
     auto update = [&] {
         const Look look = Session::instance()->look();
-        const QString name = QStringLiteral("Win4Wine-XP-") + lookId(look);
+        const QString prefix = themePrefix(look.accurate);
+        const QString name = prefix + lookId(look);
         const QString dir = themes + QLatin1Char('/') + name;
+        // A saved theme is used as it is: made only when it is missing.
         if (!QFileInfo::exists(dir + QStringLiteral("/gtk-3.0/gtk.css")) && !Generator(look, dir).write())
             return;
         // A stable name for applications given GTK_THEME (the Wayland session).
         const QString link = themes + QStringLiteral("/Win4Wine-XP");
         QFile::remove(link);
         QFile::link(name, link);
-        publish(name, fontName(look));
-        // Earlier looks' themes go, a little later (applications switching read them).
-        QTimer::singleShot(10000, [themes, name] {
+        publish(name, fontName(look), look.iconTheme);
+        // Earlier looks' themes of this style go, a little later (applications
+        // switching read them); the other style's saved theme stays.
+        QTimer::singleShot(10000, [themes, name, accurate = look.accurate] {
+            const QString accuratePrefix = themePrefix(true);
             for (const QString &old : QDir(themes).entryList({QStringLiteral("Win4Wine-XP-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
-                if (old != name)
+                if (old != name && old.startsWith(accuratePrefix) == accurate)
                     QDir(themes + QLatin1Char('/') + old).removeRecursively();
         });
     };
     QObject::connect(Session::instance(), &Session::changed, &app, update);
     update();
+    // After the theme: the samples are for Control Panel, which waits for no one.
+    QTimer::singleShot(2000, &app, iconPreviews);
     return app.exec();
 }

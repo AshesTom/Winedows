@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Control Panel's GTK/QT Themes and Icons items (linuxlook.c).
+#include <windows.h>
+#include <commctrl.h>
+#include "linuxlook.h"
+
+2 24 "linuxlook.manifest"
+
+STRINGTABLE
+{
+    IDS_STYLE_NAME, "GTK/QT Themes"
+    IDS_STYLE_INFO, "Choose how Linux programs that use GTK or Qt look."
+    IDS_ICONS_NAME, "Icons"
+    IDS_ICONS_INFO, "Choose the icons that Linux programs show for folders, files and commands."
+}
+
+IDD_STYLE DIALOGEX 0, 0, 252, 218
+STYLE DS_SHELLFONT | WS_CHILD | WS_CAPTION
+CAPTION "Style"
+FONT 8, "MS Shell Dlg", 0, 0, 1
+{
+    CONTROL "", IDC_PREVIEW, "Static", SS_OWNERDRAW, 7, 7, 238, 80
+    GROUPBOX "Style", -1, 7, 93, 238, 74
+    AUTORADIOBUTTON "&Standard", IDC_STANDARD, 14, 106, 224, 10, WS_GROUP | WS_TABSTOP
+    LTEXT "The visual style's controls, with the pictures and sizes that each program chooses.",
+          -1, 26, 117, 212, 16
+    AUTORADIOBUTTON "&Accurate", IDC_ACCURATE, 14, 136, 224, 10
+    LTEXT "As close to Windows XP as possible: no pictures on buttons or in menus, and Windows XP's sizes for menus, lists and toolbars.",
+          -1, 26, 147, 212, 16
+    GROUPBOX "Saved theme", -1, 7, 173, 238, 40
+    LTEXT "GTK programs use a theme that is made once from the visual style, then saved. If they do not look right, rebuild it.",
+          -1, 14, 185, 166, 24
+    PUSHBUTTON "Re&build", IDC_REBUILD, 188, 189, 50, 14
+}
+
+IDD_ICONS DIALOGEX 0, 0, 252, 218
+STYLE DS_SHELLFONT | WS_CHILD | WS_CAPTION
+CAPTION "Icon Theme"
+FONT 8, "MS Shell Dlg", 0, 0, 1
+{
+    LTEXT "An icon theme gives Linux programs their pictures of folders, files, drives and commands.",
+          -1, 7, 7, 238, 16
+    LTEXT "Icon &theme:", -1, 7, 30, 238, 8
+    COMBOBOX IDC_THEMES, 7, 41, 238, 150, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "", IDC_COMMENT, 7, 58, 238, 16, SS_NOPREFIX
+    GROUPBOX "Sample", -1, 7, 80, 238, 66
+    CONTROL "", IDC_SAMPLE, "Static", SS_OWNERDRAW, 14, 92, 224, 48
+    LTEXT "Some programs show the new icons only when they are started again.",
+          -1, 7, 154, 238, 16
+}

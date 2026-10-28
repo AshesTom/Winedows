@@ -1,0 +1,3 @@
+LIBRARY linuxlook.cpl
+EXPORTS
+    CPlApplet=CPlApplet@16

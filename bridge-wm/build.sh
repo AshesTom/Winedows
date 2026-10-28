@@ -60,6 +60,16 @@ if ! fresh "$root/.local/bridge/shortcuts.cpl" "$wm/shortcuts.c" "$wm/shortcuts.
         "$root/.local/bridge/shortcuts.res" -lcomctl32 -lcomdlg32 -luser32 -lkernel32
     rm -f "$root/.local/bridge/shortcuts.res"
 fi
+# Control Panel's GTK/QT Themes and Icons items (qt-style/ and session/icon_theme.py follow them).
+session=$root/session
+if ! fresh "$root/.local/bridge/linuxlook.cpl" "$session/linuxlook.c" "$session/linuxlook.rc" "$session/linuxlook.h" \
+        "$session/linuxlook.manifest" "$session/linuxlook.def"; then
+    i686-w64-mingw32-windres -I "$session" "$session/linuxlook.rc" -O coff -o "$root/.local/bridge/linuxlook.res"
+    compile "$root/.local/bridge/linuxlook.cpl" -std=gnu11 -shared "$session/linuxlook.c" "$session/linuxlook.def" \
+        "$root/.local/bridge/linuxlook.res" -lcomctl32 -luxtheme -lmsimg32 -lole32 -luuid -lwindowscodecs -lgdi32 \
+        -luser32 -lkernel32
+    rm -f "$root/.local/bridge/linuxlook.res"
+fi
 # XP's Volume Control (sndvol32) on the Linux sound server, for xptray.exe.
 compile "$root/.local/bridge/xpmix.dll" -std=gnu11 -shared "$helpers/xpmix.c" "$helpers/xpmix.def" -lwinmm
 # XP's Security Center service (wscsvc.dll) loads these from beside it: its

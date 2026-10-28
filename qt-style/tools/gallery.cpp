@@ -16,6 +16,7 @@
 #include <QMainWindow>
 #include <QPainter>
 #include <QStyleOption>
+#include <QIcon>
 #include <QMenu>
 #include <QMenuBar>
 #include <QProgressBar>
@@ -212,8 +213,9 @@ int main(int argc, char **argv)
         return statesSheet(QApplication::style()).save(args[i + 1]) ? 0 : 1;
     if (const int i = args.indexOf(QStringLiteral("--menu")); i >= 0 && i + 1 < args.size()) {
         // A menu with its second item selected, as the mouse leaves it.
+        // Pictures as KDE's programs give them (the Accurate style leaves them out).
         QMenu menu;
-        menu.addAction(QStringLiteral("&Open"));
+        menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")), QStringLiteral("&Open"));
         QAction *selected = menu.addAction(QStringLiteral("Save &As..."));
         auto *ticked = menu.addAction(QStringLiteral("&Status Bar"));
         ticked->setCheckable(true);
@@ -221,7 +223,7 @@ int main(int argc, char **argv)
         menu.addSeparator();
         menu.addMenu(QStringLiteral("&Recent Files"))->addAction(QStringLiteral("a.txt"));
         menu.addAction(QStringLiteral("Disabled"))->setEnabled(false);
-        menu.addAction(QStringLiteral("E&xit"));
+        menu.addAction(QIcon::fromTheme(QStringLiteral("application-exit")), QStringLiteral("E&xit"));
         menu.popup(QPoint(0, 0));
         menu.setActiveAction(selected);
         const QString file = args[i + 1];
@@ -261,7 +263,8 @@ int main(int argc, char **argv)
     auto *ok = new QPushButton(QStringLiteral("OK"));
     ok->setDefault(true);
     b->addWidget(ok);
-    b->addWidget(new QPushButton(QStringLiteral("Cancel")));
+    ok->setIcon(QIcon::fromTheme(QStringLiteral("dialog-ok")));
+    b->addWidget(new QPushButton(QIcon::fromTheme(QStringLiteral("dialog-cancel")), QStringLiteral("Cancel")));
     auto *disabled = new QPushButton(QStringLiteral("Disabled"));
     disabled->setEnabled(false);
     b->addWidget(disabled);

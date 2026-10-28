@@ -13,6 +13,7 @@
 #include <qdrawutil.h>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QIcon>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
@@ -85,6 +86,12 @@ PartState checkState(const QStyleOption *o, bool radio)
 }
 
 const QString kButton = QStringLiteral("button");
+
+// A push button with both text and a picture: the Accurate style leaves the picture out.
+bool hasTextAndIcon(const QStyleOptionButton &b)
+{
+    return !b.icon.isNull() && !b.text.isEmpty() && !(b.features & QStyleOptionButton::CommandLinkButton);
+}
 
 } // namespace
 
@@ -263,6 +270,16 @@ void XpStyle::polish(QApplication *application)
             application->setProperty("KDE_COLOR_SCHEME_PATH", scheme);
     }
     application->setPalette(m_palette);
+    // The Accurate style: no pictures in menus, as XP's; the choice is undone
+    // when the user goes back to Standard.
+    static const bool menuIcons = !application->testAttribute(Qt::AA_DontShowIconsInMenus);
+    if (menuIcons)
+        QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, m_look.accurate);
+    // The icon theme chosen in Control Panel's Icons item, else the desktop's.
+    static const QString desktopIcons = QIcon::themeName();
+    const QString icons = m_look.iconTheme.isEmpty() ? desktopIcons : m_look.iconTheme;
+    if (QIcon::themeName() != icons)
+        QIcon::setThemeName(icons);
     // XP's fonts (Display Properties > Appearance), unless the user keeps Qt's.
     if (m_look.haveFonts && qEnvironmentVariable("WIN4WINE_QT_FONTS") != QLatin1String("0")) {
         application->setFont(m_look.messageFont);
@@ -535,6 +552,27 @@ void XpStyle::drawPrimitive(PrimitiveElement element, const QStyleOption *option
 void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QPainter *painter,
                           const QWidget *widget) const
 {
+    // The Accurate style: XP's push buttons with text and its menu items
+    // have no pictures.
+    QStyleOptionButton plainButton;
+    QStyleOptionMenuItem plainItem;
+    if (m_look.accurate) {
+        if (element == CE_PushButton || element == CE_PushButtonLabel) {
+            if (const auto *b = qstyleoption_cast<const QStyleOptionButton *>(option); b && hasTextAndIcon(*b)) {
+                plainButton = *b;
+                plainButton.icon = QIcon();
+                option = &plainButton;
+            }
+        } else if (element == CE_MenuItem) {
+            if (const auto *m = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+                m && m->menuItemType != QStyleOptionMenuItem::Separator) {
+                plainItem = *m;
+                plainItem.icon = QIcon();
+                plainItem.maxIconWidth = 0;
+                option = &plainItem;
+            }
+        }
+    }
     if (!themed()) {
         QProxyStyle::drawControl(element, option, painter, widget);
         return;
@@ -1013,10 +1051,35 @@ QRect XpStyle::subControlRect(ComplexControl control, const QStyleOptionComplex 
 QSize XpStyle::sizeFromContents(ContentsType type, const QStyleOption *option, const QSize &size,
                                 const QWidget *widget) const
 {
-    QSize s = QProxyStyle::sizeFromContents(type, option, size, widget);
+    const int scale = m_look.dpi;
+    QSize s;
+    if (m_look.accurate && type == CT_PushButton) {
+        // QPushButton made room for its picture, which the Accurate style leaves out.
+        if (const auto *b = qstyleoption_cast<const QStyleOptionButton *>(option); b && hasTextAndIcon(*b)) {
+            QStyleOptionButton plain = *b;
+            plain.icon = QIcon();
+            s = QProxyStyle::sizeFromContents(type, &plain, size - QSize(b->iconSize.width() + 4, 0), widget);
+        }
+    }
+    if (s.isEmpty())
+        s = QProxyStyle::sizeFromContents(type, option, size, widget);
+    if (m_look.accurate) {
+        // XP's menus (user32's mncomput.c): an item is as high as the menu
+        // font, CYEDGE and 2 px; a separator half of SM_CYMENUSIZE (19); a
+        // menu bar's item SM_CYMENUSIZE, its text and twice the font's
+        // average character wide.
+        if (const auto *m = qstyleoption_cast<const QStyleOptionMenuItem *>(option)) {
+            if (type == CT_MenuItem) {
+                if (m->menuItemType == QStyleOptionMenuItem::Separator)
+                    return QSize(s.width(), 9 * scale / 96);
+                s.setHeight(m->fontMetrics.height() + 4 * scale / 96);
+            } else if (type == CT_MenuBarItem) {
+                s = QSize(size.width() + 2 * m->fontMetrics.averageCharWidth(), qMax(size.height(), 18 * scale / 96));
+            }
+        }
+    }
     if (!themed())
         return s;
-    const int scale = m_look.dpi;
     switch (type) {
     case CT_ComboBox:
     case CT_SpinBox:
@@ -1038,6 +1101,10 @@ QSize XpStyle::sizeFromContents(ContentsType type, const QStyleOption *option, c
 
 int XpStyle::pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const
 {
+    // The Accurate style: the toolbars of XP's own programs (WordPad,
+    // Paint) and common dialogs have 16 x 16 pictures (comctl32's default).
+    if (m_look.accurate && metric == PM_ToolBarIconSize)
+        return 16 * m_look.dpi / 96;
     if (themed()) {
         switch (metric) {
         case PM_ScrollBarExtent:
@@ -1107,6 +1174,10 @@ int XpStyle::styleHint(StyleHint hint, const QStyleOption *option, const QWidget
     case SH_Menu_MouseTracking:
     case SH_MenuBar_MouseTracking:
         return 1;
+    case SH_DialogButtonBox_ButtonsHaveIcons:
+        if (m_look.accurate)
+            return 0;   // XP's OK and Cancel have no pictures
+        break;
     default:
         break;
     }

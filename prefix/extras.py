@@ -34,10 +34,10 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '37'
+VERSION = '38'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
-           'xpnetcon.exe', 'linux-launch.exe', 'shortcuts.cpl')
+           'xpnetcon.exe', 'linux-launch.exe', 'shortcuts.cpl', 'linuxlook.cpl')
 # XP's Regional and Language Options and what it loads (assets/intl), native
 # in rundll32 and in XP Explorer, whose Control Panel lists it.
 INTL = ('intl.cpl', 'input.dll', 'syssetup.dll', 'sfcfiles.dll')
@@ -156,6 +156,9 @@ def registry(xpx):
     # Keyboard Shortcuts, a Control Panel item of the session (bridge-wm/hotkeys.py)
     r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Control Panel\Cpls', 'Keyboard Shortcuts',
           r'C:\xp\bin\shortcuts.cpl')
+    # GTK/QT Themes and Icons, Control Panel items of the session (session/linuxlook.c)
+    r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Control Panel\Cpls', 'Linux Look',
+          r'C:\xp\bin\linuxlook.cpl')
     # User Accounts: XP's mshta.exe instead of Wine's stub, with IE6's engine,
     # XP's shell32 (the account picture) and themeui (Theme.Manager, which
     # picks the Luna style sheet of its pages) native in it.
@@ -996,6 +999,8 @@ def control_panel(assets, prefix, wine, xpx):
                 r.add(category, rf'C:\windows\{folder}\{name}', str(number & 0xffffffff), 'REG_DWORD')
     # Keyboard Shortcuts beside the keyboard and the mouse (Printers and Other Hardware)
     r.add(category, r'C:\xp\bin\shortcuts.cpl', '2', 'REG_DWORD')
+    # GTK/QT Themes and Icons beside Display (Appearance and Themes)
+    r.add(category, r'C:\xp\bin\linuxlook.cpl', '1', 'REG_DWORD')
     # XP's shell32 keeps the items' names in a cache, which it does not read
     # again for items that changed (Wine's "Internet Settings" stayed).
     texts_cache = 'Windows Registry Editor Version 5.00\r\n\r\n' \

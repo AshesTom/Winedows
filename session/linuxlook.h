@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+#define IDS_STYLE_NAME 1
+#define IDS_STYLE_INFO 2
+#define IDS_ICONS_NAME 3
+#define IDS_ICONS_INFO 4
+#define IDD_STYLE 100
+#define IDD_ICONS 101
+#define IDC_PREVIEW 1001
+#define IDC_STANDARD 1002
+#define IDC_ACCURATE 1003
+#define IDC_REBUILD 1004
+#define IDC_THEMES 1010
+#define IDC_COMMENT 1011
+#define IDC_SAMPLE 1012

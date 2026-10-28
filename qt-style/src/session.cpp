@@ -139,7 +139,33 @@ std::optional<QFont> logFont(const QByteArray &data, int dpi)
     return font;
 }
 
+// linux-look.conf: "name=value" lines, # comments.
+void readLinuxLook(Look *look)
+{
+    QFile file(linuxLookPath());
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+    for (const QByteArray &raw : file.readAll().split('\n')) {
+        const QString line = QString::fromUtf8(raw).trimmed();
+        const int equals = line.indexOf(QLatin1Char('='));
+        if (line.startsWith(QLatin1Char('#')) || equals < 0)
+            continue;
+        const QString name = line.left(equals).trimmed(), value = line.mid(equals + 1).trimmed();
+        if (name == QLatin1String("style"))
+            look->accurate = value.compare(QLatin1String("accurate"), Qt::CaseInsensitive) == 0;
+        else if (name == QLatin1String("icon_theme"))
+            look->iconTheme = value;
+        else if (name == QLatin1String("theme_build"))
+            look->themeBuild = value.toInt();
+    }
+}
+
 } // namespace
+
+QString linuxLookPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/linux-look.conf");
+}
 
 QString findPrefix()
 {
@@ -193,6 +219,7 @@ QString linuxPath(const QString &prefix, const QString &windowsPath)
 Look readLook(const QString &prefix)
 {
     Look look;
+    readLinuxLook(&look);
     if (prefix.isEmpty())
         return look;
     const Registry reg = parseRegistry(prefix + QStringLiteral("/user.reg"));
@@ -274,6 +301,12 @@ void Session::watch()
         m_watcher.removePaths(directories);
     m_watcher.addPath(m_prefix);
     m_watcher.addPath(m_prefix + QStringLiteral("/user.reg"));
+    // Control Panel replaces linux-look.conf by renaming a new file over it.
+    const QString conf = linuxLookPath();
+    QDir().mkpath(QFileInfo(conf).absolutePath());
+    m_watcher.addPath(QFileInfo(conf).absolutePath());
+    if (QFileInfo::exists(conf))
+        m_watcher.addPath(conf);
     if (!m_look.stylePath.isEmpty())
         m_watcher.addPath(m_look.stylePath);
 }
