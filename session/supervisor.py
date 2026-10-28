@@ -24,8 +24,10 @@ from Xlib import X, display, error
 import appearance
 import dpi
 import icon_theme
+import navigation_sound
 import saved_registry
 import wallet
+import wine_reg
 from wineenv import SHELLS, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +185,11 @@ class Session:
                 # Whole-pixel text hinted as Windows hints it (font_config)
                 self.env['FREETYPE_PROPERTIES'] = 'truetype:interpreter-version=35'
         self.status('starting')
+
+    @property
+    def xp_shell(self):
+        """Whether the shell is XP's (not ReactOS's): XP Explorer's additions are for it."""
+        return self.shell['marker'] == 'xp-shell.json'
 
     def language(self):
         """The language of the XP prefix's media (prefix/create.py); Japanese before English was supported."""
@@ -357,13 +364,13 @@ class Session:
     def start_user_picture(self):
         """The picture chosen in XP's User Accounts becomes the Linux user's
         picture too, while the session runs (session/user_picture.py)."""
-        if self.shell['marker'] == 'xp-shell.json':
+        if self.xp_shell:
             self.spawn([sys.executable, str(ROOT / 'session/user_picture.py'), str(self.prefix)], 'user-picture')
 
     def play_sound(self, event):
         """An event of XP's sound scheme (the XP shell only), as XP plays it."""
         player = ROOT / '.local/bridge/playsound.exe'
-        if self.shell['marker'] != 'xp-shell.json' or not player.is_file():
+        if not self.xp_shell or not player.is_file():
             return None
         return self.spawn([self.wine, str(player), event], 'sounds')
 
@@ -388,7 +395,7 @@ class Session:
     def keyboard(self):
         """The session's keyboard layout from XP's input languages (Wine patch
         0043), or the Linux system's while the prefix has none."""
-        if self.shell['marker'] != 'xp-shell.json':
+        if not self.xp_shell:
             return
         with (self.state / 'keyboard.log').open('ab') as log:
             subprocess.run([sys.executable, str(ROOT / 'session/keyboard.py'), 'apply', str(self.prefix)],
@@ -397,13 +404,13 @@ class Session:
     def keyboard_watch(self):
         """Follow the input languages that XP's Regional and Language Options set."""
         watch = ROOT / '.local/bridge/keyboard-watch.exe'
-        if self.shell['marker'] == 'xp-shell.json' and watch.is_file():
+        if self.xp_shell and watch.is_file():
             self.spawn([self.wine, str(watch), str(ROOT / 'session/keyboard.py')], 'keyboard')
 
     def update_recent_programs(self):
         """Build XP's usage-ranked recent program list for the Start menu."""
         helper = self.prefix / 'drive_c/xp/bin/startmenu.exe'
-        if self.shell['marker'] != 'xp-shell.json' or not helper.is_file():
+        if not self.xp_shell or not helper.is_file():
             return
         with (self.state / 'startmenu.log').open('ab') as log:
             try:
@@ -416,71 +423,17 @@ class Session:
     def start_startmenu_view(self):
         """Render recent programs with XP's regular-weight menu text under Wine."""
         helper = self.prefix / 'drive_c/xp/bin/startmenu-view.exe'
-        if self.shell['marker'] == 'xp-shell.json' and helper.is_file():
+        if self.xp_shell and helper.is_file():
             self.spawn([self.wine, r'C:\xp\bin\startmenu-view.exe'], 'startmenu-view')
 
     def repair_sound_scheme(self):
-        """XP's Explorer navigation click, lost from the current sound scheme.
-
-        HIVEDEF.INF gives Explorer's Navigating event the Start sound, but a
-        live prefix can lose its .Current value; Explorer then navigates
-        silently (it asks with SND_NODEFAULT). The shell also runs under
-        another executable name (C:\\xp\\xp-explorer.exe), under which
-        SND_APPLICATION finds no app key, so the effective event is mirrored
-        there. Only the Windows Default scheme's emptied event is restored;
-        the other silent events are silent on a fresh XP too. Never wipes
-        the mirror when a query fails or the effective event is silent."""
-        base = r'HKCU\AppEvents\Schemes\Apps'
-        if self.shell['marker'] != 'xp-shell.json' or self.sound_scheme_repaired():
+        """XP's Explorer navigation click, restored and mirrored for the
+        shell's executable (session/navigation_sound.py); after the first
+        session the saved registry has it, and no Wine program runs for it."""
+        if not self.xp_shell or navigation_sound.repaired(self.prefix):
             return
-        # This migration does not depend on the sound scheme: older prefixes
-        # launched folder windows in a separate process, which produced a
-        # visible white flash while navigating.
-        try:
-            with (self.state / 'sounds.log').open('ab') as log:
-                subprocess.run([self.wine, 'reg', 'add',
-                                r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\BrowseNewProcess',
-                                '/v', 'BrowseNewProcess', '/d', 'no', '/f'],
-                               env=self.env, stdout=log, stderr=subprocess.STDOUT,
-                               timeout=60, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        try:
-            scheme = subprocess.run([self.wine, 'reg', 'query', r'HKCU\AppEvents\Schemes', '/ve'],
-                                    env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    timeout=60, check=False, text=True)
-            current = subprocess.run([self.wine, 'reg', 'query', base + r'\Explorer\Navigating\.Current', '/ve'],
-                                     env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     timeout=60, check=False, text=True)
-            default = subprocess.run([self.wine, 'reg', 'query', base + r'\Explorer\Navigating\.Default', '/ve'],
-                                     env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     timeout=60, check=False, text=True)
-        except (OSError, subprocess.TimeoutExpired):
-            return
-        if current.returncode != 0 and default.returncode != 0 and scheme.returncode != 0:
-            return
-
-        def data(output):
-            if output.returncode != 0:
-                return ''
-            for line in (output.stdout or '').splitlines():
-                for kind in ('REG_EXPAND_SZ', 'REG_SZ'):
-                    if kind in line:
-                        return line.split(kind, 1)[1].strip()
-            return ''
-        sound = data(current) or data(default)
         with (self.state / 'sounds.log').open('ab') as log:
-            if '.Default' in (scheme.stdout or '') and not data(current) and data(default):
-                subprocess.run([self.wine, 'reg', 'add', base + r'\Explorer\Navigating\.Current',
-                                '/ve', '/t', 'REG_EXPAND_SZ', '/d', data(default), '/f'],
-                               env=self.env, stdout=log, stderr=subprocess.STDOUT, timeout=60, check=False)
-                sound = data(default)
-            if not sound:
-                return
-            for leaf in (r'\xp-explorer\Navigating\.Current', r'\xp-explorer\Navigating\.Default'):
-                subprocess.run([self.wine, 'reg', 'add', base + leaf,
-                                '/ve', '/t', 'REG_EXPAND_SZ', '/d', sound, '/f'],
-                               env=self.env, stdout=log, stderr=subprocess.STDOUT, timeout=60, check=False)
+            navigation_sound.repair(self.wine, self.env, log)
 
     def tray_defaults(self):
         """XP's notification area hides the icons that stay inactive (the
@@ -492,24 +445,15 @@ class Session:
         they are there from the second session on."""
         key = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\TrayNotify'
         marker = (r'HKCU\Software\win4wine', 'TrayDefaults')
-        if self.shell['marker'] != 'xp-shell.json':
+        if not self.xp_shell:
             return
         if (not saved_registry.server_running(self.prefix)
                 and saved_registry.user_value(self.prefix, marker[0][5:], marker[1]) == '1'):
             return
-        try:
-            query = subprocess.run([self.wine, 'reg', 'query', key, '/v', 'IconStreams'], env=self.env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False, text=True)
-            done = subprocess.run([self.wine, 'reg', 'query', marker[0], '/v', marker[1]], env=self.env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False, text=True)
-        except (OSError, subprocess.TimeoutExpired):
+        if wine_reg.query(self.wine, self.env, *marker) == '1':
             return
-        if done.returncode == 0 and 'REG_SZ' in done.stdout and done.stdout.split('REG_SZ', 1)[1].strip() == '1':
-            return
-        stream = next((line.split('REG_BINARY', 1)[1].strip() for line in query.stdout.splitlines()
-                       if 'REG_BINARY' in line), '') if query.returncode == 0 else ''
         try:
-            data = bytearray.fromhex(stream)
+            data = bytearray.fromhex(wine_reg.query(self.wine, self.env, key, 'IconStreams') or '')
         except ValueError:
             return
         # A 20-byte header (its size, ..., the count of records, their offset),
@@ -531,31 +475,8 @@ class Session:
                 found = True
         if not found:
             return
-        try:
-            for args in (['add', key, '/v', 'IconStreams', '/t', 'REG_BINARY', '/d', data.hex().upper(), '/f'],
-                         ['add', marker[0], '/v', marker[1], '/d', '1', '/f']):
-                subprocess.run([self.wine, 'reg', *args], env=self.env, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=60, check=True)
-        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
-            pass
-
-    def sound_scheme_repaired(self):
-        """Whether the saved registry has what repair_sound_scheme writes, as
-        it has after the first session: then no Wine program runs for it."""
-        if saved_registry.server_running(self.prefix):
-            return False
-        def read(key, name=None):
-            return saved_registry.user_value(self.prefix, key, name)
-        if read(r'Software\Microsoft\Windows\CurrentVersion\Explorer\BrowseNewProcess', 'BrowseNewProcess') != 'no':
-            return False
-        apps = r'AppEvents\Schemes\Apps'
-        current = read(apps + r'\Explorer\Navigating\.Current')
-        default = read(apps + r'\Explorer\Navigating\.Default')
-        if read(r'AppEvents\Schemes') == '.Default' and not current and default:
-            return False
-        sound = current or default
-        return not sound or all(read(apps + leaf) == sound for leaf in
-                                (r'\xp-explorer\Navigating\.Current', r'\xp-explorer\Navigating\.Default'))
+        if wine_reg.add(self.wine, self.env, key, '/v', 'IconStreams', '/t', 'REG_BINARY', '/d', data.hex().upper()):
+            wine_reg.add(self.wine, self.env, marker[0], '/v', marker[1], '/d', '1')
 
     def status(self, state, **extra):
         record = dict(state=state, time=time.time(), **extra)
@@ -789,7 +710,7 @@ class Session:
         # XP's icons as an icon theme that Control Panel's Icons item offers
         # Linux applications (session/icon_theme.py), made from the user's
         # XP files the first time and kept.
-        if self.shell['marker'] == 'xp-shell.json':
+        if self.xp_shell:
             self.xp_icon_theme()
         # The GTK 3 theme, after the WM has claimed XSETTINGS
         if self.gtk_theme:

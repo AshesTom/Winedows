@@ -34,7 +34,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'xp-explorer/scripts'))
+sys.path.append(str(Path(__file__).resolve().parents[1] / 'greeter'))
 import xpreg  # noqa: E402
+from xpres import Resources, RT_STRING  # noqa: E402
 from registry import CLASSIC_FONTS  # noqa: E402
 
 SCHEMES = r'Control Panel\Appearance\Schemes'
@@ -54,41 +56,17 @@ SANS_SERIF = ('Microsoft Sans Serif', 'MS Sans Serif')
 def strings(dll):
     """The string table of a PE file: {ID: text}, in the file's own language
     where it has English beside it (XP's service pack files do)."""
-    data = Path(dll).read_bytes()
-    pe = struct.unpack_from('<I', data, 0x3c)[0]
-    count, optional = struct.unpack_from('<H12xH', data, pe + 6)
-    magic = struct.unpack_from('<H', data, pe + 24)[0]
-    directories = pe + 24 + (96 if magic == 0x10b else 112)
-    sections = [struct.unpack_from('<IIII', data, pe + 24 + optional + 40 * i + 8) for i in range(count)]
-
-    def offset(rva):
-        for size, address, raw_size, raw in sections:
-            if address <= rva < address + max(size, raw_size):
-                return rva - address + raw
-        raise ValueError('RVA outside the image')
-
-    base = offset(struct.unpack_from('<I', data, directories + 16)[0])
-
-    def entries(at):
-        named, ids = struct.unpack_from('<12xHH', data, at)
-        for i in range(named + ids):
-            name, target = struct.unpack_from('<II', data, at + 16 + 8 * i)
-            yield name, target
-
+    resources = Resources(dll)
     result = {}
-    for kind, target in entries(base):
-        if kind != 6 or not target & 0x80000000:
-            continue
-        for block, target2 in entries(base + (target & 0x7fffffff)):
-            languages = dict(entries(base + (target2 & 0x7fffffff)))
-            for language in sorted(languages, key=lambda language: language == 0x409)[:1]:
-                rva, size = struct.unpack_from('<II', data, base + languages[language])
-                at, end = offset(rva), offset(rva) + size
-                for k in range(16):
-                    length = struct.unpack_from('<H', data, at)[0]
-                    if length:
-                        result[(block - 1) * 16 + k] = data[at + 2:at + 2 + 2 * length].decode('utf-16le')
-                    at += 2 + 2 * length
+    for block in resources.names(RT_STRING):
+        languages = resources.languages(RT_STRING, block)
+        data = resources.find(RT_STRING, block, next((lang for lang in languages if lang != 0x409), None))
+        at = 0
+        for k in range(16):
+            length = struct.unpack_from('<H', data, at)[0]
+            if length:
+                result[(block - 1) * 16 + k] = data[at + 2:at + 2 + 2 * length].decode('utf-16le')
+            at += 2 + 2 * length
     return result
 
 

@@ -8,7 +8,8 @@ new, discarded prefix on an owned Xvfb: a second pass changes nothing, a
 shortcut started through Wine's start.exe runs its Linux command (without the
 session's WINEDEBUG), and --watch follows an added and a removed entry,
 removing only its own shortcuts and the folders it made, as --remove does.
-Build first: bridge-wm/build.sh (linux-launch.exe, linux-links.exe).
+Build first: bridge-wm/build.sh (linux-launch.exe, linux-links.exe). The
+entries are named in Japanese: the ja_JP.UTF-8 locale must exist (locale -a).
 """
 import argparse
 import json
@@ -72,20 +73,21 @@ def check_offline(base):
     marker = base / 'marker'
     home, system = fixture(base, marker)
     # gdk-pixbuf recognizes image types through the MIME database of the data
-    # directories; give it the system's, without the system's applications.
+    # directories, and with glycin finds its image loaders there too; give it
+    # the system's, without the system's applications.
     mime = base / 'mime-only'
     mime.mkdir()
-    (mime / 'mime').symlink_to('/usr/share/mime')
+    for name in ('mime', 'glycin-loaders'):
+        if Path('/usr/share', name).is_dir():
+            (mime / name).symlink_to(Path('/usr/share', name))
     os.environ.update(XDG_DATA_HOME=str(home), XDG_DATA_DIRS=f'{system}:{mime}', LANG='ja_JP.UTF-8',
                       HOME=str(base / 'user'), XDG_CURRENT_DESKTOP='')
     os.environ.pop('LC_ALL', None)
     os.environ.pop('LC_MESSAGES', None)
     menu = linux_apps.Menu.__new__(linux_apps.Menu)
-    menu.japanese = True
-    wanted = menu.wanted()
-    links = {k: v['link'] for k, v in wanted.items()}
-    terminal = 'x-terminal-emulator' if linux_apps.shutil.which('x-terminal-emulator') else 'xterm'
-    expected = {
+    menu.japanese, menu.flat = True, True
+    # XP Explorer's (--flat): the category folders in All Programs itself
+    flat = {
         'editor.desktop': 'アクセサリ\\エディター.lnk',
         'browser.desktop': 'インターネット\\Browser.lnk',
         'top.desktop': 'アクセサリ\\システム ツール\\Top.lnk',
@@ -94,7 +96,14 @@ def check_offline(base):
         'kde-sub.desktop': 'ゲーム\\Sub.lnk',
         'launch.desktop': 'アクセサリ\\Launch.lnk',
     }
-    assert links == expected, links
+    links = {k: v['link'] for k, v in menu.wanted().items()}
+    assert links == flat, links
+    # The session's: all of them in the Linux Applications folder
+    menu.flat = False
+    wanted = menu.wanted()
+    links = {k: v['link'] for k, v in wanted.items()}
+    assert links == {k: 'Linux アプリケーション\\' + v for k, v in flat.items()}, links
+    terminal = 'x-terminal-emulator' if linux_apps.shutil.which('x-terminal-emulator') else 'xterm'
     assert wanted['editor.desktop']['arguments'] == 'true', wanted['editor.desktop']
     assert wanted['editor.desktop']['description'] == 'Edit text'
     assert wanted['browser.desktop']['arguments'] == 'true --name=Browser', wanted['browser.desktop']
@@ -146,12 +155,13 @@ def check_wine(base, wine, system, marker):
         env.pop('WINEARCH')
         (prefix / 'xp-shell.json').write_text('{}\n')
         programs = prefix / linux_apps.PROGRAMS
-        mine = programs / 'アクセサリ' / 'mine.txt'
+        linux = programs / linux_apps.LINUX_FOLDER[0]
+        mine = linux / 'アクセサリ' / 'mine.txt'
         os.environ.update(WINEPREFIX=str(prefix), WINEDEBUG='-all', DISPLAY=env['DISPLAY'])
         menu = linux_apps.Menu(prefix, str(wine))
         before = set(programs.rglob('*'))
         assert menu.sync() == (7, 0)
-        links = sorted(str(p.relative_to(programs)) for p in programs.rglob('*.lnk'))
+        links = sorted(str(p.relative_to(linux)) for p in programs.rglob('*.lnk'))
         assert len(links) == 7 and 'アクセサリ/エディター.lnk' in links, links
         assert (prefix / linux_apps.STATE / 'icons/editor.desktop.ico').is_file()
         # The applications of Linux windows for the proxy (Windows 7's jump lists and pinning)
@@ -166,7 +176,7 @@ def check_wine(base, wine, system, marker):
         assert menu.sync() == (0, 0)
         # A shortcut opened through the Windows shell runs its Linux command.
         subprocess.run([str(wine), 'start', 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\'
-                        'アクセサリ\\Launch.lnk'], env=env, check=True, timeout=60)
+                        f'{linux.name}\\アクセサリ\\Launch.lnk'], env=env, check=True, timeout=60)
         wait_for(marker.is_file, 'the launched Linux command')
         assert marker.read_text().strip() == 'unset', marker.read_text()
         print('linux-apps: shortcuts written once; a shortcut starts its Linux program')
@@ -175,12 +185,12 @@ def check_wine(base, wine, system, marker):
         watcher = subprocess.Popen([sys.executable, str(ROOT / 'session/linux_apps.py'), str(prefix),
                                     '--wine', str(wine), '--watch'], env=env)
         entry(system / 'applications', 'added.desktop', 'Name=Added\nExec=true\nCategories=Office;\n')
-        wait_for((programs / 'オフィス' / 'Added.lnk').is_file, 'the added entry')
+        wait_for((linux / 'オフィス' / 'Added.lnk').is_file, 'the added entry')
         for name in ('added.desktop', 'kde/sub.desktop', 'editor.desktop', 'launch.desktop'):
             (system / 'applications' / name).unlink()
-        wait_for(lambda: not (programs / 'オフィス').exists() and not (programs / 'ゲーム').exists(),
+        wait_for(lambda: not (linux / 'オフィス').exists() and not (linux / 'ゲーム').exists(),
                  'removed entries and their folders')
-        assert mine.is_file() and not (programs / 'アクセサリ' / 'エディター.lnk').exists()
+        assert mine.is_file() and not (linux / 'アクセサリ' / 'エディター.lnk').exists()
         assert sorted(json.loads((prefix / linux_apps.STATE / 'state.json').read_text())['links']) == \
             ['browser.desktop', 'plain.desktop', 'top.desktop', 'twin.desktop']
         print('linux-apps: --watch follows added and removed entries')
@@ -189,7 +199,7 @@ def check_wine(base, wine, system, marker):
         watcher = None
         assert menu.sync(remove=True) == (0, 4)
         left = sorted(str(p.relative_to(programs)) for p in set(programs.rglob('*')) - before)
-        assert left == ['アクセサリ', 'アクセサリ/mine.txt'], left
+        assert left == [linux.name, f'{linux.name}/アクセサリ', f'{linux.name}/アクセサリ/mine.txt'], left
         print('linux-apps: --remove leaves only what it did not make')
     finally:
         if watcher:

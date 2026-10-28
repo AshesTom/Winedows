@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "unixshell.h"
 
 #define WM_TRAY      (WM_APP + 1)
 #define WM_OPEN_CONNECTIONS (WM_APP + 2)
@@ -267,107 +268,16 @@ static BOOL exists(const WCHAR *path)
     return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
 }
 
-static void shell_quote_w(const WCHAR *source, WCHAR *target, size_t capacity);
-
-/* Wine runs a Unix executable named in CreateProcess natively (as
- * linux-launch.c does); env drops the Wine debug channels. */
-static BOOL spawn(const WCHAR *script, HANDLE unused)
-{
-    static const WCHAR prefix[] = L"/usr/bin/env -u WINEDEBUG -u WINEDLLOVERRIDES /bin/sh -c \"";
-    STARTUPINFOW startup = {.cb = sizeof(startup)};
-    PROCESS_INFORMATION process;
-    size_t script_length = wcslen(script), capacity = wcslen(prefix) + script_length * 2 + 3;
-    WCHAR *line = malloc(capacity * sizeof(WCHAR));
-    WCHAR *write;
-    BOOL ok;
-    (void)unused;
-    if (!line) return FALSE;
-    wcscpy(line, prefix);
-    write = line + wcslen(line);
-    while (*script)
-    {
-        size_t slashes = 0;
-        while (*script == L'\\') { slashes++; script++; }
-        if (*script == L'\"')
-        {
-            for (size_t i = 0; i < slashes * 2 + 1; i++) *write++ = L'\\';
-            *write++ = *script++;
-        }
-        else if (!*script)
-        {
-            for (size_t i = 0; i < slashes * 2; i++) *write++ = L'\\';
-            break;
-        }
-        else
-        {
-            for (size_t i = 0; i < slashes; i++) *write++ = L'\\';
-            *write++ = *script++;
-        }
-    }
-    *write++ = L'\"';
-    *write = 0;
-    ok = CreateProcessW(L"Z:\\usr\\bin\\env", line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL,
-                        &startup, &process);
-    free(line);
-    if (!ok) return FALSE;
-    if (process.hThread) CloseHandle(process.hThread);
-    if (process.hProcess) CloseHandle(process.hProcess);
-    return ok;
-}
-
-/* Runs SCRIPT and returns what it printed (at most SIZE - 1 bytes). */
-static BOOL capture(const WCHAR *script, char *buffer, DWORD size)
-{
-    WCHAR path[MAX_PATH], done_path[MAX_PATH + 8], unix_path[MAX_PATH], *command;
-    HANDLE file;
-    DWORD done = 0;
-    BOOL ok = FALSE;
-    *buffer = 0;
-    /* Wine's Unix subprocesses do not inherit a Win32 anonymous pipe as stdout.
-     * Let the Unix shell redirect to a temporary file visible through Z: instead. */
-    if (!GetTempFileNameW(L"Z:\\tmp", L"xpt", 0, path)) return FALSE;
-    swprintf(done_path, ARRAYSIZE(done_path), L"%ls.done", path);
-    wcscpy(unix_path, path + 2);
-    for (WCHAR *p = unix_path; *p; p++) if (*p == L'\\') *p = L'/';
-    size_t capacity = wcslen(script) + wcslen(unix_path) * 2 + 48;
-    command = malloc(capacity * sizeof(WCHAR));
-    if (command)
-    {
-        swprintf(command, capacity, L"(%ls) > '%ls' 2>&1; : > '%ls.done'", script, unix_path, unix_path);
-        if (spawn(command, NULL))
-        {
-            ULONGLONG started = GetTickCount64();
-            /* Wine cannot wait on the process handle of a native Unix child. */
-            while (GetFileAttributesW(done_path) == INVALID_FILE_ATTRIBUTES &&
-                   GetTickCount64() - started < 10000) Sleep(20);
-            if (GetFileAttributesW(done_path) != INVALID_FILE_ATTRIBUTES)
-            {
-                file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-                if (file != INVALID_HANDLE_VALUE)
-                {
-                    ok = ReadFile(file, buffer, size - 1, &done, NULL);
-                    CloseHandle(file);
-                }
-            }
-        }
-        free(command);
-    }
-    DeleteFileW(path);
-    DeleteFileW(done_path);
-    buffer[done] = 0;
-    return ok;
-}
-
 static void poll_volume(void)
 {
     char out[1024], *p;
     /* Their warnings (PipeWire's about RTKit) would come before the volume. */
-    if (!capture(L"if command -v wpctl >/dev/null; then wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null; "
-                 L"elif command -v pactl >/dev/null; then "
-                 L"pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | awk '/Volume/{gsub(\"%\",\"\",$5); "
-                 L"printf \"Volume: %.2f\", $5/100; exit}'; "
-                 L"pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q yes && echo ' [MUTED]'; fi",
-                 out, sizeof(out)) || !(p = strstr(out, "Volume:")))
+    if (!unix_capture(L"if command -v wpctl >/dev/null; then wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null; "
+                      L"elif command -v pactl >/dev/null; then "
+                      L"pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | awk '/Volume/{gsub(\"%\",\"\",$5); "
+                      L"printf \"Volume: %.2f\", $5/100; exit}'; "
+                      L"pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q yes && echo ' [MUTED]'; fi",
+                      out, sizeof(out)) || !(p = strstr(out, "Volume:")))
     {
         volume = -1;
         return;
@@ -498,10 +408,10 @@ static void poll_interface(NETSTATE *state, const char *route, BOOL detail)
     /* nmcli: "yes:SSID:SIGNAL:RATE" for the interface's active network; no rescan. */
     {
         WCHAR script[256], name[80];
-        shell_quote_w(state->name, name, ARRAYSIZE(name));
+        unix_quote(state->name, name, ARRAYSIZE(name));
         swprintf(script, ARRAYSIZE(script),
                  L"nmcli -t -f ACTIVE,SSID,SIGNAL,RATE dev wifi list --rescan no ifname %ls 2>/dev/null | grep '^yes:'", name);
-        if (capture(script, text, sizeof(text)) && !strncmp(text, "yes:", 4))
+        if (unix_capture(script, text, sizeof(text)) && !strncmp(text, "yes:", 4))
         {
             char ssid[128], *out = ssid, *p = text + 4;
             while (*p && *p != ':' && out < ssid + sizeof(ssid) - 1)
@@ -931,11 +841,11 @@ static void read_bluetooth_devices(void)
     char *line, *next;
     bt_count = 0;
     if (bluetooth <= 0 ||
-        !capture(L"for d in $(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}'); do "
-                 L"info=$(bluetoothctl info \"$d\" 2>/dev/null); "
-                 L"c=$(printf '%s' \"$info\" | awk '/Connected:/{print $2; exit}'); "
-                 L"n=$(printf '%s' \"$info\" | sed -n 's/^[[:space:]]*Alias: //p' | head -1); "
-                 L"printf '%s %s %s\\n' \"$d\" \"${c:-no}\" \"$n\"; done", text, sizeof(text)))
+        !unix_capture(L"for d in $(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}'); do "
+                      L"info=$(bluetoothctl info \"$d\" 2>/dev/null); "
+                      L"c=$(printf '%s' \"$info\" | awk '/Connected:/{print $2; exit}'); "
+                      L"n=$(printf '%s' \"$info\" | sed -n 's/^[[:space:]]*Alias: //p' | head -1); "
+                      L"printf '%s %s %s\\n' \"$d\" \"${c:-no}\" \"$n\"; done", text, sizeof(text)))
         return;
     for (line = text; line && *line && bt_count < BT_DEVICES; line = next)
     {
@@ -961,22 +871,22 @@ static void bluetooth_command(UINT command)
     switch (command)
     {
     case BT_ADD:
-        spawn(L"bluedevil-wizard 2>/dev/null || blueman-assistant 2>/dev/null || blueman-manager 2>/dev/null "
-              L"|| gnome-control-center bluetooth", NULL);
+        unix_spawn(L"bluedevil-wizard 2>/dev/null || blueman-assistant 2>/dev/null || blueman-manager 2>/dev/null "
+                   L"|| gnome-control-center bluetooth");
         break;
     case BT_SHOW:
     case BT_SETTINGS:
-        spawn(devices, NULL);
+        unix_spawn(devices);
         break;
     case BT_SEND:
-        spawn(L"bluedevil-sendfile 2>/dev/null || blueman-sendto", NULL);
+        unix_spawn(L"bluedevil-sendfile 2>/dev/null || blueman-sendto");
         break;
     /* XP's radio switch is rfkill's block, which the icon reads (as bluedevil's). */
     case BT_ON:
-        spawn(L"rfkill unblock bluetooth; sleep 1; bluetoothctl power on", NULL);
+        unix_spawn(L"rfkill unblock bluetooth; sleep 1; bluetoothctl power on");
         break;
     case BT_OFF:
-        spawn(L"bluetoothctl power off; rfkill block bluetooth", NULL);
+        unix_spawn(L"bluetoothctl power off; rfkill block bluetooth");
         break;
     case BT_REMOVE:
         /* Until the next session, as XP's own is gone until Bluetooth Devices brings it back. */
@@ -991,7 +901,7 @@ static void bluetooth_command(UINT command)
             MultiByteToWideChar(CP_ACP, 0, bt_devices[i].address, -1, address, ARRAYSIZE(address));
             swprintf(script, ARRAYSIZE(script), L"bluetoothctl %ls %ls",
                      bt_devices[i].connected ? L"disconnect" : L"connect", address);
-            spawn(script, NULL);
+            unix_spawn(script);
         }
     }
 }
@@ -1111,7 +1021,7 @@ static void set_volume(int value)
     WCHAR script[256];
     swprintf(script, 256, L"if command -v wpctl >/dev/null; then wpctl set-volume @DEFAULT_AUDIO_SINK@ %d%%; "
              L"else pactl set-sink-volume @DEFAULT_SINK@ %d%%; fi", value, value);
-    spawn(script, NULL);
+    unix_spawn(script);
     volume = value;
 }
 
@@ -1120,7 +1030,7 @@ static void set_mute(int value)
     WCHAR script[256];
     swprintf(script, 256, L"if command -v wpctl >/dev/null; then wpctl set-mute @DEFAULT_AUDIO_SINK@ %d; "
              L"else pactl set-sink-mute @DEFAULT_SINK@ %d; fi", value, value);
-    spawn(script, NULL);
+    unix_spawn(script);
     muted = value;
     show_volume();
 }
@@ -1423,11 +1333,11 @@ static void net_support_update(void)
     unsigned prefix_length = 0;
     if (!net_support) return;
     /* Every name goes into the shell quoted. */
-    shell_quote_w(sheet.name, name, ARRAYSIZE(name));
+    unix_quote(sheet.name, name, ARRAYSIZE(name));
     swprintf(script, 512, L"nmcli -t -g IP4.ADDRESS,IP4.GATEWAY device show %ls 2>/dev/null | head -2; "
              L"c=$(nmcli -g GENERAL.CONNECTION device show %ls 2>/dev/null); "
              L"[ -n \"$c\" ] && nmcli -g ipv4.method connection show \"$c\" 2>/dev/null", name, name);
-    capture(script, out, sizeof(out));
+    unix_capture(script, out, sizeof(out));
     line = strtok(out, "\n");
     if (line) { address = line; line = strtok(NULL, "\n"); }
     if (line) { gateway = line; line = strtok(NULL, "\n"); }
@@ -1486,9 +1396,9 @@ static INT_PTR CALLBACK net_general_proc(HWND dialog, UINT message, WPARAM wpara
         {
             /* Disable or enable, as XP's button does, through NetworkManager. */
             WCHAR name[80];
-            shell_quote_w(sheet.name, name, ARRAYSIZE(name));
+            unix_quote(sheet.name, name, ARRAYSIZE(name));
             swprintf(script, 256, sheet.up > 0 ? L"nmcli device disconnect %ls" : L"nmcli device connect %ls", name);
-            spawn(script, NULL);
+            unix_spawn(script);
             PropSheet_PressButton(net_sheet, PSBTN_CANCEL);
         }
         return TRUE;
@@ -1564,9 +1474,9 @@ static INT_PTR CALLBACK net_support_proc(HWND dialog, UINT message, WPARAM wpara
         {
             /* Repair: NetworkManager reapplies the connection. */
             WCHAR name[80];
-            shell_quote_w(sheet.name, name, ARRAYSIZE(name));
+            unix_quote(sheet.name, name, ARRAYSIZE(name));
             swprintf(script, 256, L"nmcli device reapply %ls || nmcli device connect %ls", name, name);
-            spawn(script, NULL);
+            unix_spawn(script);
         }
         else if (LOWORD(wparam) == 1062)
             DialogBoxParamW(xp_module(L"netshell.dll"), MAKEINTRESOURCEW(1807), dialog, net_details_proc, (LPARAM)dialog);
@@ -1737,7 +1647,7 @@ static void connections_refresh(void)
     if (!nmcli_checked)
     {
         char path[256];
-        nmcli_available = capture(L"command -v nmcli 2>/dev/null", path, sizeof(path)) && *path;
+        nmcli_available = unix_capture(L"command -v nmcli 2>/dev/null", path, sizeof(path)) && *path;
         nmcli_checked = 1;
     }
     if (!nmcli_available)
@@ -1748,7 +1658,7 @@ static void connections_refresh(void)
         return;
     }
     active_output[0] = 0;
-    capture(L"nmcli -t -g UUID connection show --active 2>/dev/null", active_output, sizeof(active_output));
+    unix_capture(L"nmcli -t -g UUID connection show --active 2>/dev/null", active_output, sizeof(active_output));
     for (line = strtok_s(active_output, "\r\n", &context); line && active_count < CONNECTION_LIMIT;
          line = strtok_s(NULL, "\r\n", &context))
     {
@@ -1756,7 +1666,8 @@ static void connections_refresh(void)
         active[active_count][sizeof(active[active_count]) - 1] = 0;
         active_count++;
     }
-    if (!capture(L"nmcli -t --escape yes -f NAME,UUID,TYPE,DEVICE connection show 2>/dev/null", output, sizeof(output)))
+    if (!unix_capture(L"nmcli -t --escape yes -f NAME,UUID,TYPE,DEVICE connection show 2>/dev/null",
+                      output, sizeof(output)))
     {
         ListView_DeleteAllItems(connections_list);
         SetWindowTextW(connections_hint, nmcli_missing());
@@ -1812,10 +1723,10 @@ static void connection_action(void)
     int index = selected_connection();
     WCHAR script[256], uuid[96], text[64];
     if (index < 0) return;
-    shell_quote_w(connections[index].uuid, uuid, ARRAYSIZE(uuid));
+    unix_quote(connections[index].uuid, uuid, ARRAYSIZE(uuid));
     swprintf(script, ARRAYSIZE(script), L"nmcli --wait 15 connection %ls uuid %ls >/dev/null 2>&1",
              connections[index].active ? L"down" : L"up", uuid);
-    if (spawn(script, NULL))
+    if (unix_spawn(script))
     {
         if (connections[index].active) xp_text(L"netshell.dll", 1043, L"Disconnecting", text, ARRAYSIZE(text));
         else xp_text(L"netshell.dll", 1041, L"Connecting", text, ARRAYSIZE(text));
@@ -2018,27 +1929,6 @@ static void show_network_connections(void)
 
 #define WIRELESS_CLASS L"XPWirelessNetworks"
 
-static void shell_quote_w(const WCHAR *source, WCHAR *target, size_t capacity)
-{
-    size_t used = 0;
-    if (!capacity) return;
-    target[used++] = L'\'';
-    while (*source && used + 5 < capacity)
-    {
-        if (*source == L'\'')
-        {
-            target[used++] = L'\'';
-            target[used++] = L'\\';
-            target[used++] = L'\'';
-            target[used++] = L'\'';
-            source++;
-        }
-        else target[used++] = *source++;
-    }
-    if (used + 2 <= capacity) target[used++] = L'\'';
-    target[used] = 0;
-}
-
 static void wireless_layout(HWND hwnd, int width, int height)
 {
     MoveWindow(GetDlgItem(hwnd, WIFI_TASKS), 0, 0, 155, height, TRUE);
@@ -2101,12 +1991,13 @@ static void wireless_refresh(void)
     if (!nmcli_checked)
     {
         char path[256];
-        nmcli_available = capture(L"command -v nmcli 2>/dev/null", path, sizeof(path)) && *path;
+        nmcli_available = unix_capture(L"command -v nmcli 2>/dev/null", path, sizeof(path)) && *path;
         nmcli_checked = 1;
     }
     if (!nmcli_available ||
-        !capture(L"nmcli -t --escape yes -f SSID,BSSID,SIGNAL,SECURITY,IN-USE dev wifi list --rescan no 2>/dev/null",
-                 output, sizeof(output)))
+        !unix_capture(L"nmcli -t --escape yes -f SSID,BSSID,SIGNAL,SECURITY,IN-USE dev wifi list --rescan no "
+                      L"2>/dev/null",
+                      output, sizeof(output)))
     {
         SendMessageW(wireless_list, LB_RESETCONTENT, 0, 0);
         SetWindowTextW(wireless_hint, nmcli_missing());
@@ -2273,9 +2164,10 @@ static BOOL write_key_file(const WCHAR *key, WCHAR *file, WCHAR *unix_file)
 static BOOL wireless_known(const WCHAR *ssid)
 {
     char output[4096], wanted[512], *context, *line;
-    if (!capture(L"for u in $(nmcli -t -g UUID,TYPE connection show 2>/dev/null | sed -n 's/:802-11-wireless$//p'); "
-                 L"do nmcli --escape no -g 802-11-wireless.ssid connection show uuid \"$u\" 2>/dev/null; done",
-                 output, sizeof(output)))
+    if (!unix_capture(L"for u in $(nmcli -t -g UUID,TYPE connection show 2>/dev/null "
+                      L"| sed -n 's/:802-11-wireless$//p'); "
+                      L"do nmcli --escape no -g 802-11-wireless.ssid connection show uuid \"$u\" 2>/dev/null; done",
+                      output, sizeof(output)))
         return FALSE;
     WideCharToMultiByte(CP_UTF8, 0, ssid, -1, wanted, sizeof(wanted), NULL, NULL);
     for (line = strtok_s(output, "\r\n", &context); line; line = strtok_s(NULL, "\r\n", &context))
@@ -2290,8 +2182,8 @@ static void wireless_connect_selected(void)
     BOOL started;
     if (!network || wireless_connect_started) return;
     wcscpy(wireless_connect_ssid, network->ssid);
-    shell_quote_w(network->ssid, ssid, ARRAYSIZE(ssid));
-    shell_quote_w(network->bssid, bssid, ARRAYSIZE(bssid));
+    unix_quote(network->ssid, ssid, ARRAYSIZE(ssid));
+    unix_quote(network->bssid, bssid, ARRAYSIZE(bssid));
     if (network->active)
     {
         /* XP asks before it disconnects. */
@@ -2303,7 +2195,7 @@ static void wireless_connect_selected(void)
         GetWindowTextW(wireless_window, title, ARRAYSIZE(title));
         if (MessageBoxW(wireless_window, text, title, MB_YESNO | MB_ICONQUESTION) != IDYES) return;
         swprintf(script, ARRAYSIZE(script), L"nmcli connection down id %ls >/dev/null 2>&1", ssid);
-        spawn(script, NULL);
+        unix_spawn(script);
         SetTimer(wireless_window, TIMER_WIRELESS, 1500, NULL);
         return;
     }
@@ -2311,7 +2203,7 @@ static void wireless_connect_selected(void)
     {
         swprintf(script, ARRAYSIZE(script), L"nmcli --wait 20 device wifi connect %ls bssid %ls >/dev/null 2>&1",
                  ssid, bssid);
-        started = spawn(script, NULL);
+        started = unix_spawn(script);
     }
     else if (wcsstr(network->security, L"802.1X"))
     {
@@ -2336,7 +2228,7 @@ static void wireless_connect_selected(void)
         started = write_key_file(key, key_file, unix_file);
         SecureZeroMemory(key, sizeof(key));
         if (!started) return;
-        shell_quote_w(unix_file, quoted_file, ARRAYSIZE(quoted_file));
+        unix_quote(unix_file, quoted_file, ARRAYSIZE(quoted_file));
         swprintf(script, ARRAYSIZE(script),
                  L"f=%ls; IFS= read -r k < \"$f\"; rm -f \"$f\"; "
                  L"u=$(cat /proc/sys/kernel/random/uuid) && "
@@ -2348,7 +2240,7 @@ static void wireless_connect_selected(void)
                  L"else nmcli connection delete uuid \"$u\"; fi >/dev/null 2>&1",
                  quoted_file, ssid, ssid, method, !wcscmp(method, L"none") ? L" wifi-sec.wep-key-type 1" : L"",
                  secret);
-        started = spawn(script, NULL);
+        started = unix_spawn(script);
         if (!started) DeleteFileW(key_file);
     }
     if (!started)
@@ -2567,7 +2459,7 @@ static LRESULT CALLBACK wireless_proc(HWND hwnd, UINT message, WPARAM wparam, LP
         wireless_layout(hwnd, client.right, client.bottom);
         wireless_opened = GetTickCount64();
         wireless_refresh();
-        spawn(L"nmcli device wifi rescan >/dev/null 2>&1", NULL);
+        unix_spawn(L"nmcli device wifi rescan >/dev/null 2>&1");
         SetTimer(hwnd, TIMER_WIRELESS, 2000, NULL);
         return 0;
     }
@@ -2635,7 +2527,7 @@ static LRESULT CALLBACK wireless_proc(HWND hwnd, UINT message, WPARAM wparam, LP
             return 0;
         case WIFI_CONNECT: wireless_connect_selected(); return 0;
         case WIFI_REFRESH:
-            spawn(L"nmcli device wifi rescan >/dev/null 2>&1", NULL);
+            unix_spawn(L"nmcli device wifi rescan >/dev/null 2>&1");
             wireless_refresh();
             SetTimer(hwnd, TIMER_WIRELESS, 2000, NULL);
             return 0;
@@ -2724,19 +2616,19 @@ static void run_settings(UINT command)
     case CMD_MIXER:
         if (open_volume_control()) break;
         /* Without XP's sndvol32: the Linux mixer. */
-        spawn(L"command -v pavucontrol >/dev/null && exec pavucontrol; "
-              L"kcmshell6 kcm_pulseaudio 2>/dev/null || systemsettings kcm_pulseaudio", NULL);
+        unix_spawn(L"command -v pavucontrol >/dev/null && exec pavucontrol; "
+                   L"kcmshell6 kcm_pulseaudio 2>/dev/null || systemsettings kcm_pulseaudio");
         break;
     case CMD_SOUND:
-        spawn(L"kcmshell6 kcm_pulseaudio 2>/dev/null || systemsettings kcm_pulseaudio 2>/dev/null || pavucontrol", NULL);
+        unix_spawn(L"kcmshell6 kcm_pulseaudio 2>/dev/null || systemsettings kcm_pulseaudio 2>/dev/null || pavucontrol");
         break;
     case CMD_NETWORK_SETTINGS:
-        spawn(L"kcmshell6 kcm_networkmanagement 2>/dev/null || systemsettings kcm_networkmanagement 2>/dev/null "
-              L"|| nm-connection-editor", NULL);
+        unix_spawn(L"kcmshell6 kcm_networkmanagement 2>/dev/null || systemsettings kcm_networkmanagement 2>/dev/null "
+                   L"|| nm-connection-editor");
         break;
     case CMD_POWER:
-        spawn(L"kcmshell6 kcm_powerdevilprofilesconfig 2>/dev/null || systemsettings kcm_powerdevilprofilesconfig",
-              NULL);
+        unix_spawn(L"kcmshell6 kcm_powerdevilprofilesconfig 2>/dev/null "
+                   L"|| systemsettings kcm_powerdevilprofilesconfig");
         break;
     }
 }

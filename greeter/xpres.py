@@ -1,8 +1,11 @@
 """Read bitmap, string and dialog resources from a PE file (no code is read or run).
 
 The greeter draws the Welcome screen from the user's own XP files at run
-time; this module only walks the documented resource directory.
+time; this module only walks the documented resource directory. The session
+(icons, the command prompt) and the prefix's setup (XP's language, string
+tables and self-registration) read XP's files through it too.
 """
+from pathlib import Path
 import struct
 
 RT_BITMAP, RT_DIALOG, RT_STRING = 2, 5, 6
@@ -10,7 +13,7 @@ RT_BITMAP, RT_DIALOG, RT_STRING = 2, 5, 6
 
 class Resources:
     def __init__(self, path):
-        self.data = open(path, 'rb').read()
+        self.data = Path(path).read_bytes()
         pe = struct.unpack_from('<I', self.data, 0x3c)[0]
         if self.data[pe:pe + 4] != b'PE\0\0':
             raise ValueError(f'{path}: not a PE file')
@@ -23,7 +26,8 @@ class Resources:
         for i in range(sections):
             size, address, raw_size, raw = struct.unpack_from('<IIII', self.data, table + 40 * i + 8)
             self.sections.append((address, max(size, raw_size), raw))
-        self.base = self.offset(self.rva)
+        # None for a file without resources: it has no resource of any type.
+        self.base = self.offset(self.rva) if self.rva else None
 
     def offset(self, rva):
         for address, size, raw in self.sections:
@@ -32,6 +36,9 @@ class Resources:
         raise ValueError(f'RVA {rva:#x} outside the sections')
 
     def entries(self, offset):
+        """(name or ID, target) of the directory at OFFSET, named entries first."""
+        if offset is None:
+            return
         named, numbered = struct.unpack_from('<12xHH', self.data, offset)
         for i in range(named + numbered):
             name, target = struct.unpack_from('<II', self.data, offset + 16 + 8 * i)
@@ -48,6 +55,8 @@ class Resources:
         """The data of resource TYPE/NAME (numbers or names) in LANGUAGE (a LANGID)
         if it has it, else in its first language; or None."""
         level = self.base
+        if level is None:
+            return None
         for key in (rtype, name, None):
             entries = list(self.entries(level))
             if key is None and language is not None:
@@ -65,16 +74,25 @@ class Resources:
                 return self.data[start:start + size]
         return None
 
-    def languages(self, rtype):
-        """The LANGIDs of the resources of type RTYPE, in the order of the directory."""
+    def languages(self, rtype, name=None):
+        """The LANGIDs of the resources of type RTYPE (only of the one named
+        NAME, a number or a name, when given), in the order of the directory."""
         found = []
         for entry, target in self.entries(self.base):
             if self.name(entry) != rtype or not target & 0x80000000:
                 continue
-            for _, names in self.entries(self.base + (target & 0x7fffffff)):
-                if names & 0x80000000:
+            for resource, names in self.entries(self.base + (target & 0x7fffffff)):
+                if names & 0x80000000 and (name is None or self.name(resource) == name):
                     found += [self.name(lang) for lang, _ in self.entries(self.base + (names & 0x7fffffff))]
         return found
+
+    def names(self, rtype):
+        """The names of the resources of type RTYPE (numbers, or strings for
+        named ones, which come first), in the order of the directory."""
+        for entry, target in self.entries(self.base):
+            if self.name(entry) == rtype and target & 0x80000000:
+                return [self.name(name) for name, _ in self.entries(self.base + (target & 0x7fffffff))]
+        return []
 
     def bitmap(self, name):
         """A BITMAP resource as the bytes of a .bmp file."""

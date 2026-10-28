@@ -17,8 +17,13 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import media
+# xpreg beside this script; from win4wine, the media's language as its
+# extraction finds it, and the shortcuts as its Start menu makes them
+sys.path[:0] = [str(Path(__file__).resolve().parent)] + [str(Path(__file__).resolve().parents[2] / d)
+                                                         for d in ('extract', 'session')]
+import linux_apps  # noqa: E402
+import media  # noqa: E402
+import navigation_sound  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / '.local/bin'
@@ -119,13 +124,9 @@ class Reg:
 
 def save_shortcut(wine, prefix, env, link, target, arguments='', directory='', icon='', description=''):
     """Create an XP Start menu link with the Shell Link API."""
-    helper = BIN / 'linux-links.exe'
-    overrides = env.get('WINEDLLOVERRIDES', '')
-    link_env = dict(env, WINEDLLOVERRIDES=(overrides + ';' if overrides else '') + 'winemenubuilder.exe=d',
-                    WINEPREFIX=str(prefix))
-    line = '\t'.join((link, target, arguments, directory, icon, description)) + '\n'
-    result = subprocess.run([wine, str(helper)], env=link_env, input=line, capture_output=True, text=True,
-                            encoding='utf-8', timeout=60)
+    line = '\t'.join((link, target, arguments, directory, icon, description))
+    result = linux_apps.run_links(wine, BIN / 'linux-links.exe', dict(env, WINEPREFIX=str(prefix)), [line],
+                                  timeout=60)
     if result.returncode or any(item.startswith('fail ') for item in result.stdout.splitlines()):
         raise RuntimeError(f'Could not create {link}: {result.stdout.strip()} {result.stderr.strip()}')
 
@@ -524,74 +525,11 @@ def navigating_default(assets):
 
 
 def repair_navigating_sound(prefix, wine):
-    """Re-mirror the effective navigation click under xp-explorer.
-
-    XP's Explorer plays Navigating through SND_APPLICATION, looked up under
-    the calling executable's name; the shell runs as C:\\xp\\xp-explorer.exe.
-    A live prefix can lose Explorer's .Current (then it navigates silently
-    with SND_NODEFAULT), and an older prefix has the hardcoded English file
-    or a stale mirror. Best effort: never wipes the mirror on query failure.
-    """
-    import subprocess
-    base = r'HKCU\AppEvents\Schemes\Apps'
+    """Restore and mirror Explorer's navigation click under xp-explorer
+    (session/navigation_sound.py), before each start of the desktop."""
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
     env.pop('WINEARCH', None)
-
-    # Keep folder navigation in the shell process even if the sound scheme is
-    # missing or temporarily unreadable. This is the migration for prefixes
-    # created with BrowseNewProcess=yes, which caused the white flash.
-    try:
-        subprocess.run([wine, 'reg', 'add',
-                        r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\BrowseNewProcess',
-                        '/v', 'BrowseNewProcess', '/d', 'no', '/f'],
-                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-                       timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-    def query(key):
-        try:
-            out = subprocess.run([wine, 'reg', 'query', key, '/ve'],
-                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 timeout=60, text=True)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        if out.returncode != 0:
-            return None
-        for line in (out.stdout or '').splitlines():
-            for kind in ('REG_EXPAND_SZ', 'REG_SZ'):
-                if kind in line:
-                    return line.split(kind, 1)[1].strip()
-        return ''
-
-    scheme = query(r'HKCU\AppEvents\Schemes')
-    current = query(base + r'\Explorer\Navigating\.Current')
-    default = query(base + r'\Explorer\Navigating\.Default')
-    if current is None and default is None:
-        return
-    current = current or ''
-    default = default or ''
-    # Restore an emptied Windows Default event from its .Default.
-    if scheme is not None and '.Default' in scheme and not current and default:
-        try:
-            subprocess.run([wine, 'reg', 'add', base + r'\Explorer\Navigating\.Current',
-                            '/ve', '/t', 'REG_EXPAND_SZ', '/d', default, '/f'],
-                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-                           timeout=60, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        current = current or default
-    sound = current or default
-    if not sound:
-        return
-    for leaf in (r'\xp-explorer\Navigating\.Current', r'\xp-explorer\Navigating\.Default'):
-        try:
-            subprocess.run([wine, 'reg', 'add', base + leaf,
-                            '/ve', '/t', 'REG_EXPAND_SZ', '/d', sound, '/f'],
-                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-                           timeout=60, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    navigation_sound.repair(wine, env)
 
 
 INTERNET_SETTINGS = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
@@ -757,10 +695,7 @@ def xp_defaults(assets, prefix, wine, folders=True):
                   'Choose an available wireless network')
     # A live prefix can empty Explorer's .Current again after the import
     # above; re-mirror the effective click now (best effort, never wipes).
-    try:
-        repair_navigating_sound(prefix, wine)
-    except Exception:
-        pass
+    repair_navigating_sound(prefix, wine)
     (prefix / '.xp-defaults').write_text(DEFAULTS_VERSION + '\n')
 
 
@@ -1129,8 +1064,8 @@ def create(assets, prefix, wine):
     install_ie(assets, prefix, wine)
 
     print('* Adding the Linux applications to All Programs...', flush=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/linux_apps.py'), str(prefix), '--wine', wine],
-                   env=env, check=True)
+    subprocess.run([sys.executable, str(ROOT.parent / 'session/linux_apps.py'), str(prefix), '--wine', wine,
+                    '--flat', '--helpers', str(BIN)], env=env, check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/pins.py'), str(prefix), '--wine', wine], env=env, check=True)
     subprocess.run([wineserver, '-w'], env=env)
     print(f'Prefix ready: {prefix}')

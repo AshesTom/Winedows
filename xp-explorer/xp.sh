@@ -33,6 +33,20 @@ need() {
     done
 }
 
+# Extracts GROUP's files from XP_ISO when one of FILES is missing from the
+# assets (made by a version that did not extract them); without XP_ISO, they stay missing.
+extract_missing() {
+    local group=$1 file
+    shift
+    [[ -n ${XP_ISO:-} ]] || return 0
+    for file in "$@"; do
+        if [[ ! -e $assets/$file ]]; then
+            python3 -I "$root/scripts/extract.py" --only "$group" "$XP_ISO" "$assets"
+            return
+        fi
+    done
+}
+
 case ${1:-} in
 wine)
     # Wine's configure cannot take a path with spaces: build outside the project.
@@ -70,16 +84,10 @@ run)
     # XP's sounds, Explorer settings, image viewer and shell shortcuts, again when they change
     # (XP_ISO=/path/to/the.iso extracts their files when the assets predate them).
     if [[ $(cat "$WINEPREFIX/.xp-defaults" 2>/dev/null) != "$(python3 -I "$root/scripts/prefix.py" --defaults-version)" ]]; then
-        if [[ -n ${XP_ISO:-} ]]; then
-            for group in media inf shell resources; do
-                case $group in
-                    media) [[ -d $assets/media ]] || python3 -I "$root/scripts/extract.py" --only "$group" "$XP_ISO" "$assets" ;;
-                    inf) [[ -f $assets/inf/hivedef.inf && -f $assets/inf/hivesft.inf ]] || python3 -I "$root/scripts/extract.py" --only "$group" "$XP_ISO" "$assets" ;;
-                    shell) [[ -f $assets/shell/shimgvw.dll ]] || python3 -I "$root/scripts/extract.py" --only "$group" "$XP_ISO" "$assets" ;;
-                    resources) [[ -f $assets/resources/user32.dll ]] || python3 -I "$root/scripts/extract.py" --only "$group" "$XP_ISO" "$assets" ;;
-                esac
-            done
-        fi
+        extract_missing media media
+        extract_missing inf inf/hivedef.inf inf/hivesft.inf
+        extract_missing shell shell/shimgvw.dll
+        extract_missing resources resources/user32.dll
         python3 -I "$root/scripts/prefix.py" --defaults "$WINEPREFIX" --wine "$wine"
         wineserver -k; wineserver -w
         python3 -I "$root/scripts/prefix.py" --stage "$WINEPREFIX" "$size"
@@ -88,15 +96,9 @@ run)
     # (XP_ISO=/path/to/the.iso extracts it when the assets predate it.)
     # After a Wine update too: wineboot registers Wine's own mshtml again.
     if [[ $(cat "$WINEPREFIX/.ie-installed" 2>/dev/null) != "$(python3 -I "$root/scripts/prefix.py" --wine-build "$wine")" ]]; then
-        if [[ -n ${XP_ISO:-} && ! -f $assets/ie/iexplore.exe ]]; then
-            python3 -I "$root/scripts/extract.py" --only ie "$XP_ISO" "$assets"
-        fi
-        if [[ -n ${XP_ISO:-} && ! -f $assets/wmp/wmplayer.exe ]]; then
-            python3 -I "$root/scripts/extract.py" --only wmp "$XP_ISO" "$assets"
-        fi
-        if [[ -n ${XP_ISO:-} && ! -f $assets/srchasst/srchui.dll ]]; then
-            python3 -I "$root/scripts/extract.py" --only srchasst "$XP_ISO" "$assets"
-        fi
+        extract_missing ie ie/iexplore.exe
+        extract_missing wmp wmp/wmplayer.exe
+        extract_missing srchasst srchasst/srchui.dll
         if [[ -f $assets/ie/iexplore.exe ]]; then
             python3 -I "$root/scripts/prefix.py" --ie "$WINEPREFIX" --wine "$wine"
             wineserver -k; wineserver -w
@@ -120,7 +122,7 @@ run)
     exec "$wine" explorer "/desktop=$desktop,$size" 'C:\xp\bin\xpstart.exe' >"${XP_LOG:-$root/.local/xp-session.log}" 2>&1
     ;;
 apps)
-    python3 -I "$root/scripts/linux_apps.py" "$WINEPREFIX" --wine "$wine"
+    python3 -I "$repo/session/linux_apps.py" "$WINEPREFIX" --wine "$wine" --flat --helpers "$root/.local/bin"
     ;;
 pins)
     wineserver -k 2>/dev/null || true; wineserver -w 2>/dev/null || true

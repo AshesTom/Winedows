@@ -32,6 +32,10 @@ import time
 import xp_schemes
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / 'session'))
+import linux_apps  # noqa: E402
+import xp_update  # noqa: E402
+
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
 VERSION = '38'
@@ -243,10 +247,17 @@ def keyboard_layouts(assets):
     return texts
 
 
+def wine_env(prefix, **variables):
+    """The environment of the Wine programs run here on PREFIX: without
+    Wine's debug output, with VARIABLES."""
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', **variables)
+    env.pop('WINEARCH', None)
+    return env
+
+
 def regedit(wine, prefix, *texts):
     """TEXTS, .reg files' contents, imported in their order by one regedit."""
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
     header = 'Windows Registry Editor Version 5.00'
     text = header + '\r\n\r\n' + '\r\n\r\n'.join(t.lstrip('\ufeff').strip().removeprefix(header).strip('\r\n')
                                              for t in texts) + '\r\n'
@@ -428,8 +439,7 @@ def find_nocase(root, relative):
 
 def themes(assets, prefix, wine):
     """Display Properties' Windows XP and Windows Classic themes."""
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', WINEDLLOVERRIDES='themeui=n')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix, WINEDLLOVERRIDES='themeui=n')
     # The Windows XP theme (luna.theme) names %WinDir%\web\wallpaper\Bliss.bmp,
     # XP's only Bliss there; a Bliss.jpg beside it (stage.py before) would be
     # listed twice in Display Properties.
@@ -510,8 +520,7 @@ def security_center(assets, prefix, wine, xpx):
         r.add(r'HKCU\Software\Wine\AppDefaults\svchost.exe\DllOverrides', dll, 'native')
     regedit(wine, prefix, r.text())
     # Wine's 32-bit svchost reads its groups from the 64-bit view too.
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
     subprocess.run([wine, 'reg', 'add', r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Svchost', '/v', 'wscsvc',
                     '/t', 'REG_MULTI_SZ', '/d', 'SharedAccess\\0wscsvc', '/f', '/reg:64'], env=env, check=True,
                    stdout=subprocess.DEVNULL)
@@ -589,8 +598,7 @@ def help_center(assets, prefix, wine, xpx):
     regedit(wine, prefix, r.text())
     language = json.loads((prefix / 'xp-shell.json').read_text()).get('language', 'en')
     locale = 'ja_JP.UTF-8' if language == 'ja' else 'en_US.UTF-8'
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', LANG=locale, LC_ALL=locale)
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix, LANG=locale, LC_ALL=locale)
 
     def run(*args, cwd=None):
         subprocess.run([wine, *args], env=env, cwd=cwd, check=False, stdout=subprocess.DEVNULL,
@@ -633,8 +641,7 @@ def user_accounts(prefix, wine, xpx):
     system = prefix / 'drive_c/windows/syswow64'
     if not (system / 'nusrmgr.cpl').is_file():
         return
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
     xpx.register(wine, env, [r'C:\windows\system32\shgina.dll', r'C:\windows\system32\nusrmgr.cpl'])
 
 
@@ -644,8 +651,7 @@ def network_connections(prefix, wine):
     which xpnetcon.exe serves. stage() has put it in syswow64."""
     if not (prefix / 'drive_c/windows/syswow64/netshell.dll').is_file():
         return
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
     subprocess.run([wine, r'C:\windows\syswow64\regsvr32.exe', '/s', r'C:\windows\system32\netshell.dll'],
                    env=env, check=False)
 
@@ -669,8 +675,7 @@ def start_menu_programs(assets, prefix, wine, xpx):
     source = assets / 'programs'
     if not (source / 'tourstart.exe').is_file():
         return
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
     for name, folder, link, description in XP_PROGRAMS:
         target = prefix / 'drive_c' / folder[3:].replace('\\', '/').replace('system32', 'syswow64')
         target.mkdir(parents=True, exist_ok=True)
@@ -851,11 +856,7 @@ def xp_programs(assets, prefix, wine, xpx):
     media = drive / 'ProgramData/Microsoft/Windows/Start Menu/Programs/Accessories/Entertainment/Windows Media Player.lnk'
     if media.is_file():
         shutil.copyfile(media, media.parents[2] / media.name)
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all',
-               WINEDLLOVERRIDES='winemenubuilder.exe=d')
-    env.pop('WINEARCH', None)
-    result = subprocess.run([wine, str(BRIDGE / 'linux-links.exe')], env=env, input='\n'.join(lines) + '\n',
-                            capture_output=True, text=True, encoding='utf-8', timeout=600)
+    result = linux_apps.run_links(wine, BRIDGE / 'linux-links.exe', wine_env(prefix), lines)
     for line in result.stdout.splitlines():
         if line.startswith('fail'):
             print('xp-programs:', line, file=sys.stderr)
@@ -912,8 +913,7 @@ def xp_user_defaults(prefix, wine):
     tooltips' colours, which Luna names in none of its styles: XP's uxtheme
     sets them to its defaults, black on 255 255 225 (Wine patch 0181), where
     the scheme used before stayed (Eggplant's purple text on white)."""
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
 
     def query(key, name):
         out = subprocess.run([wine, 'reg', 'query', key, '/v', name], env=env, capture_output=True,
@@ -953,8 +953,7 @@ def registered_owner(prefix, wine):
     Properties under "Registered to:". XP's setup asks for it; Wine leaves
     it empty, and both had blank lines in its place. The Linux account's
     full name, or its login, while it is empty: a name set since stays."""
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix)
     key = r'HKLM\Software\Microsoft\Windows NT\CurrentVersion'
     out = subprocess.run([wine, 'reg', 'query', key, '/v', 'RegisteredOwner', '/reg:32'], env=env,
                          capture_output=True, text=True).stdout
@@ -1032,8 +1031,6 @@ def stage(prefix, xpx=None):
             temporary.replace(target)
     system = prefix / 'drive_c/windows/syswow64'
     # Windows Update's site and its helper's paths (session/xp_update.py).
-    sys.path.insert(0, str(ROOT / 'session'))
-    import xp_update
     xp_update.install_page(prefix, wait=False)
     netcon = (prefix / 'drive_c/xp/native/wzcdlg.dll').is_file()
     sources = [prefix / 'drive_c/xp/native' / name for name in INTL + ACCOUNTS + APPWIZ + SECURITY + FILE_TYPES + PRINTERS +
@@ -1088,8 +1085,7 @@ def apply(prefix, wine):
         raise SystemExit(f'Missing {", ".join(missing)}: run bridge-wm/build.sh first')
     xpx = xp_explorer()
     step = Steps()
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all', WINEDLLOVERRIDES='mscoree,mshtml=')
-    env.pop('WINEARCH', None)
+    env = wine_env(prefix, WINEDLLOVERRIDES='mscoree,mshtml=')
     step("XP's files and the helpers")
     stop(wine, prefix)
     copy_files(assets, prefix)

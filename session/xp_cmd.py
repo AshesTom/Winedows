@@ -25,6 +25,10 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / 'greeter'))
+from xpres import Resources  # noqa: E402
+
+RT_ICON, RT_GROUP_ICON = 3, 14
 CACHE = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'win4wine/cmd'
 # The console's palette in the ANSI order: black, red, green, yellow, blue,
 # magenta, cyan, white, then the bright ones (XP's 16 console colours).
@@ -75,51 +79,20 @@ def fon_to_bdf(fon, target):
                       f'CHARS {len(glyphs)}\n' + ''.join(glyphs) + 'ENDFONT\n', encoding='utf-8')
 
 
-def resources(data):
-    """{(type, id): bytes} of a PE image's resources, the first language of each."""
-    pe = struct.unpack_from('<I', data, 0x3c)[0]
-    sections, optional = struct.unpack_from('<H', data, pe + 6)[0], struct.unpack_from('<H', data, pe + 20)[0]
-    magic = struct.unpack_from('<H', data, pe + 24)[0]
-    directory = pe + 24 + (96 if magic == 0x10b else 112) + 2 * 8
-    base = struct.unpack_from('<I', data, directory)[0]
-    table = [struct.unpack_from('<IIII', data, pe + 24 + optional + i * 40 + 8) for i in range(sections)]
-
-    def offset(rva):
-        for size, address, raw_size, raw in table:
-            if address <= rva < address + max(size, raw_size):
-                return rva - address + raw
-        raise ValueError('RVA outside the sections')
-
-    def entries(at):
-        named, ids = struct.unpack_from('<HH', data, at + 12)
-        for i in range(named + ids):
-            name, target = struct.unpack_from('<II', data, at + 16 + i * 8)
-            yield name, target
-
-    root, found = offset(base), {}
-    for kind, sub in entries(root):
-        if not sub & 0x80000000:
-            continue
-        for name, lang in entries(root + (sub & 0x7fffffff)):
-            if not lang & 0x80000000:
-                continue
-            first = next(entries(root + (lang & 0x7fffffff)), None)
-            if first and not first[1] & 0x80000000:
-                rva, size = struct.unpack_from('<II', data, root + first[1])
-                found[kind, name] = data[offset(rva):offset(rva) + size]
-    return found
-
-
 def icon_file(exe, target, side=32):
     """The image of EXE's first icon group nearest SIDE pixels (the most
     colours of those) as an .ico file."""
-    found = resources(exe.read_bytes())
-    group = next(value for (kind, _), value in sorted(found.items()) if kind == 14)
+    resources = Resources(exe)
+    # The lowest numbered group, else the first named one (the directory sorts both)
+    groups = sorted(resources.names(RT_GROUP_ICON), key=lambda name: isinstance(name, str))
+    group = resources.find(RT_GROUP_ICON, groups[0]) if groups else None
+    if group is None:
+        raise ValueError(f'{exe}: no icon')
     count = struct.unpack_from('<H', group, 4)[0]
-    entries, images = [], []
+    entries = []
     for i in range(count):
         width, height, colours, _, planes, bits, _, number = struct.unpack_from('<BBBBHHIH', group, 6 + i * 14)
-        image = found.get((3, number))
+        image = resources.find(RT_ICON, number)
         if image:
             entries.append((width, height, colours, planes, bits, image))
     entries = [min(entries, key=lambda e: (abs((e[0] or 256) - side), -e[4]))]
@@ -217,7 +190,7 @@ def set_icon(terminal, ico):
     """cmd.exe's icon on the terminal's window (_NET_WM_ICON, which the XP
     taskbar shows): xterm puts its own there."""
     try:
-        from Xlib import X, Xatom, display
+        from Xlib import Xatom, display
         icons = []
         for side in (16, 32):
             raw = subprocess.run(['magick', str(ico), '-resize', f'{side}x{side}', '-depth', '8', 'bgra:-'],

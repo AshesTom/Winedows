@@ -195,11 +195,7 @@ def group_images(resources, number):
 
 def icon_groups(path):
     """The numbers of the icon groups in the PE file at PATH."""
-    resources = Resources(path)
-    for entry, target in resources.entries(resources.base):
-        if resources.name(entry) == RT_GROUP_ICON and target & 0x80000000:
-            for name, _ in resources.entries(resources.base + (target & 0x7fffffff)):
-                yield resources.name(name)
+    return Resources(path).names(RT_GROUP_ICON)
 
 
 def strip_icon(dib, index, size):

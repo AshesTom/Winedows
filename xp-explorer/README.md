@@ -168,9 +168,9 @@ xp.sh run
 | Path | Contents |
 |---|---|
 | `xp.sh` | the entry point |
-| `scripts/extract.py`, `scripts/media.py` | extracts the needed files from the ISO (win4wine) |
+| `scripts/extract.py` | extracts the needed files from the ISO (win4wine's, with `../extract/media.py`) |
 | `scripts/prefix.py` | creates the prefix and its registry profile (trimmed from win4wine's `prefix/`) |
-| `scripts/linux_apps.py` | Linux applications in All Programs (win4wine) |
+| `../session/linux_apps.py` | Linux applications in All Programs (win4wine's, run with `--flat`) |
 | `scripts/pins.py` | pinned programs |
 | `helpers/` | small Win32 programs, built with mingw-w64 into `.local/bin` |
 

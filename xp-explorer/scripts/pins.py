@@ -248,7 +248,7 @@ def main():
     try:
         links = json.loads((prefix / 'drive_c/xp/linux-apps/state.json').read_text())['links']
     except (OSError, ValueError, KeyError):
-        raise SystemExit('Run scripts/linux_apps.py first')
+        raise SystemExit('Run session/linux_apps.py first')
     browser, mailer = register_clients(prefix, args.wine, links)
     print(f'Internet: {browser or "none"}, E-mail: {mailer or "none"}')
     if args.clients:

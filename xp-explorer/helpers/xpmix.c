@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "unixshell.h"
 
 #define CHANNELS 8
 #define OPEN_LIMIT 16
@@ -60,77 +61,12 @@ static HANDLE wake;
 static HANDLE thread;
 static BOOL pactl_checked, have_pactl;
 
-/* ---- Running pactl and wpctl (as xptray.c does) ----------------------- */
-
-static BOOL spawn(const WCHAR *script)
-{
-    static const WCHAR prefix[] = L"/usr/bin/env -u WINEDEBUG -u WINEDLLOVERRIDES /bin/sh -c \"";
-    STARTUPINFOW startup = {.cb = sizeof(startup)};
-    PROCESS_INFORMATION process;
-    size_t capacity = wcslen(prefix) + wcslen(script) * 2 + 3;
-    WCHAR *line = malloc(capacity * sizeof(WCHAR)), *write;
-    BOOL ok;
-    if (!line) return FALSE;
-    wcscpy(line, prefix);
-    write = line + wcslen(line);
-    for (; *script; script++)
-    {
-        if (*script == L'\"') *write++ = L'\\';
-        *write++ = *script;
-    }
-    *write++ = L'\"';
-    *write = 0;
-    ok = CreateProcessW(L"Z:\\usr\\bin\\env", line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL,
-                        &startup, &process);
-    free(line);
-    if (!ok) return FALSE;
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return TRUE;
-}
-
-/* Runs a script and returns its output; Wine cannot wait on a Unix child
- * nor hand it a Win32 pipe, so the shell writes a file and then a marker. */
-static BOOL capture(const WCHAR *script, char *buffer, DWORD size)
-{
-    WCHAR path[MAX_PATH], done_path[MAX_PATH + 8], unix_path[MAX_PATH], *command;
-    DWORD done = 0;
-    BOOL ok = FALSE;
-    *buffer = 0;
-    if (!GetTempFileNameW(L"Z:\\tmp", L"xpm", 0, path)) return FALSE;
-    swprintf(done_path, ARRAYSIZE(done_path), L"%ls.done", path);
-    wcscpy(unix_path, path + 2);
-    for (WCHAR *p = unix_path; *p; p++) if (*p == L'\\') *p = L'/';
-    size_t capacity = wcslen(script) + wcslen(unix_path) * 2 + 48;
-    if ((command = malloc(capacity * sizeof(WCHAR))))
-    {
-        swprintf(command, capacity, L"(%ls) > '%ls' 2>&1; : > '%ls.done'", script, unix_path, unix_path);
-        if (spawn(command))
-        {
-            ULONGLONG started = GetTickCount64();
-            while (GetFileAttributesW(done_path) == INVALID_FILE_ATTRIBUTES && GetTickCount64() - started < 5000)
-                Sleep(10);
-            HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (file != INVALID_HANDLE_VALUE)
-            {
-                ok = ReadFile(file, buffer, size - 1, &done, NULL);
-                CloseHandle(file);
-            }
-        }
-        free(command);
-    }
-    DeleteFileW(path);
-    DeleteFileW(done_path);
-    buffer[done] = 0;
-    return ok;
-}
-
 static BOOL use_pactl(void)
 {
     char out[64];
     if (!pactl_checked)
     {
-        capture(L"command -v pactl >/dev/null && echo pactl", out, sizeof(out));
+        unix_capture(L"command -v pactl >/dev/null && echo pactl", out, sizeof(out));
         have_pactl = strstr(out, "pactl") != NULL;
         pactl_checked = TRUE;
     }
@@ -153,7 +89,7 @@ static BOOL refresh(unsigned index)
                  t->pactl_kind, t->pactl, t->pactl_kind, t->pactl);
     else
         swprintf(script, ARRAYSIZE(script), L"wpctl get-volume %ls", t->wpctl);
-    if (!capture(script, out, sizeof(out)) || !(p = strstr(out, "Volume:"))) return FALSE;
+    if (!unix_capture(script, out, sizeof(out)) || !(p = strstr(out, "Volume:"))) return FALSE;
     p += 7;
     if (!(end = strchr(p, '\n'))) end = p + strlen(p);
     if (strstr(out, "Mute:"))
@@ -225,7 +161,7 @@ static void apply(unsigned index)
             for (unsigned i = 0; i < count; i++) loudest = max(loudest, raw[i]);
             swprintf(script, ARRAYSIZE(script), L"wpctl set-volume %ls %.4f", t->wpctl, loudest / 65536.0);
         }
-        spawn(script);
+        unix_spawn(script);
     }
     if (mute >= 0)
     {
@@ -233,7 +169,7 @@ static void apply(unsigned index)
             swprintf(script, ARRAYSIZE(script), L"pactl set-%ls-mute %ls %d", t->pactl_kind, t->pactl, mute);
         else
             swprintf(script, ARRAYSIZE(script), L"wpctl set-mute %ls %d", t->wpctl, mute);
-        spawn(script);
+        unix_spawn(script);
     }
 }
 

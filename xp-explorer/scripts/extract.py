@@ -9,8 +9,9 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from media import language as media_language
+# The language of the extracted files, as win4wine's extraction finds it
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'extract'))
+from media import language as media_language  # noqa: E402
 
 FILES = {
     'explorer.exe': 'windows',

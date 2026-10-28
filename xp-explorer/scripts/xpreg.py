@@ -10,9 +10,11 @@ for (and their Shell Extensions Approved values), as a .reg file.
 Usage: xpreg.py OUTPUT.reg DLL:{CLSID}[,{CLSID}...] ...
 """
 import re
-import struct
 import sys
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2] / 'greeter'))
+from xpres import Resources  # noqa: E402
 
 
 def read_inf(path):
@@ -26,41 +28,12 @@ def read_inf(path):
 
 def reginst(path):
     """The REGINST resource of a PE file, as text."""
-    data = Path(path).read_bytes()
-    pe = struct.unpack_from('<I', data, 0x3c)[0]
-    count, optional = struct.unpack_from('<H12xH', data, pe + 6)
-    magic = struct.unpack_from('<H', data, pe + 24)[0]
-    directories = pe + 24 + (96 if magic == 0x10b else 112)
-    sections = [struct.unpack_from('<IIII', data, pe + 24 + optional + 40 * i + 8) for i in range(count)]
-
-    def offset(rva):
-        for size, address, raw_size, raw in sections:
-            if address <= rva < address + max(size, raw_size):
-                return rva - address + raw
-        raise ValueError('RVA outside the image')
-
-    base = offset(struct.unpack_from('<I', data, directories + 16)[0])
-
-    def name(value):
-        if value & 0x80000000:
-            at = base + (value & 0x7fffffff)
-            length = struct.unpack_from('<H', data, at)[0]
-            return data[at + 2:at + 2 + 2 * length].decode('utf-16le')
-        return value
-
-    def entries(at):
-        named, ids = struct.unpack_from('<HH', data, at + 12)
-        return [struct.unpack_from('<II', data, at + 16 + 8 * i) for i in range(named + ids)]
-
-    for kind, kind_dir in entries(base):
-        if name(kind) != 'REGINST':
-            continue
-        for _, name_dir in entries(base + (kind_dir & 0x7fffffff)):
-            for _, leaf in entries(base + (name_dir & 0x7fffffff)):
-                rva, size = struct.unpack_from('<II', data, base + leaf)
-                raw = data[offset(rva):offset(rva) + size]
-                return raw.decode('utf-16le') if raw[1:2] == b'\0' else raw.decode('latin-1')
-    raise SystemExit(f'{path}: no REGINST resource')
+    resources = Resources(path)
+    names = resources.names('REGINST')
+    raw = resources.find('REGINST', names[0]) if names else None
+    if raw is None:
+        raise SystemExit(f'{path}: no REGINST resource')
+    return raw.decode('utf-16le') if raw[1:2] == b'\0' else raw.decode('latin-1')
 
 
 def fields(line):
@@ -79,7 +52,7 @@ def fields(line):
 
 
 def convert(text, module, classes, renames=()):
-    strings, lines = {}, []
+    strings = {}
     section = None
     for raw in text.splitlines():
         line = raw.split(';', 1)[0].strip() if not raw.lstrip().startswith('"') else raw.strip()

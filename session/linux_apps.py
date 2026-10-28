@@ -13,6 +13,8 @@ one. Icons are converted from the icon theme. Only shortcuts
 that this module made are changed or removed; their list is kept in
 C:\\xp\\linux-apps\\state.json. With --watch it follows changes to the
 application directories until it is stopped; --remove takes them all out.
+XP Explorer (xp-explorer/xp.sh) runs it with --flat, which puts the
+category folders directly in All Programs, and its own helpers (--helpers).
 The same applications are listed in XP's Add or Remove Programs, with their
 package's version, size and web site; Remove opens a terminal that removes the
 package with the system's package manager (pacman, apt, dnf or Flatpak).
@@ -32,6 +34,8 @@ import tempfile
 import ctypes
 
 ROOT = Path(__file__).resolve().parents[1]
+# linux-launch.exe and linux-links.exe, as bridge-wm/build.sh builds them
+HELPERS = ROOT / '.local/bridge'
 PROGRAMS = 'drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs'
 WINDOWS_PROGRAMS = r'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
 STATE = 'drive_c/xp/linux-apps'
@@ -248,12 +252,14 @@ def command(entry, path, locales):
 LINUX_FOLDER = ('Linux アプリケーション', 'Linux Applications')
 
 
-def folder(entry, japanese):
+def folder(entry, japanese, flat=False):
+    """The entry's folder in All Programs: in Linux Applications, or with FLAT
+    directly in All Programs ('' for All Programs itself)."""
     categories = strings(entry, 'Categories')
-    top = LINUX_FOLDER[0 if japanese else 1]
+    top = '' if flat else LINUX_FOLDER[0 if japanese else 1]
     for category, names in FOLDERS:
         if category in categories:
-            return top + '\\' + names[0 if japanese else 1]
+            return '\\'.join(filter(None, (top, names[0 if japanese else 1])))
     return top
 
 
@@ -535,6 +541,32 @@ def packages(paths):
     return found
 
 
+def run_links(wine, helper, env, lines, timeout=600):
+    """Make shortcuts with linux-links.exe (HELPER): one per line of LINES,
+    its link, target, arguments, working directory, icon and description
+    separated by tabs. The finished process, with its output as text; it
+    prints "fail ..." for each link it could not save."""
+    env = dict(env)
+    # Saving a link in Wine's shell32 would otherwise ask winemenubuilder
+    # to make a Linux menu entry for it, which this module would read back.
+    overrides = env.get('WINEDLLOVERRIDES', '')
+    env['WINEDLLOVERRIDES'] = (overrides + ';' if overrides else '') + 'winemenubuilder.exe=d'
+    env.pop('WINEARCH', None)
+    # Through files, not pipes: a wineserver or explorer.exe that this
+    # run starts inherits its standard handles and outlives it, and
+    # reading a pipe to its end would wait for them too.
+    with tempfile.TemporaryFile() as stdin, tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        stdin.write(('\n'.join(lines) + '\n').encode())
+        stdin.seek(0)
+        result = subprocess.run([wine, str(helper)], env=env, stdin=stdin, stdout=stdout, stderr=stderr,
+                                timeout=timeout)
+        stdout.seek(0)
+        stderr.seek(0)
+        result.stdout = stdout.read().decode('utf-8', 'replace')
+        result.stderr = stderr.read().decode('utf-8', 'replace')
+    return result
+
+
 def windows_path(prefix, path):
     return 'C:\\' + str(path.relative_to(prefix / 'drive_c')).replace('/', '\\')
 
@@ -544,8 +576,9 @@ def quote(args):
 
 
 class Menu:
-    def __init__(self, prefix, wine):
+    def __init__(self, prefix, wine, helpers=HELPERS, flat=False):
         self.prefix, self.wine = prefix, wine
+        self.helpers, self.flat = helpers, flat
         self.programs = prefix / PROGRAMS
         self.state_dir = prefix / STATE
         self.state_file = self.state_dir / 'state.json'
@@ -601,7 +634,7 @@ class Menu:
         temp.replace(target)
 
     def install_launcher(self, launchers=()):
-        source = ROOT / '.local/bridge/linux-launch.exe'
+        source = self.helpers / 'linux-launch.exe'
         target = self.state_dir / 'linux-launch.exe'
         if not target.is_file() or target.read_bytes() != source.read_bytes():
             temp = target.with_suffix('.tmp')
@@ -631,7 +664,7 @@ class Menu:
             name = (localized(entry, 'Name', locales) or '').translate(INVALID).strip(' .')
             if not args or not name:
                 continue
-            directory = folder(entry, self.japanese)
+            directory = folder(entry, self.japanese, self.flat)
             link = name
             number = 2
             while (directory, link.lower()) in used:
@@ -689,24 +722,7 @@ class Menu:
         failed = set()
         if lines:
             env = dict(os.environ, WINEPREFIX=str(self.prefix))
-            # Saving a link in Wine's shell32 would otherwise ask winemenubuilder
-            # to make a Linux menu entry for it, which this module would read back.
-            overrides = env.get('WINEDLLOVERRIDES', '')
-            env['WINEDLLOVERRIDES'] = (overrides + ';' if overrides else '') + 'winemenubuilder.exe=d'
-            env.pop('WINEARCH', None)
-            # Through files, not pipes: a wineserver or explorer.exe that this
-            # run starts inherits its standard handles and outlives it, and
-            # reading a pipe to its end would wait for them too.
-            with tempfile.TemporaryFile() as stdin, tempfile.TemporaryFile() as stdout, \
-                    tempfile.TemporaryFile() as stderr:
-                stdin.write(('\n'.join(lines) + '\n').encode())
-                stdin.seek(0)
-                result = subprocess.run([self.wine, str(ROOT / '.local/bridge/linux-links.exe')], env=env,
-                                        stdin=stdin, stdout=stdout, stderr=stderr, timeout=600)
-                stdout.seek(0)
-                stderr.seek(0)
-                result.stdout = stdout.read().decode('utf-8', 'replace')
-                result.stderr = stderr.read().decode('utf-8', 'replace')
+            result = run_links(self.wine, self.helpers / 'linux-links.exe', env, lines)
             for line in result.stdout.splitlines():
                 if line.startswith('fail'):
                     print('linux-apps:', line, file=sys.stderr)
@@ -854,11 +870,15 @@ def main():
     parser.add_argument('--wine', default=os.environ.get('WINE', 'wine'))
     parser.add_argument('--watch', action='store_true', help='keep following changes until stopped')
     parser.add_argument('--remove', action='store_true', help='remove the shortcuts and folders made here')
+    parser.add_argument('--helpers', type=Path, default=HELPERS,
+                        help='the directory of linux-launch.exe and linux-links.exe (default: .local/bridge)')
+    parser.add_argument('--flat', action='store_true',
+                        help='the category folders directly in All Programs, without Linux Applications')
     args = parser.parse_args()
     prefix = args.prefix.resolve(strict=True)
     if not any((prefix / marker).is_file() for marker in ('xp-shell.json', 'reactos-shell.json')):
         raise SystemExit('Expected a dedicated shell prefix')
-    menu = Menu(prefix, args.wine)
+    menu = Menu(prefix, args.wine, args.helpers.resolve(), args.flat)
     if args.remove:
         print(f'linux-apps: {menu.sync(remove=True)[1]} removed')
         return
