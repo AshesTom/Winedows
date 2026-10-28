@@ -770,6 +770,10 @@ class Session:
         self.show_welcome('logon')
         if not self.compositor:
             settings = dpi.xsettings(self.dpi, self.cursor_theme, self.ui_font)
+            # XP's scroll bars are always shown: GTK 4 takes it from XSETTINGS
+            # (GTK 3 from GTK_OVERLAY_SCROLLING).
+            if self.gtk_theme:
+                settings['Gtk/OverlayScrolling'] = 0
             wm = self.spawn(['python3', str(ROOT / 'bridge-wm/wm.py'), '--ipc', str(self.ipc),
                              '--xsettings', json.dumps(settings)] +
                             ([] if self.composite else ['--no-composite']), 'wm')

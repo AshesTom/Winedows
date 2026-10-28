@@ -30,6 +30,7 @@
 #include <QIcon>
 #include <QtGui/qguiapplication_platform.h>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -163,11 +164,28 @@ private:
     void menus(QTextStream &css);
     void extras(QTextStream &css);
     void accurate(QTextStream &css);
+    void gtk4(QTextStream &css);
 
     Look m_look;
     QString m_dir;
     std::unique_ptr<Renderer> m_r;
 };
+
+// SELECTORS (a comma list) in every state that a rule of the theme or of
+// Adwaita gives buttons: a rule for a button inside some widget has to be
+// as specific as "button:focus:not(:hover):not(:active)" to win over them.
+QString allStates(const QString &selectors)
+{
+    static const char *const states[] = {"", ":hover", ":active", ":checked", ":disabled", ":backdrop", ":hover:active",
+                                         ":hover:checked", ":backdrop:disabled", ":focus:not(:hover):not(:active)"};
+    QStringList out;
+    for (const QString &selector : selectors.split(QLatin1Char(','))) {
+        for (const char *state : states)
+            out << selector.trimmed() + QLatin1String(state);
+        out << selector.trimmed() + QStringLiteral(".default");
+    }
+    return out.join(QStringLiteral(", "));
+}
 
 // Selectors and their part, one rule per state.
 struct StateRule
@@ -235,6 +253,13 @@ void Generator::buttons(QTextStream &css)
         const QMargins c = m_r->contentMargins(base);
         css << "button { padding: " << qMax(0, c.top() - 2) << "px " << qMax(2, c.right() + 1) << "px " << qMax(0, c.bottom() - 2)
             << "px " << qMax(2, c.left() + 1) << "px; min-height: 17px; outline-offset: -2px; }\n"
+            // Adwaita's text and image buttons are wider (16 px each side for text):
+            // XP's are as wide as their content and its margins.
+            << "button.text-button, button.image-button, button.text-button.image-button { padding-left: " << qMax(2, c.left() + 1)
+            << "px; padding-right: " << qMax(2, c.right() + 1) << "px; min-width: 0; }\n"
+            << "button.text-button.image-button label, button.text-button.image-button label:first-child, "
+               "button.text-button.image-button label:last-child { padding-left: 0; padding-right: 0; }\n"
+            << "button.text-button.image-button image { margin-right: 3px; }\n"
             << "button.flat:not(:hover):not(:active):not(:checked), button.image-button.flat:not(:hover):not(:active), "
                "toolbar button:not(:hover):not(:active):not(:checked), headerbar button.titlebutton"
             << " { border-image: none; background: transparent; }\n";
@@ -252,7 +277,11 @@ void Generator::buttons(QTextStream &css)
             css << r.selector << " { " << borderImage(QStringLiteral("toolbar-%1").arg(QLatin1String(r.state)),
                                                     {tb.cls, tb.part, QLatin1String(r.state), r.id, {}})
                 << " color: " << rgb(text) << "; }\n";
-        css << "toolbar { padding: 2px; border: none; }\ntoolbar button { padding: 1px 2px; border-width: 2px; border-style: solid; border-color: transparent; }\n";
+        // XP's toolbar buttons: the picture and a pixel or two around it inside the 2 px frame (comctl32's
+        // toolbar: 23 x 22 for 16 x 16 pictures), whatever classes the button has.
+        css << "toolbar { padding: 2px; border: none; }\n"
+            << "toolbar button, toolbar button.image-button, toolbar button.text-button, toolbar button.text-button.image-button"
+            << " { padding: 1px 2px; min-width: 0; min-height: 0; border-width: 2px; border-style: solid; border-color: transparent; }\n";
     }
     // Column headers of lists.
     const Part header{QStringLiteral("header"), QStringLiteral("headeritem"), {}, 0, {}};
@@ -283,6 +312,8 @@ void Generator::buttons(QTextStream &css)
 
 void Generator::checks(QTextStream &css)
 {
+    // A check box or radio button is its box and its text, no taller (Adwaita adds 2 px above and below).
+    css << "checkbutton.text-button, radiobutton.text-button { padding: 0; }\n";
     // Check boxes (12 states) and radio buttons (8), as the indicator's icon.
     for (bool radio : {false, true}) {
         const QString part = radio ? QStringLiteral("radiobutton") : QStringLiteral("checkbox");
@@ -349,6 +380,9 @@ void Generator::fields(QTextStream &css)
             << " border-image: none; color: " << rgb(text) << "; padding: 0 0 0 3px; min-height: " << h << "px; }\n"
             << "combobox button.combo:disabled { " << fill({QStringLiteral("combobox"), {}, QStringLiteral("disabled"), 4, {}}, border, sys("buttonface", window)) << " }\n"
             << "combobox arrow { min-width: " << w << "px; min-height: " << h << "px; margin: 0; padding: 0; }\n"
+            // The text's cell has 2 px above and below it (its ypad): a pixel less
+            // makes the drop-down list XP's 21 px, as high as an edit box.
+            << "combobox button.combo cellview { margin-top: -1px; }\n"
             << "combobox box.linked > entry { border-right: none; }\n"
             << "combobox box.linked > button:not(.combo) { border-image: none; background-color: transparent; padding: 0; border: 1px solid "
             << rgb(partColour(combo, "bordercolor", border)) << "; border-left: none; -gtk-icon-source: none; min-width: " << w << "px; }\n";
@@ -381,7 +415,13 @@ void Generator::scrollbars(QTextStream &css)
         << "scrollbar.horizontal slider { min-width: " << 8 * m_look.dpi / 96 << "px; }\n"
         << "scrollbar button { min-width: " << extent << "px; min-height: " << extent << "px; padding: 0; margin: 0; "
         << "border: none; border-image: none; border-radius: 0; box-shadow: none; -gtk-icon-source: none; "
-        << "background-size: 100% 100%; background-repeat: no-repeat; }\n";
+        << "background-size: 100% 100%; background-repeat: no-repeat; }\n"
+        // SM_CXVSCROLL wide, nothing more: no frame of the push buttons' states
+        // on the arrows, no edge line (Adwaita's), no wider slider when fine-tuning.
+        << allStates(QStringLiteral("scrollbar button.up, scrollbar button.down"))
+        << " { border-width: 0; border-style: none; border-image: none; padding: 0; margin: 0; box-shadow: none; outline-width: 0; }\n"
+        << "scrollbar.top, scrollbar.bottom, scrollbar.left, scrollbar.right { border: none; }\n"
+        << "scrollbar.fine-tune.vertical slider, scrollbar.fine-tune.horizontal slider { border-width: 0; margin: 0; }\n";
     // Arrows: up 1-4, down 5-8, left 9-12, right 13-16; GTK's steppers are .up (back) and .down (forward).
     const char *states[] = {"normal", "hot", "pressed", "disabled"};
     const char *pseudo[] = {"", ":hover", ":active", ":disabled"};
@@ -552,7 +592,46 @@ void Generator::menus(QTextStream &css)
         << "menu menuitem:hover *, .menu menuitem:hover * { color: " << rgb(hilightText) << "; }\n"
         << "menu menuitem:disabled, .menu menuitem:disabled { color: " << rgb(sys("graytext", Qt::gray)) << "; }\n"
         << "menu separator, .menu separator { background-color: " << rgb(shadow) << "; min-height: 1px; margin: 3px 1px; }\n"
-        << "menu check, menu radio { min-width: 13px; min-height: 13px; margin-right: 4px; }\n\n";
+        << "menu check, menu radio { min-width: 13px; min-height: 13px; margin-right: 4px; }\n";
+    // A menu's check mark and radio bullet are glyphs in the menu's text colour
+    // (user32's OBI_MENUCHECK, 7 x 7, and its bullet), not the check boxes'
+    // art; in the selection's colour on the selected item.
+    static const char *const checkGlyph[] = {"......#", ".....##", "#...###", "##.###.", "#####..", ".###...", "..#...."};
+    static const char *const bulletGlyph[] = {".####.", "######", "######", "######", "######", ".####."};
+    auto glyph = [&](const char *const *rows, int size, const QColor &colour) {
+        QImage image(13, 13, QImage::Format_ARGB32);
+        image.fill(Qt::transparent);
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+                if (rows[y][x] == '#')
+                    image.setPixelColor((13 - size) / 2 + x, (13 - size) / 2 + y, colour);
+        return image;
+    };
+    const QString check = save(QStringLiteral("menu-check"), glyph(checkGlyph, 7, text));
+    const QString checkHot = save(QStringLiteral("menu-check-hot"), glyph(checkGlyph, 7, hilightText));
+    const QString bullet = save(QStringLiteral("menu-bullet"), glyph(bulletGlyph, 6, text));
+    const QString bulletHot = save(QStringLiteral("menu-bullet-hot"), glyph(bulletGlyph, 6, hilightText));
+    // As specific as the check boxes' rules (checks()), with the menu item before them.
+    static const char *const values[] = {":not(:checked):not(:indeterminate)", ":checked:not(:indeterminate)", ":indeterminate", ":checked"};
+    static const char *const states[] = {"", ":hover", ":hover:active", ":disabled"};
+    for (const char *item : {"menu menuitem", ".menu menuitem", "popover.menu modelbutton"}) {
+        for (const char *node : {"check", "radio"}) {
+            const bool radio = !strcmp(node, "radio");
+            for (int hot = 0; hot < 2; ++hot) {
+                QStringList on, off;
+                for (const char *value : values)
+                    for (const char *state : states) {
+                        const QString selector = QStringLiteral("%1%2 %3%4%5").arg(QLatin1String(item), QLatin1String(hot ? ":hover" : ""),
+                                                                                   QLatin1String(node), QLatin1String(value), QLatin1String(state));
+                        (QLatin1String(value).startsWith(QLatin1String(":checked")) || QLatin1String(value) == QLatin1String(":indeterminate") ? on : off) << selector;
+                    }
+                css << off.join(QStringLiteral(", ")) << " { -gtk-icon-source: none; background: none; border: none; box-shadow: none; }\n"
+                    << on.join(QStringLiteral(", ")) << " { -gtk-icon-source: " << (radio ? (hot ? bulletHot : bullet) : (hot ? checkHot : check))
+                    << "; background: none; border: none; box-shadow: none; }\n";
+            }
+        }
+    }
+    css << "\n";
 }
 
 // The Accurate style: what XP's own controls measure, over the rules above.
@@ -587,13 +666,141 @@ void Generator::accurate(QTextStream &css)
         // Lists: a report view's rows are as high as its text and 2 px
         // above and below (comctl32's list view), no space between them.
         << "treeview.view { -GtkTreeView-vertical-separator: 0; -GtkTreeView-horizontal-separator: 4; }\n"
-        << "treeview.view header button { min-height: " << px(15) << "px; }\n"
+        // Column headers: the text and the header art's 2 px frame, a pixel less above and below (comctl32's header).
+        << "treeview.view header button label, column-header button label { margin: -1px 0; }\n"
+        // Push buttons as high as the fields beside them (21 px, the height
+        // of XP's edit and combo boxes); a dialog's own buttons keep 75 x 23.
+        << "button { padding-top: 0; padding-bottom: 0; min-height: " << px(17) << "px; }\n"
+        << "dialog .dialog-action-area button, messagedialog .dialog-action-area button, .dialog-action-box button"
+        << " { min-height: " << px(19) << "px; }\n"
         // Tooltips: COLOR_INFOBK in a black line, no rounding (comctl32's tooltips).
         << "tooltip { padding: 1px 2px; border-radius: 0; }\n"
         // Window frames are XP's: header bars are a plain band of the dialog's face.
         << "headerbar { background-color: " << rgb(sys("buttonface", QColor(236, 233, 216))) << "; border: none; min-height: 0; padding: 2px; }\n"
         // The menu bar: SM_CYMENU high, items twice the average character wider than their text.
         << "menubar > menuitem { min-height: " << px(15) << "px; padding: 2px " << px(6) << "px; }\n\n";
+}
+
+// GTK 4's own nodes, after the GTK 3 rules (gtk4Rules): menus are pop-overs
+// of model buttons, drop-down lists are GtkDropDown's, toolbars are boxes,
+// list views have their own headers, and scroll bars have no arrows: XP's
+// are drawn at the ends of the track, where a click pages as theirs scrolls.
+void Generator::gtk4(QTextStream &css)
+{
+    const auto px = [this](int n) { return n * m_look.dpi / 96; };
+    const QColor menu = sys("menu", Qt::white), text = sys("menutext", Qt::black), face = sys("buttonface", QColor(236, 233, 216));
+    const QColor hilight = sys("menuhilight", sys("hilight", Qt::blue)), hilightText = sys("hilighttext", Qt::white);
+    const QColor shadow = sys("buttonshadow", Qt::gray), light = sys("buttonhilight", Qt::white), window = sys("window", Qt::white);
+    const QColor border = sys("buttonshadow", QColor(127, 157, 185));
+    css << "/* GTK 4 */\n"
+        // Its Default theme names the window's background "window.background": the dialog's face.
+        << "window.background, window.background.csd, window.background:backdrop { background-color: " << rgb(face) << "; color: "
+        << rgb(sys("windowtext", Qt::black)) << "; }\n"
+        // XP's flat menus (menus() for GTK 3): no rounding, no shadow, no arrow.
+        << "popover.menu, popover.menu.background { background: transparent; padding: 0; box-shadow: none; }\n"
+        << "popover.menu > contents, popover.menu.background > contents { background-color: " << rgb(menu) << "; color: " << rgb(text)
+        << "; border: 1px solid " << rgb(shadow) << "; border-radius: 0; padding: 2px; box-shadow: none; margin: 0; }\n"
+        << "popover.menu > arrow { background: none; border: none; min-height: 0; min-width: 0; }\n"
+        << "popover.menu modelbutton { min-height: " << px(m_look.accurate ? 13 : 15) << "px; padding: 2px "
+        << px(17) << "px 2px " << px(m_look.accurate ? 17 : 6) << "px; border-radius: 0; color: " << rgb(text)
+        << "; background: none; box-shadow: none; outline-width: 0; }\n"
+        << "popover.menu modelbutton:hover, popover.menu modelbutton:selected, popover.menu modelbutton:focus { background-color: "
+        << rgb(hilight) << "; color: " << rgb(hilightText) << "; }\n"
+        << "popover.menu modelbutton:disabled { color: " << rgb(sys("graytext", Qt::gray)) << "; }\n"
+        << "popover.menu modelbutton accelerator { color: inherit; margin-left: " << px(17) << "px; }\n"
+        << "popover.menu separator { min-height: 1px; margin: 3px 0 4px 0; background-color: " << rgb(shadow)
+        << "; border-bottom: 1px solid " << rgb(light) << "; }\n"
+        << "popover.menu modelbutton check, popover.menu modelbutton radio { min-width: 13px; min-height: 13px; margin: 0 2px 0 -15px; }\n"
+        << "popover.menu modelbutton arrow { min-width: 13px; min-height: 13px; margin-right: -13px; }\n"
+        << "menubar > item { min-height: " << px(15) << "px; padding: 2px " << px(6) << "px; color: " << rgb(text) << "; box-shadow: none; }\n"
+        << "menubar > item:selected { background-color: " << rgb(hilight) << "; color: " << rgb(hilightText) << "; box-shadow: none; }\n"
+        << "menubar { box-shadow: none; }\n"
+        // Other pop-overs (a menu button's, a dialog's): a plain frame on the window's face.
+        << "popover:not(.menu) > contents { background-color: " << rgb(face) << "; border: 1px solid " << rgb(shadow)
+        << "; border-radius: 0; box-shadow: none; }\n"
+        // Toolbars: boxes with the toolbar class.
+        << ".toolbar { padding: 2px; border-spacing: 0; background-color: " << rgb(face) << "; }\n"
+        << ".toolbar button:not(:hover):not(:active):not(:checked) { border-image: none; background: transparent; }\n"
+        // Views of lists: rows and column headers as GTK 3's.
+        << "columnview > header > button { min-height: " << px(15) << "px; padding: 0 4px; font-weight: normal; }\n"
+        << "columnview > listview > row, listview > row { min-height: " << px(m_look.accurate ? 16 : 18) << "px; padding: 0 2px; border-radius: 0; }\n"
+        << "listview > row:selected, columnview > listview > row:selected { background-color: " << rgb(sys("hilight", Qt::blue))
+        << "; color: " << rgb(hilightText) << "; }\n"
+        // Entries: GTK 4 puts the text in a child node, and rounds the corners of a focused field.
+        << "entry > text, spinbutton > text, spinbutton:not(.vertical) > text { min-height: 0; margin: 0; padding: 0; background: none; }\n"
+        << "entry:focus-within, spinbutton:focus-within { outline-width: 0; box-shadow: none; }\n"
+        // Its spin buttons are beside the text, as high as the field's inside.
+        << "spinbutton > button, spinbutton > button:hover, spinbutton > button:active, spinbutton > button:disabled"
+        << " { min-height: 0; min-width: " << px(13) << "px; padding: 0 2px; margin: 0; }\n"
+        << "spinbutton:not(.vertical) { padding-right: 0; border-spacing: 0; }\n"
+        // Sliders: XP's trackbar is as thin as its thumb.
+        << "scale { padding: " << px(4) << "px; }\n";
+    // The Accurate style without the GTK module (GTK 4 has no modules): the
+    // pictures of buttons that have text and of menu items take no room.
+    if (m_look.accurate)
+        css << "button > box > image:not(:only-child), button > box > box > image:not(:only-child), "
+               "popover.menu modelbutton image, menubar > item image"
+            << " { -gtk-icon-size: 0; min-width: 0; min-height: 0; margin: 0; padding: 0; opacity: 0; }\n"
+            << "button > box:not(:only-child), button > box { border-spacing: 0; }\n";
+    if (!m_r)
+        return;
+    // GtkDropDown: the field and XP's drop-down button.
+    const int w = 17 * m_look.dpi / 96, h = 19 * m_look.dpi / 96;
+    css << allStates(QStringLiteral("dropdown > button")) << " { border: 1px solid " << rgb(border) << "; border-image: none; background-color: "
+        << rgb(window) << "; background-image: none; border-radius: 0; box-shadow: none; color: " << rgb(sys("windowtext", Qt::black))
+        << "; padding: 0 0 0 3px; min-height: " << h << "px; outline-width: 0; }\n"
+        << "dropdown > button > box { border-spacing: 0; }\n"
+        << "dropdown arrow { min-width: " << w << "px; min-height: " << h << "px; margin: 0; -gtk-icon-source: url(\"assets/combo-normal.png\"); }\n"
+        << "dropdown > button:hover arrow { -gtk-icon-source: url(\"assets/combo-hot.png\"); }\n"
+        << "dropdown > button:active arrow, dropdown > button:checked arrow { -gtk-icon-source: url(\"assets/combo-pressed.png\"); }\n"
+        << "dropdown > button:disabled arrow { -gtk-icon-source: url(\"assets/combo-disabled.png\"); }\n"
+        << "dropdown > button:disabled { background-color: " << rgb(face) << "; }\n";
+    // Scroll bars: XP's arrows at the track's ends, the thumb between them.
+    int extent = 17;
+    if (auto v = m_r->theme().sysMetric(QStringLiteral("scrollbarwidth")))
+        extent = qBound(8, v->trimmed().toInt(), 64);
+    extent = extent * m_look.dpi / 96;
+    css << "scrollbar > range > trough > slider { min-width: " << extent << "px; min-height: " << extent << "px; margin: 0; }\n"
+        << "scrollbar.vertical > range > trough > slider { min-height: " << px(8) << "px; }\n"
+        << "scrollbar.horizontal > range > trough > slider { min-width: " << px(8) << "px; }\n";
+    for (bool horizontal : {false, true}) {
+        const char *o = horizontal ? "horizontal" : "vertical", *back = horizontal ? "left" : "up", *forward = horizontal ? "right" : "down";
+        const QString o2 = horizontal ? QStringLiteral("horz") : QStringLiteral("vert");
+        css << "scrollbar." << o << " > range { padding: " << (horizontal ? QStringLiteral("0 %1px").arg(extent) : QStringLiteral("%1px 0").arg(extent))
+            << "; background-image: url(\"assets/scroll-" << back << "normal.png\"), url(\"assets/scroll-" << forward << "normal.png\"), url(\"assets/track-"
+            << o2 << "-normal-middle.png\"); background-repeat: no-repeat; background-position: " << (horizontal ? "left center, right center" : "center top, center bottom")
+            << ", 0 0; background-size: " << extent << "px " << extent << "px, " << extent << "px " << extent << "px, 100% 100%; }\n"
+            << "scrollbar." << o << ":disabled > range { background-image: url(\"assets/scroll-" << back << "disabled.png\"), url(\"assets/scroll-" << forward
+            << "disabled.png\"), url(\"assets/track-" << o2 << "-disabled-middle.png\"); }\n";
+    }
+    css << "\n";
+}
+
+// The GTK 3 rules for GTK 4: its CSS has no style properties (-GtkWidget-...)
+// nor -gtk-outline-radius, the menu bar's items are "item", and the images
+// are GTK 3's.
+QString gtk4Rules(const QString &rules)
+{
+    QString out = rules;
+    static const QRegularExpression styleProperty(QStringLiteral("-Gtk[A-Za-z]+-[a-z-]+: [^;]*; ?|-gtk-outline-radius: [^;]*; ?"));
+    out.remove(styleProperty);
+    out.replace(QStringLiteral("menubar > menuitem"), QStringLiteral("menubar > item"));
+    // Toolbars are boxes of the "toolbar" class, which its Default theme paints and gives flat buttons.
+    static const QRegularExpression toolbar(QStringLiteral("(^|[ ,\\n])toolbar([ {])"));
+    out.replace(toolbar, QStringLiteral("\\1.toolbar\\2"));
+    // Sliders and progress bars: its Default theme names their children
+    // with ">", more specific than GTK 3's rules.
+    static const QRegularExpression scale(QStringLiteral("\\bscale((?:\\.[a-z]+)?) (slider|trough|highlight|fill)\\b"));
+    out.replace(scale, QStringLiteral("scale\\1 > trough > \\2"));
+    out.replace(QStringLiteral("> trough > trough"), QStringLiteral("> trough"));
+    static const QRegularExpression progress(QStringLiteral("\\bprogressbar((?:\\.[a-z]+)?) (trough|progress)\\b"));
+    out.replace(progress, QStringLiteral("progressbar\\1 > trough > \\2"));
+    out.replace(QStringLiteral("> trough > trough"), QStringLiteral("> trough"));
+    // GTK 4 draws outlines whatever the state: XP's dotted focus rectangle only on the focused control.
+    out.replace(QStringLiteral("outline-style: dotted; outline-width: 1px;"), QStringLiteral("outline-style: dotted; outline-width: 0;"));
+    out += QStringLiteral("*:focus-visible { outline-width: 1px; }\n");
+    out.replace(QStringLiteral("url(\"assets/"), QStringLiteral("url(\"../gtk-3.0/assets/"));
+    return out;
 }
 
 bool Generator::write()
@@ -630,6 +837,20 @@ bool Generator::write()
                                                + rules.toUtf8())
         // The same look for applications that prefer a dark theme: XP has none.
         && put(QStringLiteral("gtk-dark.css"), "@import url(\"gtk.css\");\n");
+    // GTK 4 (no theme engine either, and no modules): the same rules over its
+    // own Default theme, and its own nodes'; the images are GTK 3's.
+    QString extra;
+    QTextStream four(&extra);
+    gtk4(four);
+    four.flush();
+    QDir().mkpath(m_dir + QStringLiteral("/gtk-4.0"));
+    auto put4 = [&](const QString &name, const QByteArray &text) {
+        QSaveFile file(m_dir + QStringLiteral("/gtk-4.0/") + name);
+        return file.open(QIODevice::WriteOnly) && file.write(text) == text.size() && file.commit();
+    };
+    const bool ok4 = put4(QStringLiteral("gtk.css"), header + "@import url(\"resource:///org/gtk/libgtk/theme/Default/Default-light.css\");\n\n"
+                                                      + gtk4Rules(rules + extra).toUtf8())
+        && put4(QStringLiteral("gtk-dark.css"), "@import url(\"gtk.css\");\n");
     QSaveFile index(m_dir + QStringLiteral("/index.theme"));
     if (index.open(QIODevice::WriteOnly)) {
         index.write(QByteArray("[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Win4Wine XP")
@@ -637,7 +858,7 @@ bool Generator::write()
                     "[X-GNOME-Metatheme]\nGtkTheme=" + QDir(m_dir).dirName().toUtf8() + "\n");
         index.commit();
     }
-    return ok;
+    return ok && ok4;
 }
 
 // An id for a look: a new theme directory (a new name) whenever it changes,
@@ -655,7 +876,7 @@ QString lookId(const Look &look)
         key += name.toUtf8() + '=' + look.colours.value(name).name().toUtf8() + ';';
     QFileInfo style(look.stylePath);
     key += QByteArray::number(style.lastModified().toSecsSinceEpoch());
-    key += "v8";   // bumped when the generator's output changes
+    key += "v9";   // bumped when the generator's output changes
     return QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha1).toHex().left(10));
 }
 
@@ -856,7 +1077,8 @@ int main(int argc, char **argv)
         const QString name = prefix + lookId(look);
         const QString dir = themes + QLatin1Char('/') + name;
         // A saved theme is used as it is: made only when it is missing.
-        if (!QFileInfo::exists(dir + QStringLiteral("/gtk-3.0/gtk.css")) && !Generator(look, dir).write())
+        if ((!QFileInfo::exists(dir + QStringLiteral("/gtk-3.0/gtk.css")) || !QFileInfo::exists(dir + QStringLiteral("/gtk-4.0/gtk.css")))
+            && !Generator(look, dir).write())
             return;
         // A stable name for applications given GTK_THEME (the Wayland session).
         const QString link = themes + QStringLiteral("/Win4Wine-XP");

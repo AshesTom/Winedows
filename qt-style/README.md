@@ -89,6 +89,19 @@ the session sets `default` while it runs and gives the user's value back when
 it ends (`session/appearance.py`). The theme's `gtk-dark.css` is the same
 look, for GTK 3 applications that prefer a dark theme.
 
+## GTK 4
+
+The same theme has a `gtk-4.0/gtk.css` (GTK 4 reads `Net/ThemeName` and
+`GTK_THEME` as GTK 3 does): the GTK 3 rules, without GTK 3's style
+properties, over GTK 4's own Default theme, with GTK 4's nodes: menus as
+pop-overs of model buttons (XP's flat menus), `dropdown`, `.toolbar` boxes,
+column views, `scale > trough > slider`. GTK 4 scroll bars have no arrows:
+XP's are drawn at the ends of the track (a click there pages). GTK 4 has no
+modules, so the Accurate style's pictures are given no room by CSS
+(`-gtk-icon-size: 0`) instead. The session publishes `Gtk/OverlayScrolling`
+0, so GTK 4's scroll bars are always shown, as GTK 3's are.
+libadwaita applications keep their own style.
+
 ## Standard and Accurate; icons
 
 Control Panel > Appearance and Themes has two items of the session
@@ -159,6 +172,10 @@ them, `--states F.png` draws each part in each state, `--menu F.png` a menu;
 
 - Qt Quick (QML) applications are not drawn by it, nor GTK 4 and libadwaita
   applications (GTK 4 has no theme it would read from the session).
+- Rules of Adwaita (and of GTK 4's Default) more specific than the theme's
+  (`button.text-button`, `button:hover` on scroll arrows, `scrollbar.right`)
+  are matched in kind, so that controls keep XP's sizes: 17 px scroll bars,
+  21 px fields and drop-down lists, buttons as wide as their text.
 - The GTK 3 theme cannot do all that a style can: spin buttons stay GTK's
   side-by-side buttons (with XP's button art), and GTK lays out its widgets
   with its own sizes.
