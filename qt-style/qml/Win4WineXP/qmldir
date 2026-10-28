@@ -1,0 +1,5 @@
+module Win4WineXP
+# Qt Quick takes the widget style's name (QT_STYLE_OVERRIDE) for its controls'
+# style too: without this module, QML applications (Spectacle) ended at once.
+# KDE's org.kde.desktop draws them with the widget style, so in XP's look.
+import org.kde.desktop auto

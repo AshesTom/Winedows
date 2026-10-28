@@ -164,7 +164,7 @@ Wine の上で動く Win32 のプロセスです。Linux の窓 1 つごとに�
 
 ## セッション（`session/supervisor.py`）
 
-- 起動の順: XP のログオン画面 → WM → tray.py → fcitx5 → prefix の更新（`prefix/stage.py`）→ Linux のアプリのスタートメニュー
+- 起動の順: （prefix の最初のセッションでは Windows へようこそ）→ XP のログオン画面 → WM → tray.py → fcitx5 → prefix の更新（`prefix/stage.py`）→ Linux のアプリのスタートメニュー
   → proxy → XP のシェル。
 - タスクバーが出たら起動できたとみなします。XP のシェルや proxy が落ちたら、Wine を止めてやり直します。
   120 秒に 3 回失敗すると、XP の DLL を使わない別の prefix で、Wine 標準の explorer と xterm を起動します（復旧用）。
@@ -200,6 +200,23 @@ Wine の上で動く Win32 のプロセスです。Linux の窓 1 つごとに�
   利用者の絵と「Loading your personal settings...」（prefix の更新中も）、キーボードとスタートメニューの準備中は
   「Applying your personal settings...」、シェルが起動するまでは大きな「welcome」だけの画面です。greeter を入れていなければ、このチェックアウトの `.local/assets` から描きます。
 - XP のカーソルは `greeter/cursors.py` が利用者の user32.dll から X のカーソルテーマ（`win4wine-xp`）として作ります。
+
+## Windows へようこそ（OOBE、`greeter/xp-oobe.py`）
+
+- XP がセットアップの後に 1 度だけ出した「Windows へようこそ」を、prefix の最初のセッションで出します。supervisor は
+  prefix に `oobe.json` が無いとき、WM（X11）や XP のシェルより前に `greeter/xp-oobe.py` を動かし、終わるまで待ちます。
+- XP の `msoobe.exe` は XP のセットアップの部品（syssetup.dll と setupapi の非公開の関数）が要るので動かしません。
+  `extract/extract.py` の `oobe` の組（system32\oobe の画像、intro.wmv、title.wma、ページの HTML とスクリプト、oobestyl.css）
+  から、`greeter/oobe.py` が画面を cairo と Pango で描きます。文字列はページの要素（id）とスクリプトの `L_..._Text` から、
+  字体と色は oobestyl.css から読みます（コードは動かしません）。
+- 流れはネットワークの無い製品版の XP SP3 と同じです: intro.wmv（全画面。Esc かクリックで飛ばせます）→「Windows へようこそ」→
+  「コンピュータの保護」→「このコンピュータを使うユーザーを指定してください」→「ありがとうございました」。音楽（title.wma）は
+  最初の画面から流れ、「完了」で消えていきます。動画と音楽は GStreamer で再生します（無ければどちらも無しで進みます）。
+- 配置は msobshel.htm の枠（1024x768、小さい画面では 800x600）の中の IE の配置で、枠を画面いっぱいに拡大し、外側は帯と背景を
+  伸ばします。
+- 「完了」で選んだ内容を `oobe.json` に書き、最初の名前を prefix の `RegisteredOwner`、自動更新の選択を `AUOptions` にします。
+  ほかのユーザーのアカウントは作りません（セッションの Linux のユーザーがアカウントです）。日本語入力（IME）では入力できません。
+- もう一度出すには prefix の `oobe.json` を消します。`session.json` の `oobe: false` で出しません。
 
 ## DPI
 

@@ -27,17 +27,17 @@ WIN4WINE_SHELL=reactos; processes with Wine's own comctl32 are not affected.
 Old patches: 0060, 0068.
 ---
  dlls/comctl32/comctl32.h          |  8 ++++++
- dlls/comctl32/commctrl.c          | 56 +++++++++++++++++++++++++++++++++++++++
+ dlls/comctl32/commctrl.c          | 55 +++++++++++++++++++++++++++++++++++++++
  dlls/comctl32_v6/button.c         |  6 ++---
  dlls/comctl32_v6/combo.c          | 27 +++++++++++++++++--
  dlls/comctl32_v6/comctl32_v6.spec |  1 +
  dlls/comctl32_v6/edit.c           |  9 +++++--
  dlls/comctl32_v6/listbox.c        | 18 ++++++++++---
  dlls/comctl32_v6/static.c         |  9 +++++--
- dlls/user32/class.c               | 54 +++++++++++++++++++++++++++++++++++++
+ dlls/user32/class.c               | 51 ++++++++++++++++++++++++++++++++++++
  dlls/user32/controls.h            |  2 ++
  dlls/user32/win.c                 | 20 +++++++++-----
- 11 files changed, 190 insertions(+), 20 deletions(-)
+ 11 files changed, 186 insertions(+), 20 deletions(-)
 
 diff --git a/dlls/comctl32/comctl32.h b/dlls/comctl32/comctl32.h
 index 249befa..918a303 100644
@@ -72,7 +72,7 @@ index 249befa..918a303 100644
  extern void ANIMATE_Register(void);
  extern void COMBOEX_Register(void);
 diff --git a/dlls/comctl32/commctrl.c b/dlls/comctl32/commctrl.c
-index 80404b8..b5e3814 100644
+index 80404b8..1867d02 100644
 --- a/dlls/comctl32/commctrl.c
 +++ b/dlls/comctl32/commctrl.c
 @@ -69,6 +69,7 @@
@@ -83,7 +83,7 @@ index 80404b8..b5e3814 100644
  
  WINE_DEFAULT_DEBUG_CHANNEL(commctrl);
  
-@@ -166,6 +167,61 @@ static void unregister_classes(void)
+@@ -166,6 +167,60 @@ static void unregister_classes(void)
      }
  }
  
@@ -111,14 +111,13 @@ index 80404b8..b5e3814 100644
 +    WCHAR alias[32];
 +    WNDCLASSW wc;
 +
-+    if (!COMCTL32_IsExternalAlias()) return FALSE;
-+    lstrcpyW(alias, L"Win4Wine");
-+    lstrcatW(alias, class);
-+    if (GetClassInfoW(COMCTL32_hModule, alias, &wc)) return TRUE;
++    if (!class || !COMCTL32_IsExternalAlias()) return FALSE;
 +    for (unsigned int i = 0; i < ARRAY_SIZE(classes); i++)
 +    {
 +        if (wcsicmp(class, classes[i].nameW)) continue;
-+        classes[i].fn_register(alias);
++        lstrcpyW(alias, L"Win4Wine");
++        lstrcatW(alias, classes[i].nameW);
++        if (!GetClassInfoW(COMCTL32_hModule, alias, &wc)) classes[i].fn_register(alias);
 +        return GetClassInfoW(COMCTL32_hModule, alias, &wc);
 +    }
 +    return FALSE;
@@ -353,7 +352,7 @@ index c243d3f..d91aa06 100644
 +    STATIC_Register_Name(WC_STATICW);
 +}
 diff --git a/dlls/user32/class.c b/dlls/user32/class.c
-index a754720..f00652b 100644
+index a754720..863d49f 100644
 --- a/dlls/user32/class.c
 +++ b/dlls/user32/class.c
 @@ -24,6 +24,7 @@
@@ -364,7 +363,7 @@ index a754720..f00652b 100644
  
  WINE_DEFAULT_DEBUG_CHANNEL(class);
  
-@@ -346,6 +347,59 @@ ATOM WINAPI RegisterClassExA( const WNDCLASSEXA* wc )
+@@ -346,6 +347,56 @@ ATOM WINAPI RegisterClassExA( const WNDCLASSEXA* wc )
  }
  
  
@@ -377,7 +376,9 @@ index a754720..f00652b 100644
 +{
 +    static const WCHAR prefix[] = L"win4wine!";
 +    static const WCHAR *names[] = { L"Button", L"ComboBox", L"ComboLBox", L"Edit", L"ListBox", L"Static" };
-+    static WCHAR classes[ARRAY_SIZE(names)][32];
++    static const WCHAR *classes[] = { L"win4wine!Button", L"win4wine!ComboBox", L"win4wine!ComboLBox",
++                                      L"win4wine!Edit", L"win4wine!ListBox", L"win4wine!Static" };
++    static LONG registered[ARRAY_SIZE(names)];
 +    static const char signature[] = "Wine builtin DLL";
 +    HMODULE comctl32, controls;
 +    BOOL (WINAPI *register_control)(const WCHAR *);
@@ -390,7 +391,7 @@ index a754720..f00652b 100644
 +    if (IS_INTRESOURCE( name ) || !win4wine_external_shell()) return NULL;
 +    for (i = 0; i < ARRAY_SIZE(names); i++) if (!wcsicmp( name, names[i] )) break;
 +    if (i == ARRAY_SIZE(names)) return NULL;
-+    if (classes[i][0]) return classes[i];
++    if (ReadAcquire( &registered[i] )) return classes[i];
 +    /* Only where comctl32 is the native one; Wine's own finds its classes itself. */
 +    if (!(comctl32 = GetModuleHandleW( L"comctl32.dll" )) ||
 +        !memcmp( (IMAGE_DOS_HEADER *)comctl32 + 1, signature, sizeof(signature) ))
@@ -401,23 +402,18 @@ index a754720..f00652b 100644
 +    lstrcatW( plain, names[i] );
 +    if (!register_control || !register_control( names[i] ) || !GetClassInfoExW( controls, plain, &wc ))
 +        return NULL;
-+    lstrcpyW( classes[i], prefix );
-+    lstrcatW( classes[i], names[i] );
 +    wc.lpszClassName = classes[i];
 +    wc.lpszMenuName = NULL;
 +    RtlInitUnicodeString( &class_name, classes[i] );
-+    version.Buffer = classes[i];
++    version.Buffer = (WCHAR *)classes[i];
 +    version.Length = version.MaximumLength = (ARRAY_SIZE(prefix) - 1) * sizeof(WCHAR);
 +    if (!alloc_menu_nameW( &menu_name, NULL )) return NULL;
 +    if (!NtUserRegisterClassExWOW( &wc, &class_name, &version, &menu_name, 0, 0, NULL ))
 +    {
 +        free_menu_name( &menu_name );
-+        if (GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-+        {
-+            classes[i][0] = 0;
-+            return NULL;
-+        }
++        if (GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return NULL;
 +    }
++    WriteRelease( &registered[i], TRUE );
 +    return classes[i];
 +}
 +

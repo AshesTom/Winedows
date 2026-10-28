@@ -10,7 +10,8 @@ import select
 import signal
 import struct
 from Xlib import X, XK, Xatom, Xutil, display, error, protocol
-from Xlib.ext import composite
+from Xlib.ext import composite, xtest
+from hotkeys import Hotkeys
 from icons import payload as icon_payload
 
 IN_CLOSE_WRITE, IN_MOVED_TO = 0x8, 0x80
@@ -85,6 +86,7 @@ class Manager:
         # Their frames are redirected only while they move (frame_moves).
         self.redirect = redirect and self.d.has_extension('Composite')
         self.previous_classes = None
+        self.previous_owners = None
         self.overlays = {}  # override-redirect shell windows kept above the taskbar and Start menu:
                             # the Start button, the user picture and notification balloons/tooltips
                             # (unmanaged, so every restack would otherwise bury them under the taskbar)
@@ -134,6 +136,9 @@ class Manager:
             self.root.grab_key(code, X.AnyModifier, True, X.GrabModeAsync, X.GrabModeSync)
         for modifiers in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
             self.root.grab_key(self.escape, X.ControlMask | modifiers, True, X.GrabModeAsync, X.GrabModeSync)
+        # The media keys and the user's shortcuts (hotkeys.py)
+        self.hotkeys = Hotkeys(self.d, self.root)
+        self.shell_combo_used = False
         for w in self.root.query_tree().children:
             if w.get_attributes().map_state == X.IsViewable:
                 self.manage(w)
@@ -200,6 +205,17 @@ class Manager:
             return 'dock'
         return 'normal'
 
+    def activates(self, c):
+        """Whether a click or its map gives the client the focus. Wine maps
+        some tooltips as managed windows (the task pane's, ~1 s after a click
+        on a group's arrow): on XP a tooltip never takes the activation, and
+        focusing it made its owner inactive while it was shown."""
+        try:
+            cls = bytes(self.prop(c['w'], '_WIN4WINE_CLASS')).strip(b'\0').lower()
+        except error.XError:
+            return False
+        return cls != b'tooltips_class32'
+
     def overlay_window(self, w):
         """Remember an override-redirect shell window shown above the taskbar.
 
@@ -249,7 +265,8 @@ class Manager:
         client['hidden'] = False
         if client['kind'] == 'normal' and not client['hwnd'] and self.fullscreen(client):
             self.fill_screen(client)
-        elif client['kind'] == 'normal' and client['owner'] and not client['hwnd'] and not client.get('placed'):
+        elif (client['kind'] == 'normal' and client['owner'] and not client['hwnd'] and not client.get('placed')
+              and not self.framed_owned(client)):
             # An owned Linux window has no frame; keep it inside the work area
             # (GTK's file chooser asks for a fixed size, larger than small screens),
             # centred on its owner unless it placed itself (GTK 4 does not).
@@ -266,7 +283,7 @@ class Manager:
                 self.configure(client, x=x, y=y, width=width, height=height)
         self.setprop(w, 'WM_STATE', self.atom('WM_STATE'), [1, 0])
         w.map()
-        if client['kind'] in ('normal', 'popup'):
+        if client['kind'] in ('normal', 'popup') and self.activates(client):
             self.focus(w)
         self.restack()
         self.workarea()
@@ -310,6 +327,27 @@ class Manager:
             except error.XError:
                 owner = None
             c['owner'] = owner.id if owner else 0
+        if atom in (None, self.atom('_MOTIF_WM_HINTS'), self.atom('_NET_WM_WINDOW_TYPE')):
+            c['undecorated'] = self.undecorated(w)
+
+    def undecorated(self, w):
+        """Whether a window asks for no frame: _MOTIF_WM_HINTS without
+        decorations (client-side decorations, splash screens), or a type that
+        XP gives no caption (splash, notification, menus, tooltips)."""
+        hints = self.prop(w, '_MOTIF_WM_HINTS')
+        if len(hints) >= 3 and hints[0] & 2 and not hints[2]:
+            return True
+        bare = {self.atom(name) for name in (
+            '_NET_WM_WINDOW_TYPE_SPLASH', '_NET_WM_WINDOW_TYPE_NOTIFICATION', '_NET_WM_WINDOW_TYPE_TOOLTIP',
+            '_NET_WM_WINDOW_TYPE_DND', '_NET_WM_WINDOW_TYPE_COMBO', '_NET_WM_WINDOW_TYPE_POPUP_MENU',
+            '_NET_WM_WINDOW_TYPE_DROPDOWN_MENU', '_NET_WM_WINDOW_TYPE_MENU')}
+        return any(t in bare for t in self.prop(w, '_NET_WM_WINDOW_TYPE'))
+
+    def framed_owned(self, c):
+        """An owned window that XP would draw with a caption: a dialog, or an
+        application's second window. Its frame is owned by its owner's (no
+        taskbar button, kept above it), as Win32 owned windows are."""
+        return bool(c['owner']) and not c.get('undecorated') and c['owner'] in self.clients
 
     def configure(self, c, **values):
         """Configure a client and tell it its new root geometry (ICCCM)."""
@@ -409,7 +447,10 @@ class Manager:
 
     def shell_combo_event(self, e):
         """A key while the WM holds the keyboard for the Windows key."""
-        if e.type == X.KeyPress and e.detail not in self.super_codes:
+        if e.type == X.KeyPress and e.detail not in self.super_codes and self.hotkeys.press(e):
+            # A shortcut with the Windows key: the shell gets none of it.
+            self.shell_combo_used = True
+        elif e.type == X.KeyPress and e.detail not in self.super_codes:
             keysym = self.d.keycode_to_keysym(e.detail, 0)
             vk = VIRTUAL_KEYS.get(keysym)
             if vk is None and (XK.XK_a <= keysym <= XK.XK_z or XK.XK_0 <= keysym <= XK.XK_9):
@@ -419,8 +460,10 @@ class Manager:
             if vk is not None:
                 self.shell_combo.append(vk)
         elif e.type == X.KeyRelease and e.detail in self.super_codes:
-            self.write_shell_keys('windows', self.shell_combo)
+            if not self.shell_combo_used:
+                self.write_shell_keys('windows', self.shell_combo)
             self.shell_combo = None
+            self.shell_combo_used = False
 
     def write_shell_keys(self, kind, keys):
         self.shell_keys += 1
@@ -508,6 +551,8 @@ class Manager:
                 return
             w = native['w']
         c = self.clients.get(w.id)
+        if c and not self.activates(c):
+            return
         if c and c['kind'] == 'popup':
             # An XP Start popup needs real X keyboard focus for Wine activation,
             # without becoming the active application task or an Alt+Tab entry.
@@ -593,7 +638,7 @@ class Manager:
             w.kill_client()
 
     def unmanage(self, window_id):
-        self.clients.pop(window_id, None)
+        gone = self.clients.pop(window_id, None)
         self.previous_icons.pop(window_id, None)
         (self.ipc / f'icon-{window_id:x}.argb').unlink(missing_ok=True)
         (self.ipc / f'icon-{window_id:x}-small.argb').unlink(missing_ok=True)
@@ -608,8 +653,13 @@ class Manager:
         if self.active == window_id:
             # Focus the next window still shown, not a minimized one (Wine
             # withdraws a minimized window that it restores, and maps it again).
+            # An owned window gives the activation back to its owner, as on XP.
             self.active = 0
-            self.focus_visible()
+            owner = self.clients.get(gone['owner']) if gone and gone.get('owner') else None
+            if owner and owner['kind'] == 'normal' and not owner['hidden']:
+                self.focus(owner['w'])
+            else:
+                self.focus_visible()
         self.restack()
         self.workarea()
 
@@ -883,6 +933,12 @@ class Manager:
                             ax, ay, awidth, aheight = self.area
                             x = ax + left + max(0, (awidth-left-right-width) // 2)
                             y = ay + top + max(0, (aheight-top-bottom-height) // 2)
+                        elif native['owner'] in self.clients and not self.positioned(native):
+                            # A dialog: centred on its owner, inside the work area.
+                            ox, oy, owidth, oheight = self.clients[native['owner']]['geometry'][:4]
+                            ax, ay, awidth, aheight = self.area
+                            x = max(ax + left, min(ox + (owidth - width) // 2, ax + awidth - right - width))
+                            y = max(ay + top, min(oy + (oheight - height) // 2, ay + aheight - bottom - height))
                         elif self.positioned(native):
                             # Keep an explicit position, but keep the first
                             # caption visible above content placed at 0,0.
@@ -1002,10 +1058,13 @@ class Manager:
             focused_id = focused.id if hasattr(focused, 'id') else 0
         except error.XError:
             focused_id = 0
+        owners = []
         for i, c in self.clients.items():
             w = c['w']
-            if c['kind'] != 'normal' or c['hwnd'] or c['owner']:
+            if c['kind'] != 'normal' or c['hwnd'] or (c['owner'] and not self.framed_owned(c)):
                 continue
+            if c['owner']:
+                owners.append(f'{i:x}\t{c["owner"]:x}\n')
             if c['icon_dirty']:
                 # The caption's 16x16 icon beside the big one; the proxy
                 # reads both when the big file changes, so it goes last.
@@ -1024,6 +1083,14 @@ class Manager:
                 c['icon_dirty'] = False
             lines.append(f'{i:x}\t{int(c["hidden"])}\t{int(i == self.active and i == focused_id)}\t{c["title"]}\n')
             classes.append(f'{i:x}\t{c.get("class", "")}\n')
+        # The owned windows' owners, read by the proxy before it makes their
+        # frames (windows.tsv keeps its format).
+        text = ''.join(owners)
+        if text != self.previous_owners:
+            temp = self.ipc / 'owners.tmp'
+            temp.write_text(text, encoding='utf-8')
+            temp.replace(self.ipc / 'owners.tsv')
+            self.previous_owners = text
         text = ''.join(classes)
         if text != self.previous_classes:
             temp = self.ipc / 'classes.tmp'
@@ -1182,6 +1249,13 @@ class Manager:
             self.shell_key(e)
         elif self.switch is not None and e.type in (X.KeyPress, X.KeyRelease):
             self.switch_event(e)
+        elif e.type == X.KeyPress and self.hotkeys.press(e):
+            if e.state & X.Mod4Mask:
+                # The shell saw the Windows key go down: another key before it
+                # goes up, or it would open the Start menu.
+                control = self.d.keysym_to_keycode(XK.XK_Control_L)
+                xtest.fake_input(self.d, X.KeyPress, control)
+                xtest.fake_input(self.d, X.KeyRelease, control)
         elif e.type == X.KeyPress and e.detail == self.d.keysym_to_keycode(XK.string_to_keysym('F4')):
             if self.active in self.clients:
                 self.close(self.clients[self.active]['w'])
@@ -1259,6 +1333,7 @@ class Manager:
                     dirty = max(dirty, self.changes_bridge(e))
                 except error.XError:
                     dirty = 2  # A client may disappear between any two requests.
+            self.hotkeys.check()
             if any(name.endswith('.cmd') or name == 'frames.tsv' for name in changes.names()):
                 dirty = 2
             if dirty:

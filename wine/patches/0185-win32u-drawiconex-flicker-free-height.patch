@@ -1,0 +1,27 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] win32u: fill DrawIconEx's whole flicker-free background
+
+Purpose: XP's Static draws the Run dialog's icon stretched to 32x33 with the
+dialog's brush; Wine left the 33rd row black.
+Windows behavior: with hbrFlickerFreeDraw, the offscreen bitmap of cxWidth
+by cyWidth is first filled with the brush.
+Wine before: filled width by width (an upstream Wine 11.0 bug).
+Change: fill width by height.
+Scope: all processes.
+---
+ dlls/win32u/cursoricon.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/win32u/cursoricon.c b/dlls/win32u/cursoricon.c
+index 217ac59..e8f3bda 100644
+--- a/dlls/win32u/cursoricon.c
++++ b/dlls/win32u/cursoricon.c
+@@ -882,7 +882,7 @@ BOOL WINAPI NtUserDrawIconEx( HDC hdc, INT x0, INT y0, HICON icon, INT width,
+         HBRUSH prev_brush;
+         RECT r;
+ 
+-        SetRect(&r, 0, 0, width, width);
++        SetRect(&r, 0, 0, width, height);
+ 
+         if (!(hdc_dest = NtGdiCreateCompatibleDC(hdc))) goto failed;
+         if (!(offscreen_bitmap = NtGdiCreateCompatibleBitmap(hdc, width, height)))

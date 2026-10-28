@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Control Panel's Keyboard Shortcuts item (shortcuts.c).
+#include <windows.h>
+#include <commctrl.h>
+#include "shortcuts.h"
+
+2 24 "shortcuts.manifest"
+
+STRINGTABLE
+{
+    IDS_NAME, "Keyboard Shortcuts"
+    IDS_INFO, "Start programs with shortcut keys, from any window."
+    IDS_KEY, "Shortcut key"
+    IDS_COMMAND, "Command"
+}
+
+IDD_MAIN DIALOGEX 0, 0, 290, 206
+STYLE DS_MODALFRAME | DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Keyboard Shortcuts"
+FONT 8, "MS Shell Dlg", 0, 0, 1
+{
+    LTEXT "Shortcut keys start a program or run a command, whatever window is active. Press the keys of a shortcut to run its command.",
+          -1, 7, 7, 276, 18
+    CONTROL "", IDC_LIST, WC_LISTVIEW, LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,
+            7, 30, 276, 128
+    PUSHBUTTON "&New...", IDC_NEW, 116, 163, 53, 14
+    PUSHBUTTON "&Edit...", IDC_EDIT, 173, 163, 53, 14
+    PUSHBUTTON "&Remove", IDC_REMOVE, 230, 163, 53, 14
+    DEFPUSHBUTTON "OK", IDOK, 116, 185, 53, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 173, 185, 53, 14
+    PUSHBUTTON "&Apply", IDC_APPLY, 230, 185, 53, 14
+}
+
+IDD_ENTRY DIALOGEX 0, 0, 250, 98
+STYLE DS_MODALFRAME | DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Shortcut"
+FONT 8, "MS Shell Dlg", 0, 0, 1
+{
+    LTEXT "Shortcut &key:", -1, 7, 9, 56, 8
+    CONTROL "", IDC_HOTKEY, HOTKEY_CLASS, WS_BORDER | WS_TABSTOP, 66, 7, 110, 13
+    AUTOCHECKBOX "&Windows key", IDC_WIN, 182, 9, 62, 10
+    LTEXT "&Command:", -1, 7, 31, 56, 8
+    EDITTEXT IDC_COMMAND, 66, 29, 120, 13, ES_AUTOHSCROLL
+    PUSHBUTTON "&Browse...", IDC_BROWSE, 191, 28, 53, 14
+    LTEXT "The command runs on the Linux system, as in a terminal (for example: spectacle -r).",
+          -1, 66, 46, 178, 18
+    DEFPUSHBUTTON "OK", IDOK, 135, 77, 53, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 191, 77, 53, 14
+}

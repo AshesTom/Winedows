@@ -1,0 +1,47 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] comctl32: the XP notification area's chevron button over its background
+
+Purpose: the round blue arrow that shows the hidden notification icons.
+Windows behavior: XP draws the arrow over the notification area's own
+background, its corners show the notification area.
+Wine before: after DrawThemeParentBackground, a themed push button with
+transparent parts is filled with the brush of the parent's
+WM_CTLCOLORBTN; the taskbar answers with the classic face colour, so the
+arrow was on a beige square.
+Change: in the XP shell, a push button whose parent is TrayNotifyWnd is
+not filled after the parent's background, as the Start button already is
+not.
+Evidence: the button (class Button, BS_PUSHBUTTON, id 1502) of
+TrayNotifyWnd showed a light face-coloured square around the arrow.
+Scope: only the XP shell session and the notification area's buttons.
+---
+--- a/dlls/comctl32_v6/button.c
++++ b/dlls/comctl32_v6/button.c
+@@ -201,6 +201,18 @@
+ 
+ typedef BOOL (*pfGetIdealSize)(BUTTON_INFO *infoPtr, SIZE *size);
+ 
++/* The XP notification area's button that shows or hides the inactive icons:
++ * XP draws its round arrow over the notification area's background, with no
++ * fill from the taskbar's WM_CTLCOLORBTN (the classic face colour). */
++static BOOL xp_tray_button(const BUTTON_INFO *info)
++{
++    WCHAR name[32];
++    HWND parent = GetParent(info->hwnd);
++
++    return COMCTL32_IsXPShell() && parent && GetClassNameW(parent, name, ARRAY_SIZE(name))
++           && !wcsicmp(name, L"TrayNotifyWnd");
++}
++
+ static HTHEME start_button_theme(const BUTTON_INFO *info);
+ static BOOL PB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size);
+ static BOOL CB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size);
+@@ -2929,7 +2941,7 @@
+         /* Tests show that the brush from WM_CTLCOLORBTN is used for filling background after a
+          * DrawThemeParentBackground() call. The XP taskbar answers with the classic face
+          * brush, while XP keeps its themed background in the Start image's rounded corners. */
+-        if (!external_start_button(infoPtr))
++        if (!external_start_button(infoPtr) && !xp_tray_button(infoPtr))
+         {
+             brush = (HBRUSH)SendMessageW(parent, WM_CTLCOLORBTN, (WPARAM)hDC, (LPARAM)infoPtr->hwnd);
+             FillRect(hDC, &bgRect, brush ? brush : GetSysColorBrush(COLOR_BTNFACE));

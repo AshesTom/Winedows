@@ -1,0 +1,132 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] server, user32: copied files paste as their paths in the external shell
+
+Purpose: a file copied in XP's Explorer (Ctrl+C) pastes into the address
+bar, or any text field, as its path.
+Windows behavior: a copied file is on the clipboard as CF_HDROP and the
+shell's formats only; a text field has nothing to paste.
+Wine before: the same.
+Change: on clipboard close, with WIN4WINE_EXTERNAL_SHELL and no text
+format, the server offers CF_UNICODETEXT, CF_TEXT and CF_OEMTEXT
+synthesized from CF_HDROP, as it synthesizes text formats from each other;
+user32 renders them as the files' paths, one per line (a one-line field
+takes the first).
+Evidence: Ctrl+C on a file in a folder window, then Ctrl+V in the address
+bar, gives Z:\home\...\file.
+Scope: only the external shell's session (the server reads the variable);
+nothing changes for clipboards with text.
+---
+--- a/server/clipboard.c
++++ b/server/clipboard.c
+@@ -216,6 +216,21 @@
+         else free( data );
+     }
+ 
++    /* win4wine: copied files paste as their paths, in the external shell's
++     * session (the address bar takes a copied file's path). */
++    if (getenv( "WIN4WINE_EXTERNAL_SHELL" ) && HAS_FORMAT( map, CF_HDROP ) &&
++        !HAS_FORMAT( map, CF_TEXT ) && !HAS_FORMAT( map, CF_OEMTEXT ) && !HAS_FORMAT( map, CF_UNICODETEXT ))
++    {
++        static const unsigned int texts[] = { CF_UNICODETEXT, CF_TEXT, CF_OEMTEXT };
++        for (i = 0; i < ARRAY_SIZE( texts ); i++)
++        {
++            if (!(format = add_format( clipboard, texts[i] ))) continue;
++            format->from = CF_HDROP;
++            format->seqno = clipboard->seqno;
++            total++;
++        }
++    }
++
+     for (i = 0; i < ARRAY_SIZE( formats ); i++)
+     {
+         if (HAS_FORMAT( map, formats[i][0] )) continue;
+--- a/dlls/user32/clipboard.c
++++ b/dlls/user32/clipboard.c
+@@ -480,6 +480,74 @@
+     return ret;
+ }
+ 
++/* win4wine: the paths of copied files (a DROPFILES), one per line, as text
++ * in FORMAT; the server offers it in the external shell's session. */
++static HANDLE render_text_from_hdrop( HANDLE data, UINT format )
++{
++    const DROPFILES *files;
++    const char *base;
++    WCHAR *text = NULL;
++    size_t length = 0, size;
++    HANDLE ret = 0;
++
++    if (!(files = GlobalLock( data ))) return 0;
++    size = GlobalSize( data );
++    base = (const char *)files;
++    if (files->pFiles < size)
++    {
++        if (files->fWide)
++        {
++            const WCHAR *p = (const WCHAR *)(base + files->pFiles), *end = (const WCHAR *)(base + size);
++            /* The list of NUL-terminated names ends with an empty one. */
++            const WCHAR *q = p;
++            while (q < end && *q) { while (q < end && *q) q++; q++; }
++            if ((text = malloc( ((q - p) + 2) * sizeof(WCHAR) )))
++            {
++                for (q = p; q < end && *q; q++)
++                {
++                    for (; q < end && *q; q++) text[length++] = *q;
++                    text[length++] = '\r';
++                    text[length++] = '\n';
++                }
++            }
++        }
++        else
++        {
++            const char *p = base + files->pFiles, *end = base + size, *q = p;
++            while (q < end && *q) { while (q < end && *q) q++; q++; }
++            if ((text = malloc( ((q - p) * 2 + 2) * sizeof(WCHAR) )))
++            {
++                for (q = p; q < end && *q; q++)
++                {
++                    size_t n = strnlen( q, end - q );
++                    length += MultiByteToWideChar( CP_ACP, 0, q, n, text + length, n * 2 );
++                    q += n;
++                    text[length++] = '\r';
++                    text[length++] = '\n';
++                }
++            }
++        }
++    }
++    GlobalUnlock( data );
++    if (!text) return 0;
++    if (length >= 2) length -= 2;   /* no line break after the last path */
++    text[length] = 0;
++    if (format == CF_UNICODETEXT)
++    {
++        if ((ret = GlobalAlloc( GMEM_FIXED, (length + 1) * sizeof(WCHAR) )))
++            memcpy( ret, text, (length + 1) * sizeof(WCHAR) );
++    }
++    else
++    {
++        UINT codepage = format == CF_OEMTEXT ? CP_OEMCP : CP_ACP;
++        int bytes = WideCharToMultiByte( codepage, 0, text, length + 1, NULL, 0, NULL, NULL );
++        if ((ret = GlobalAlloc( GMEM_FIXED, bytes )))
++            WideCharToMultiByte( codepage, 0, text, length + 1, ret, bytes, NULL, NULL );
++    }
++    free( text );
++    return ret;
++}
++
+ /* render a synthesized format */
+ HANDLE render_synthesized_format( UINT format, UINT from )
+ {
+@@ -488,6 +556,12 @@
+     if (!data) return 0;
+     TRACE( "rendering %s from %s\n", debugstr_format( format ), debugstr_format( from ));
+ 
++    if (from == CF_HDROP)
++    {
++        if ((data = render_text_from_hdrop( data, format ))) SetClipboardData( format, data );
++        return data;
++    }
++
+     switch (format)
+     {
+     case CF_TEXT:

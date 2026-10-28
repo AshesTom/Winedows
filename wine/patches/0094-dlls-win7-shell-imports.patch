@@ -53,7 +53,7 @@ Scope: new exports only; nothing that Wine already exported changes.
  dlls/kernel32/kernel32.spec     |  9 ++---
  dlls/kernel32/process.c         | 64 +++++++++++++++++++++++++++++++++
  dlls/kernelbase/kernelbase.spec |  2 +-
- dlls/kernelbase/registry.c      | 61 +++++++++++++++++++++++++++++++
+ dlls/kernelbase/registry.c      | 68 +++++++++++++++++++++++++++++++++++
  dlls/ntdll/env.c                | 18 ++++++++++
  dlls/ntdll/misc.c               | 22 ++++++++++++
  dlls/ntdll/ntdll.spec           |  6 ++++
@@ -65,7 +65,7 @@ Scope: new exports only; nothing that Wine already exported changes.
  dlls/user32/user32.spec         | 11 +++---
  dlls/winsta/main.c              |  8 +++++
  dlls/winsta/winsta.spec         |  1 +
- 17 files changed, 337 insertions(+), 37 deletions(-)
+ 17 files changed, 344 insertions(+), 37 deletions(-)
 
 diff --git a/dlls/gdi32/gdi32.spec b/dlls/gdi32/gdi32.spec
 index 207549f..35fc828 100644
@@ -224,10 +224,10 @@ index 28c5376..34402c1 100644
  @ stdcall LocalAlloc(long long)
  @ stdcall LocalFileTimeToFileTime(ptr ptr)
 diff --git a/dlls/kernelbase/registry.c b/dlls/kernelbase/registry.c
-index 5ece6fd..238da3f 100644
+index 5ece6fd..b9b5179 100644
 --- a/dlls/kernelbase/registry.c
 +++ b/dlls/kernelbase/registry.c
-@@ -4144,3 +4144,64 @@ BOOL WINAPI SHRegGetBoolUSValueW(const WCHAR *subkey, const WCHAR *value, BOOL i
+@@ -4144,3 +4144,71 @@ BOOL WINAPI SHRegGetBoolUSValueW(const WCHAR *subkey, const WCHAR *value, BOOL i
  
      return ret;
  }
@@ -264,9 +264,9 @@ index 5ece6fd..238da3f 100644
 +        memcpy( buffer, source, len * sizeof(WCHAR) );
 +        return TRUE;
 +    }
-+    len = ExpandEnvironmentStringsW( source + 1, NULL, 0 );
++    if (!(len = ExpandEnvironmentStringsW( source + 1, NULL, 0 ))) return FALSE;
 +    if (!(expanded = HeapAlloc( GetProcessHeap(), 0, len * sizeof(WCHAR) ))) return FALSE;
-+    ExpandEnvironmentStringsW( source + 1, expanded, len );
++    if (ExpandEnvironmentStringsW( source + 1, expanded, len ) - 1 >= len) expanded[0] = 0;  /* failed or changed */
 +    if (!(comma = wcsrchr( expanded, ',' )) || comma[1] != '-')
 +    {
 +        HeapFree( GetProcessHeap(), 0, expanded );
@@ -275,12 +275,19 @@ index 5ece6fd..238da3f 100644
 +    }
 +    *comma = 0;
 +    if (wcschr( expanded, '\\' )) lstrcpynW( path, expanded, MAX_PATH );
-+    else if (directory) swprintf( path, MAX_PATH, L"%s\\%s", directory, expanded );
 +    else
 +    {
-+        GetSystemDirectoryW( path, MAX_PATH );
-+        lstrcatW( path, L"\\" );
-+        lstrcatW( path, expanded );
++        WCHAR system[MAX_PATH];
++        int written;
++
++        if (!directory && GetSystemDirectoryW( system, MAX_PATH )) directory = system;
++        written = directory ? swprintf( path, MAX_PATH, L"%s\\%s", directory, expanded ) : -1;
++        if (written < 0 || written >= MAX_PATH)
++        {
++            HeapFree( GetProcessHeap(), 0, expanded );
++            SetLastError( ERROR_INVALID_DATA );
++            return FALSE;
++        }
 +    }
 +    result = load_mui_string( path, wcstol( comma + 2, NULL, 10 ), buffer, size, &req, 0 );
 +    HeapFree( GetProcessHeap(), 0, expanded );

@@ -40,12 +40,12 @@ and 72-77 (40-41 and 42-46), My Computer 29-33 (18-20).
 Scope: only with WIN4WINE_EXTERNAL_SHELL and a visual style; classic frames
 are unchanged.
 ---
- dlls/user32/defwnd.c      |  45 ++++++++++++++++++
+ dlls/user32/defwnd.c      |  45 +++++++++++++++++
  dlls/uxtheme/draw.c       |  28 +++++++++--
- dlls/uxtheme/msstyles.c   |  35 ++++++++++++++
+ dlls/uxtheme/msstyles.c   |  35 +++++++++++++
  dlls/uxtheme/uxtheme.spec |   1 +
- dlls/uxtheme/window.c     | 115 +++++++++++++++++++++++++++++++++++++++-------
- 5 files changed, 204 insertions(+), 20 deletions(-)
+ dlls/uxtheme/window.c     | 122 +++++++++++++++++++++++++++++++++++++++-------
+ 5 files changed, 210 insertions(+), 21 deletions(-)
 
 diff --git a/dlls/user32/defwnd.c b/dlls/user32/defwnd.c
 index 6b7bb39..9095c57 100644
@@ -234,7 +234,7 @@ index deb1bff..cb07007 100644
 +@ stdcall Win4WineCaptionBand(ptr ptr)
  @ stdcall Win4WineNcHitTest(ptr long long)
 diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
-index 068b050..a9ab39d 100644
+index 068b050..6edcd93 100644
 --- a/dlls/uxtheme/window.c
 +++ b/dlls/uxtheme/window.c
 @@ -26,20 +26,59 @@
@@ -299,7 +299,7 @@ index 068b050..a9ab39d 100644
  /* A move keeps the window's size, so its region and caption pixels stay. */
  static BOOL moved_only(UINT msg, LPARAM lparam)
  {
-@@ -48,9 +87,19 @@ static BOOL moved_only(UINT msg, LPARAM lparam)
+@@ -48,17 +87,32 @@ static BOOL moved_only(UINT msg, LPARAM lparam)
             !(pos->flags & (SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_HIDEWINDOW));
  }
  
@@ -316,11 +316,17 @@ index 068b050..a9ab39d 100644
  static LRESULT CALLBACK caption_region_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
  {
 -    struct caption_region *region = (void *)GetPropW(hwnd, region_property);
+-    WNDPROC original = region->original;
 +    struct caption_region *region = find_region(hwnd);
-     WNDPROC original = region->original;
++    WNDPROC original;
      LRESULT result;
  
-@@ -58,7 +107,7 @@ static LRESULT CALLBACK caption_region_proc(HWND hwnd, UINT msg, WPARAM wparam,
++    /* A window not shaped here: this procedure taken from another window
++     * with GetWindowLongPtr, or a message after WM_NCDESTROY. */
++    if (!region) return DefWindowProcW(hwnd, msg, wparam, lparam);
++    original = region->original;
++
+     if (msg == WM_NCDESTROY)
      {
          if ((WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == caption_region_proc)
              SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)original);
@@ -329,7 +335,7 @@ index 068b050..a9ab39d 100644
          if (region->managed) DeleteObject(region->managed);
          HeapFree(GetProcessHeap(), 0, region);
          return CallWindowProcW(original, hwnd, msg, wparam, lparam);
-@@ -66,9 +115,9 @@ static LRESULT CALLBACK caption_region_proc(HWND hwnd, UINT msg, WPARAM wparam,
+@@ -66,9 +120,9 @@ static LRESULT CALLBACK caption_region_proc(HWND hwnd, UINT msg, WPARAM wparam,
  
      result = CallWindowProcW(original, hwnd, msg, wparam, lparam);
      if ((msg == WM_WINDOWPOSCHANGED || msg == WM_STYLECHANGED || msg == WM_DPICHANGED ||
@@ -341,7 +347,7 @@ index 068b050..a9ab39d 100644
      return result;
  }
  
-@@ -83,7 +132,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
+@@ -83,7 +137,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
  
      GetWindowThreadProcessId(hwnd, &process);
      if (process != GetCurrentProcessId()) return;
@@ -350,7 +356,7 @@ index 068b050..a9ab39d 100644
      if (region && (region->updating || region->abandoned)) return;
      if (!theme && (!region || !region->managed)) return;
      if (!(current = CreateRectRgn(0, 0, 0, 0))) return;
-@@ -103,7 +152,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
+@@ -103,7 +157,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
      {
          region->updating = TRUE;
          applied = SetWindowRgn(hwnd, NULL, FALSE);
@@ -359,7 +365,7 @@ index 068b050..a9ab39d 100644
          region->updating = FALSE;
          if (applied)
          {
-@@ -125,16 +174,13 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
+@@ -125,16 +179,13 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
      if (!region)
      {
          if (!(region = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*region)))) goto done;
@@ -379,7 +385,7 @@ index 068b050..a9ab39d 100644
              HeapFree(GetProcessHeap(), 0, region);
              goto done;
          }
-@@ -143,7 +189,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
+@@ -143,7 +194,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
      region->updating = TRUE;
      applied = SetWindowRgn(hwnd, shape, FALSE);
      if (applied) shape = NULL; /* The window now owns this handle. */
@@ -388,7 +394,7 @@ index 068b050..a9ab39d 100644
      region->updating = FALSE;
      if (applied)
      {
-@@ -164,7 +210,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
+@@ -164,7 +215,7 @@ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption,
              if (area && CombineRgn(area, current, NULL, RGN_COPY) != ERROR)
              {
                  OffsetRgn(area, window.left - origin.x, window.top - origin.y);
@@ -397,7 +403,7 @@ index 068b050..a9ab39d 100644
              }
              if (area) DeleteObject(area);
          }
-@@ -371,6 +417,40 @@ LRESULT WINAPI Win4WineNcHitTest(HWND hwnd, LPARAM coordinates, LRESULT original
+@@ -371,6 +422,40 @@ LRESULT WINAPI Win4WineNcHitTest(HWND hwnd, LPARAM coordinates, LRESULT original
  /* Render the user's active Window theme while retaining user32's non-client
   * geometry and hit testing. This is only enabled for the external XP shell. */
  BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target)
@@ -438,7 +444,7 @@ index 068b050..a9ab39d 100644
  {
      HTHEME theme;
      HDC dc;
-@@ -397,7 +477,7 @@ BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target)
+@@ -397,7 +482,7 @@ BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target)
          POINT cursor;
          int hit;
          if (!target) caption_region_update(hwnd, NULL, NULL, FALSE);
@@ -447,7 +453,7 @@ index 068b050..a9ab39d 100644
          dc = target ? target : GetWindowDC(hwnd);
          if (!dc) return FALSE;
          saved = SaveDC(dc);
-@@ -448,6 +528,7 @@ BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target)
+@@ -448,6 +533,7 @@ BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target)
       * row that would otherwise stay in the window colour above the client. */
      caption.bottom = max(caption.bottom, min(border_y + GetSystemMetrics(SM_CYCAPTION), client.top));
      if (!target) caption_region_update(hwnd, theme, &caption, maximized);

@@ -13,6 +13,7 @@ from pathlib import Path
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -20,8 +21,10 @@ import time
 from xml.sax.saxutils import escape
 from Xlib import X, display, error
 
+import appearance
 import dpi
 import saved_registry
+import wallet
 from wineenv import SHELLS, environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +75,10 @@ class Session:
         # Opt-in: the proxy snaps windows to half of the screen (Win+arrows, dragging to an edge).
         if config.get('window_snap'):
             self.env['WIN4WINE_WINDOW_SNAP'] = '1'
+        # Browsers and Electron applications keep their keys in the user's
+        # wallet, chosen from the desktop's name (session/wallet.py).
+        self.wallet = wallet.detect(config.get('wallet', 'auto'))
+        self.env.update(wallet.environment(self.wallet, self.env))
         self.input_method = config.get('input_method')
         if self.input_method not in (None, 'fcitx5'):
             raise SystemExit('Unsupported input_method')
@@ -97,6 +104,35 @@ class Session:
             self.env.update(XCURSOR_THEME=self.cursor_theme)
         else:
             self.cursor_theme = None
+        # Qt applications draw their widgets with the shell's current visual
+        # style and system colours (qt-style/, built by scripts/setup.sh); it
+        # reads them from this prefix and follows Display Properties' changes.
+        styles = ROOT / '.local/qt-style'
+        if config.get('qt_style', True) and (styles / 'styles/libwin4wine-xp.so').is_file():
+            self.env['QT_PLUGIN_PATH'] = os.pathsep.join(
+                filter(None, (str(styles), self.env.get('QT_PLUGIN_PATH'))))
+            # Qt Quick takes the same name for its controls' style (qml/Win4WineXP).
+            self.env['QML_IMPORT_PATH'] = os.pathsep.join(
+                filter(None, (str(styles / 'qml'), self.env.get('QML_IMPORT_PATH'))))
+            self.env.update(QT_STYLE_OVERRIDE='Win4WineXP', WIN4WINE_PREFIX=str(self.prefix))
+        # GTK 3 applications take a theme made from the same style
+        # (qt-style/tools/gtktheme.cpp), which XSETTINGS names (bridge-wm owns
+        # it) so that they follow its changes; the Wayland session names it
+        # in GTK_THEME, read when an application starts. XP's scroll bars are
+        # always shown.
+        self.gtk_theme = ROOT / '.local/qt-style/bin/xpstyle-gtk'
+        if config.get('gtk_style', True) and self.gtk_theme.is_file():
+            self.env.update(WIN4WINE_PREFIX=str(self.prefix), GTK_OVERLAY_SCROLLING='0')
+            # Its GTK module lays XP's parts over the applications' own CSS
+            # (qt-style/gtk-module/), which a theme cannot override.
+            modules = ROOT / '.local/qt-style/gtk-3.0'
+            if (modules / 'modules/libwin4wine-xp-gtk.so').is_file():
+                self.env['GTK_PATH'] = os.pathsep.join(filter(None, (str(modules), self.env.get('GTK_PATH'))))
+                self.env['GTK_MODULES'] = ':'.join(filter(None, (self.env.get('GTK_MODULES'), 'win4wine-xp-gtk')))
+            if self.compositor:
+                self.env['GTK_THEME'] = 'Win4Wine-XP'
+        else:
+            self.gtk_theme = None
         # Linux applications take the XP shell's UI font: MS UI Gothic on
         # Japanese XP, Tahoma on English XP (the prefix's "language").
         self.linux_font = config.get('linux_font', 'Tahoma' if self.language() == 'en' else 'MS UI Gothic')
@@ -118,6 +154,8 @@ class Session:
         self.processes = []
         # XP's Welcome screen covers the shell's start and the session's end (greeter/xp-splash.py).
         self.welcome_screen = config.get('welcome_screen', True) and self.shell['welcome']
+        # XP's Windows Welcome (intro video, music, first pages) before the prefix's first shell.
+        self.oobe = config.get('oobe', True) and self.shell['welcome']
         self.welcome = None
         self.powering_off = False
         self.wine_envs = [self.env]
@@ -140,6 +178,9 @@ class Session:
         self.tray_window = None
         if self.linux_font:
             self.env['FONTCONFIG_FILE'] = str(self.font_config())
+            if not self.cleartype:
+                # Whole-pixel text hinted as Windows hints it (font_config)
+                self.env['FREETYPE_PROPERTIES'] = 'truetype:interpreter-version=35'
         self.status('starting')
 
     def language(self):
@@ -161,7 +202,12 @@ class Session:
         The prefix's Fonts directory is added so that the XP shell's own
         fonts, such as MS UI Gothic, serve Linux applications too. The
         system configuration, and through it the user's, still applies.
-        With XP's ClearType, fonts are drawn in its RGB subpixel order."""
+        With XP's ClearType, fonts are drawn in its RGB subpixel order.
+        Without ClearType, text is smoothed as XP's Standard smoothing does
+        (grayscale), except XP's UI fonts up to 16 px, which XP draws in whole
+        pixels (Tahoma's gasp table smooths only above that): Tahoma and MS UI
+        Gothic, hinted by the fonts with FreeType's classic TrueType
+        interpreter (the session's environment)."""
         directory = self.state / 'fontconfig'
         directory.mkdir(mode=0o700, exist_ok=True)
         family = escape(self.linux_font)
@@ -177,7 +223,16 @@ class Session:
                    f'<double>{self.dpi}</double></edit></match>\n')
                 + ('  <match target="font"><edit name="rgba" mode="assign"><const>rgb</const></edit>'
                    '<edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match>\n'
-                   if self.cleartype else '')
+                   if self.cleartype else
+                   '  <match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit>'
+                   '<edit name="rgba" mode="assign"><const>none</const></edit></match>\n'
+                   + ''.join(f'  <match target="font"><test name="family"><string>{name}</string></test>'
+                             '<test name="pixelsize" compare="less_eq"><double>16</double></test>'
+                             '<edit name="antialias" mode="assign"><bool>false</bool></edit>'
+                             '<edit name="hinting" mode="assign"><bool>true</bool></edit>'
+                             '<edit name="hintstyle" mode="assign"><const>hintfull</const></edit>'
+                             '<edit name="autohint" mode="assign"><bool>false</bool></edit></match>\n'
+                             for name in ('Tahoma', 'MS UI Gothic', 'MS Shell Dlg', 'MS Shell Dlg 2')))
                 + '</fontconfig>\n')
         target = directory / 'fonts.conf'
         tmp = directory / 'fonts.tmp'
@@ -205,6 +260,20 @@ class Session:
         # (on-the-spot); fcitx5 offers XIM clients only over-the-spot otherwise,
         # which shows it in the candidate window. Wine gives the caret's place.
         self.fcitx_option(base / 'conf/xim.conf', None, {'UseOnTheSpot': 'True'})
+        # Without a profile fcitx5 makes one with the us layout, and keeps it in
+        # the other desktops too (its autostart entry): the system's layout and Mozc.
+        profile = base / 'profile'
+        if not profile.exists():
+            import keyboard
+            system = keyboard.system()
+            layout = '-'.join(part for part in (system['layout'].split(',')[0],
+                                                system['variant'].split(',')[0]) if part)
+            profile.parent.mkdir(parents=True, exist_ok=True)
+            temporary = profile.with_name('profile.win4wine')
+            temporary.write_text(f'[Groups/0]\nName=Default\nDefault Layout={layout}\nDefaultIM=mozc\n\n'
+                                 f'[Groups/0/Items/0]\nName=keyboard-{layout}\nLayout=\n\n'
+                                 f'[Groups/0/Items/1]\nName=mozc\nLayout=\n\n[GroupOrder]\n0=Default\n')
+            temporary.replace(profile)
 
     @staticmethod
     def fcitx_option(config, section, wanted):
@@ -412,6 +481,63 @@ class Session:
                                 '/ve', '/t', 'REG_EXPAND_SZ', '/d', sound, '/f'],
                                env=self.env, stdout=log, stderr=subprocess.STDOUT, timeout=60, check=False)
 
+    def tray_defaults(self):
+        """XP's notification area hides the icons that stay inactive (the
+        Hide inactive icons setting); the volume, network and power icons
+        of xptray, which the system's own icons are on XP, are set to
+        Always show once, as a user does in Customize Notifications. The
+        shell reads its icons' settings (IconStreams, a record per icon it
+        has shown: the program, the icon's ID, the setting) when it starts;
+        they are there from the second session on."""
+        key = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\TrayNotify'
+        marker = (r'HKCU\Software\win4wine', 'TrayDefaults')
+        if self.shell['marker'] != 'xp-shell.json':
+            return
+        if (not saved_registry.server_running(self.prefix)
+                and saved_registry.user_value(self.prefix, marker[0][5:], marker[1]) == '1'):
+            return
+        try:
+            query = subprocess.run([self.wine, 'reg', 'query', key, '/v', 'IconStreams'], env=self.env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False, text=True)
+            done = subprocess.run([self.wine, 'reg', 'query', marker[0], '/v', marker[1]], env=self.env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=False, text=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if done.returncode == 0 and 'REG_SZ' in done.stdout and done.stdout.split('REG_SZ', 1)[1].strip() == '1':
+            return
+        stream = next((line.split('REG_BINARY', 1)[1].strip() for line in query.stdout.splitlines()
+                       if 'REG_BINARY' in line), '') if query.returncode == 0 else ''
+        try:
+            data = bytearray.fromhex(stream)
+        except ValueError:
+            return
+        # A 20-byte header (its size, ..., the count of records, their offset),
+        # then records of 1084 bytes: the program's path (260 UTF-16 characters),
+        # the icon's ID, the setting (0 hide when inactive, 1 always hide, 2 always show).
+        if len(data) < 20:
+            return
+        header, count, offset = struct.unpack_from('<I8xII', data)
+        size = 1084
+        if header != 20 or offset != 20 or len(data) < offset + count * size:
+            return
+        found = False
+        for i in range(count):
+            at = offset + i * size
+            path = data[at:at + 520].decode('utf-16-le', 'replace').split('\0', 1)[0]
+            uid, = struct.unpack_from('<I', data, at + 520)
+            if path.lower().endswith('\\xptray.exe') and uid in (1, 2, 3):  # power, network, volume
+                struct.pack_into('<I', data, at + 524, 2)
+                found = True
+        if not found:
+            return
+        try:
+            for args in (['add', key, '/v', 'IconStreams', '/t', 'REG_BINARY', '/d', data.hex().upper(), '/f'],
+                         ['add', marker[0], '/v', marker[1], '/d', '1', '/f']):
+                subprocess.run([self.wine, 'reg', *args], env=self.env, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=60, check=True)
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            pass
+
     def sound_scheme_repaired(self):
         """Whether the saved registry has what repair_sound_scheme writes, as
         it has after the first session: then no Wine program runs for it."""
@@ -477,6 +603,22 @@ class Session:
             except error.XError:
                 pass
             time.sleep(0.05)
+
+    def windows_welcome(self):
+        """XP's Windows Welcome, as XP showed it once after setup (greeter/xp-oobe.py).
+
+        It runs until its Finish, which writes the prefix's oobe.json; until
+        then each session shows it again. Without its files it ends at once."""
+        if not self.oobe or (self.prefix / 'oobe.json').exists():
+            return
+        if self.cursor_theme and shutil.which('xsetroot') and not self.compositor:
+            subprocess.run(['xsetroot', '-cursor_name', 'left_ptr'], env=self.env, check=False)
+        self.status('oobe')
+        oobe = self.spawn([sys.executable, str(ROOT / 'greeter/xp-oobe.py'), str(self.prefix),
+                           '--wine', self.wine], 'oobe')
+        while not self.stopping and oobe.poll() is None:
+            self.wait((oobe,))
+        self.halt(oobe)
 
     def tell_welcome(self, word):
         """Change the Welcome screen's line: 'applying' and 'welcome' while
@@ -613,6 +755,9 @@ class Session:
             # win4wine's labwc manages the windows; it ends the session when this exits.
             wm = None
             self.configure_outputs()
+        self.windows_welcome()
+        if self.stopping:
+            return
         self.show_welcome('logon')
         if not self.compositor:
             settings = dpi.xsettings(self.dpi, self.cursor_theme, self.ui_font)
@@ -628,6 +773,14 @@ class Session:
         # Linux tray icons (StatusNotifierItem) reach the XP notification
         # area through the proxy; the input method shows its mode there.
         self.spawn(['python3', str(ROOT / 'bridge-wm/tray.py'), '--ipc', str(self.ipc)], 'tray')
+        # The GTK 3 theme, after the WM has claimed XSETTINGS
+        if self.gtk_theme:
+            self.spawn([str(self.gtk_theme), '--watch'], 'gtk-theme')
+            # No dark preference, or Firefox leaves the theme (session/appearance.py)
+            appearance.light(self.state, self.env)
+        # Before any application asks the wallet for its keys
+        with (self.state / 'wallet.log').open('ab') as log:
+            wallet.unlock(self.wallet, self.env, log)
         im = self.start_input_method()
         im_restarts = deque()
         # Install only the shell family in this dedicated prefix. Runtime overrides select them.
@@ -644,6 +797,7 @@ class Session:
         self.keyboard()
         self.tell_welcome('progress 30 Sounds')
         self.repair_sound_scheme()
+        self.tray_defaults()
         self.tell_welcome('progress 70 Start menu')
         self.start_user_picture()
         if self.linux_menu:
@@ -677,6 +831,10 @@ class Session:
                     self.hide_welcome()
                     if attempt == 1:
                         self.play_sound(self.logon_sound())
+                        # Linux applications' "show in folder" opens the shell's
+                        # explorer, once there is a shell to hand folders to.
+                        self.spawn([sys.executable, str(ROOT / 'session/filemanager.py'), self.wine,
+                                    self.shell['command']], 'file-manager')
                 if ready and not has_tray:
                     break
                 if not ready and (time.monotonic()-started > self.readiness_timeout or shell.poll() is not None):
@@ -799,6 +957,8 @@ class Session:
                 # system ends the session, as Windows shows it until the power goes off.
                 select.select([self.wakeup[0]], [], [], POWER_OFF_WAIT)
         finally:
+            if self.gtk_theme:
+                appearance.restore(self.state, self.env)
             # The log-off screen leaves its last image as the root window's background.
             self.hide_welcome()
             for f in self.logs:

@@ -674,6 +674,23 @@ static void client_app_id(struct client *c)
     c->app_id = atom;
 }
 
+/* The owner of an owned Linux window (owners.tsv, written beside
+ * windows.tsv): its frame is owned by the owner's, as a Win32 dialog is, so it
+ * has no taskbar button and stays above it. 0 for none. */
+static unsigned long owner_of(unsigned long xid)
+{
+    WCHAR path[MAX_PATH + 32];
+    char line[256];
+    unsigned long owned, owner, found = 0;
+    FILE *file;
+    swprintf(path, MAX_PATH + 32, L"%ls\\owners.tsv", directory);
+    if (!(file = _wfopen(path, L"rb"))) return 0;
+    while (!found && fgets(line, sizeof(line), file))
+        if (sscanf(line, "%lx\t%lx", &owned, &owner) == 2 && owned == xid) found = owner;
+    fclose(file);
+    return found;
+}
+
 static void snapshot(void)
 {
     WCHAR path[MAX_PATH + 32];
@@ -699,9 +716,14 @@ static void snapshot(void)
         if (!c) continue;
         if (!c->xid)
         {
+            unsigned long owner = owner_of(xid);
+            struct client *parent = owner ? find_client(owner) : NULL;
+            /* An owned window waits for its owner's frame (the next snapshot). */
+            if (owner && (!parent || !parent->hwnd)) continue;
             c->xid = xid;
-            c->hwnd = CreateWindowExW(WS_EX_APPWINDOW, L"Win4WineProxy", title,
-                WS_OVERLAPPEDWINDOW, -32000, -32000, 1, 1, NULL, NULL, GetModuleHandleW(NULL), (void *)(uintptr_t)xid);
+            c->hwnd = CreateWindowExW(parent ? 0 : WS_EX_APPWINDOW, L"Win4WineProxy", title,
+                WS_OVERLAPPEDWINDOW, -32000, -32000, 1, 1, parent ? parent->hwnd : NULL, NULL,
+                GetModuleHandleW(NULL), (void *)(uintptr_t)xid);
             if (!c->hwnd) { c->xid = 0; continue; }
             client_app_id(c);
             /* before the taskbar sees the window: Windows 7's keeps the icon of an

@@ -9,33 +9,37 @@ Wine before: the function was a stub returning FALSE, so loading Windows
 Classic.theme failed ("Call failed") and the sample stayed black.
 Change: remember the caller's colours and brushes in the process; GetSysColor
 and GetSysColorBrush return them until a call with no arrays restores the
-system's.
+system's. As XP (ntuser/client/random.c), at most COLOR_MAX colours. Other
+threads keep reading them, so they are kept in fixed arrays whose count is
+published last, never freed under a reader.
 Scope: only processes that call SetSysColorsTemp.
 ---
- dlls/user32/sysparams.c | 39 ++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 38 insertions(+), 1 deletion(-)
+ dlls/user32/sysparams.c | 27 ++++++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/user32/sysparams.c b/dlls/user32/sysparams.c
-index a7ce2e5..0bef83c 100644
+index a7ce2e5..1d3720a 100644
 --- a/dlls/user32/sysparams.c
 +++ b/dlls/user32/sysparams.c
-@@ -439,8 +439,15 @@ BOOL WINAPI SetDoubleClickTime( UINT interval )
+@@ -439,8 +439,17 @@ BOOL WINAPI SetDoubleClickTime( UINT interval )
  /*************************************************************************
   *		GetSysColor (USER32.@)
   */
 +/* SetSysColorsTemp's colours and brushes for this process (XP's Display
-+ * Properties draw their samples with them), or none. */
-+static COLORREF *temp_colors;
-+static HBRUSH *temp_brushes;
-+static DWORD_PTR temp_count;
++ * Properties draw their samples with them), or none. Other threads read
++ * them while they are set or restored: the arrays stay, only the count is
++ * published. */
++static COLORREF temp_colors[COLOR_MENUBAR + 1];
++static HBRUSH temp_brushes[COLOR_MENUBAR + 1];
++static LONG temp_count;
 +
  COLORREF WINAPI DECLSPEC_HOTPATCH GetSysColor( INT index )
  {
-+    if (temp_colors && index >= 0 && index < temp_count) return temp_colors[index];
++    if (index >= 0 && index < ReadAcquire( &temp_count )) return temp_colors[index];
      return NtUserGetSysColor( index );
  }
  
-@@ -450,7 +457,36 @@ COLORREF WINAPI DECLSPEC_HOTPATCH GetSysColor( INT index )
+@@ -450,7 +459,22 @@ COLORREF WINAPI DECLSPEC_HOTPATCH GetSysColor( INT index )
   */
  DWORD_PTR WINAPI SetSysColorsTemp( const COLORREF *pPens, const HBRUSH *pBrushes, DWORD_PTR n)
  {
@@ -43,41 +47,27 @@ index a7ce2e5..0bef83c 100644
 +    TRACE( "(%p,%p,%Iu)\n", pPens, pBrushes, n );
 +    if (pPens && pBrushes)  /* set: the caller's colours and brushes until restored */
 +    {
-+        COLORREF *colors;
-+        HBRUSH *brushes;
-+        if (!n) return FALSE;
-+        if (!(colors = HeapAlloc( GetProcessHeap(), 0, n * sizeof(*colors) ))) return FALSE;
-+        if (!(brushes = HeapAlloc( GetProcessHeap(), 0, n * sizeof(*brushes) )))
-+        {
-+            HeapFree( GetProcessHeap(), 0, colors );
-+            return FALSE;
-+        }
-+        memcpy( colors, pPens, n * sizeof(*colors) );
-+        memcpy( brushes, pBrushes, n * sizeof(*brushes) );
-+        HeapFree( GetProcessHeap(), 0, temp_colors );
-+        HeapFree( GetProcessHeap(), 0, temp_brushes );
-+        temp_colors = colors;
-+        temp_brushes = brushes;
-+        temp_count = n;
-+        return (DWORD_PTR)colors;
++        /* XP refuses more than its COLOR_MAX (COLOR_MENUBAR + 1) colours */
++        if (!n || n > ARRAY_SIZE(temp_colors)) return FALSE;
++        WriteRelease( &temp_count, 0 );
++        memcpy( temp_colors, pPens, n * sizeof(*temp_colors) );
++        memcpy( temp_brushes, pBrushes, n * sizeof(*temp_brushes) );
++        WriteRelease( &temp_count, n );
++        return (DWORD_PTR)temp_colors;
 +    }
 +    if (!pPens && !pBrushes)  /* restore the system's */
 +    {
-+        HeapFree( GetProcessHeap(), 0, temp_colors );
-+        HeapFree( GetProcessHeap(), 0, temp_brushes );
-+        temp_colors = NULL;
-+        temp_brushes = NULL;
-+        temp_count = 0;
++        WriteRelease( &temp_count, 0 );
 +        return TRUE;
 +    }
      return FALSE;
  }
  
-@@ -460,6 +496,7 @@ DWORD_PTR WINAPI SetSysColorsTemp( const COLORREF *pPens, const HBRUSH *pBrushes
+@@ -460,6 +484,7 @@ DWORD_PTR WINAPI SetSysColorsTemp( const COLORREF *pPens, const HBRUSH *pBrushes
   */
  HBRUSH WINAPI DECLSPEC_HOTPATCH GetSysColorBrush( INT index )
  {
-+    if (temp_brushes && index >= 0 && index < temp_count && temp_brushes[index]) return temp_brushes[index];
++    if (index >= 0 && index < ReadAcquire( &temp_count ) && temp_brushes[index]) return temp_brushes[index];
      return NtUserGetSysColorBrush( index );
  }
  

@@ -27,6 +27,8 @@ FILES = {
     # Icons and dialog templates of the notification area's network, battery
     # and volume icons (xp-explorer/helpers/xptray.c).
     **dict.fromkeys(('stobject.dll', 'powercfg.cpl', 'batmeter.dll', 'netshell.dll', 'sndvol32.exe', 'xpsp2res.dll'), 'tray'),
+    # XP's keyboard icon, for the session's Keyboard Shortcuts item (bridge-wm/shortcuts.c).
+    'main.cpl': 'keyboard',
     # Internet Explorer 6 for the desktop's Internet icon, installed beside its
     # iexplore.exe (prefix/extras.py), never over Wine's system DLLs.
     **dict.fromkeys(('iexplore.exe', 'mshtml.dll', 'mshtmled.dll', 'mshtmler.dll', 'mshtml.tlb', 'jscript.dll',
@@ -143,6 +145,15 @@ FILES = {
     'blue_ss.dll': 'themes/Luna/Shell/NormalColor',
     'home_ss.dll': 'themes/Luna/Shell/Homestead',
     'metal_ss.dll': 'themes/Luna/Shell/Metallic',
+    # Windows Welcome (system32\oobe) at the session's first start (greeter/xp-oobe.py):
+    # its intro video and music, the images of its screens, and the pages and
+    # scripts its strings and styles are read from (no code of it runs).
+    **dict.fromkeys(('intro.wmv', 'title.wma', 'newmark1.jpg', 'newmark8.jpg', 'newtop1.jpg', 'newtop8.jpg',
+                     'newbtm1.jpg', 'newbtm8.jpg', 'mslogo.jpg', 'greenshd.gif', 'redshd.gif',
+                     'backup.jpg', 'backover.jpg', 'backdown.jpg', 'backoff.jpg',
+                     'nextup.jpg', 'nextover.jpg', 'nextdown.jpg', 'nextoff.jpg',
+                     'msobshel.htm', 'oobeutil.js', 'oobestyl.css',
+                     'welcome.htm', 'autoupdt.htm', 'ident2.htm', 'fini.htm'), 'oobe'),
 }
 
 # English XP's own fonts where Japanese XP uses MS UI Gothic: its Luna theme's
@@ -159,7 +170,7 @@ RENAMED = {'classic.the': 'Windows Classic.theme'}
 # Groups a later version added; setup.sh adds them to an earlier extraction (--only).
 ADDED_GROUPS = ('cpl', 'tray', 'ie', 'wmp', 'inf', 'shell', 'media', 'duser', 'intl', 'themes', 'srchasst',
                 'wallpaper', 'wsc', 'programs', 'tour', 'accounts', 'netcon', 'appwiz', 'security', 'helpctr',
-                'help', 'apps', 'filetypes', 'printers', 'sysdm')
+                'help', 'apps', 'filetypes', 'printers', 'sysdm', 'oobe', 'keyboard')
 
 
 def setup_sources(paths):
@@ -350,7 +361,8 @@ def missing_groups(output):
               'accounts': 'accounts/nusrmgr.cpl', 'netcon': 'netcon/wzcdlg.dll', 'appwiz': 'appwiz/appwiz.cpl',
               'security': 'security/wuaucpl.cpl', 'helpctr': 'helpctr/helpctr.exe', 'help': 'help',
               'apps': 'apps/programs/Messenger/msmsgs.exe', 'filetypes': 'filetypes/hivecls.inf',
-              'printers': 'printers/printui.dll', 'sysdm': 'sysdm/sysdm.cpl'}
+              'printers': 'printers/printui.dll', 'sysdm': 'sysdm/sysdm.cpl', 'oobe': 'oobe/msobshel.htm',
+              'keyboard': 'keyboard/main.cpl'}
     return [group for group in ADDED_GROUPS if not has(checks[group])]
 
 
@@ -384,7 +396,9 @@ def extract(source, output, only=None):
                 RENAMED.setdefault(sources[name], name)
                 return copy_one(sources[name], group)
             # System32 controls v5 must not accidentally be replaced with SxS v6.
-            matches.sort(key=lambda p: (any(s.lower() in ('winsxs', 'asms') for s in p.parts), len(p.parts)))
+            # In a Windows directory, Windows Welcome's pages are the ones under oobe.
+            matches.sort(key=lambda p: (group == 'oobe' and 'oobe' not in (s.lower() for s in p.parts),
+                                        any(s.lower() in ('winsxs', 'asms') for s in p.parts), len(p.parts)))
             if not matches:
                 return
             original = matches[0]

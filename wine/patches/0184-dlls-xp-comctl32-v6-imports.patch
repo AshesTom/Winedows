@@ -1,0 +1,314 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] user32, gdi32, ntdll: the imports of XP's Common Controls 6
+
+Purpose: XP's comctl32 6 standard controls (with patch 0170's GWLP_WOWWORDS)
+run without calling unimplemented functions.
+XP behavior: they import user32's DrawFrame, MBToWCSEx and WCSToMBEx, gdi32's
+QueryFontAssocStatus (0 without font association) and SetLayoutWidth, and
+ntdll's RtlRunEncodeUnicodeString and RtlRunDecodeUnicodeString (a password
+edit keeps its text run-encoded).
+Wine before: stubs or missing exports; an Edit aborted in
+QueryFontAssocStatus, a framed Static in DrawFrame.
+Change: implement them.
+Scope: all processes.
+---
+ dlls/gdi32/dc.c         | 12 ++++++++
+ dlls/gdi32/gdi32.spec   |  4 +--
+ dlls/gdi32/text.c       | 12 ++++++++
+ dlls/ntdll/ntdll.spec   |  4 +--
+ dlls/ntdll/rtlstr.c     | 40 ++++++++++++++++++++++++++
+ dlls/user32/lstr.c      | 74 +++++++++++++++++++++++++++++++++++++++++++++++++
+ dlls/user32/uitools.c   | 26 +++++++++++++++++
+ dlls/user32/user32.spec |  6 ++--
+ 8 files changed, 171 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/gdi32/dc.c b/dlls/gdi32/dc.c
+index adfcd51..ebb6586 100644
+--- a/dlls/gdi32/dc.c
++++ b/dlls/gdi32/dc.c
+@@ -993,6 +993,18 @@ DWORD WINAPI GetLayout( HDC hdc )
+     return dc_attr ? dc_attr->layout : GDI_ERROR;
+ }
+ 
++/***********************************************************************
++ *           SetLayoutWidth    (GDI32.@)
++ *
++ * SetLayout with the width that mirroring flips around (-1: the device's).
++ */
++DWORD WINAPI SetLayoutWidth( HDC hdc, LONG width, DWORD layout )
++{
++    TRACE( "hdc %p width %ld layout %08lx\n", hdc, width, layout );
++    if (is_meta_dc( hdc )) return GDI_ERROR;
++    return NtGdiSetLayout( hdc, width, layout );
++}
++
+ /***********************************************************************
+  *           SetLayout    (GDI32.@)
+  */
+diff --git a/dlls/gdi32/gdi32.spec b/dlls/gdi32/gdi32.spec
+index 35fc828..a0eed5c 100644
+--- a/dlls/gdi32/gdi32.spec
++++ b/dlls/gdi32/gdi32.spec
+@@ -512,7 +512,7 @@
+ @ stdcall PolylineTo(long ptr long)
+ @ stdcall PtInRegion(long long long) NtGdiPtInRegion
+ @ stdcall PtVisible(long long long) NtGdiPtVisible
+-# @ stub QueryFontAssocStatus
++@ stdcall QueryFontAssocStatus()
+ @ stdcall RealizePalette(long)
+ @ stdcall RectInRegion(long ptr) NtGdiRectInRegion
+ @ stdcall RectVisible(long ptr) NtGdiRectVisible
+@@ -604,7 +604,7 @@
+ @ stdcall SetICMProfileA(long str)
+ @ stdcall SetICMProfileW(long wstr)
+ @ stdcall SetLayout(long long)
+-# @ stub SetLayoutWidth
++@ stdcall SetLayoutWidth(long long long)
+ @ stdcall SetMagicColors(ptr long long) NtGdiSetMagicColors
+ @ stdcall SetMapMode(long long)
+ @ stdcall SetMapperFlags(long long)
+diff --git a/dlls/gdi32/text.c b/dlls/gdi32/text.c
+index b0a3e98..ba5e24e 100644
+--- a/dlls/gdi32/text.c
++++ b/dlls/gdi32/text.c
+@@ -2845,3 +2845,15 @@ found:
+     *cs = charset_info[i];
+     return TRUE;
+ }
++
++
++/***********************************************************************
++ *           QueryFontAssocStatus    (GDI32.@)
++ *
++ * The charsets that font association covers ("FontAssoc\Associated
++ * Charset", for Chinese and Korean); Wine has none.
++ */
++UINT WINAPI QueryFontAssocStatus(void)
++{
++    return 0;
++}
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index c0f345a..aa22d9b 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -993,8 +993,8 @@
+ @ stdcall RtlRestoreLastWin32Error(long) RtlSetLastWin32Error
+ @ stdcall RtlRetrieveNtUserPfn(ptr ptr ptr)
+ @ stub RtlRevertMemoryStream
+-@ stub RtlRunDecodeUnicodeString
+-@ stub RtlRunEncodeUnicodeString
++@ stdcall RtlRunDecodeUnicodeString(long ptr)
++@ stdcall RtlRunEncodeUnicodeString(ptr ptr)
+ @ stdcall RtlRunOnceBeginInitialize(ptr long ptr)
+ @ stdcall RtlRunOnceComplete(ptr long ptr)
+ @ stdcall RtlRunOnceExecuteOnce(ptr ptr ptr ptr)
+diff --git a/dlls/ntdll/rtlstr.c b/dlls/ntdll/rtlstr.c
+index f494d97..92105b8 100644
+--- a/dlls/ntdll/rtlstr.c
++++ b/dlls/ntdll/rtlstr.c
+@@ -2548,3 +2548,43 @@ WCHAR * WINAPI RtlIpv6AddressToStringW(const IN6_ADDR *address, WCHAR *str)
+         return str;
+     return str + size - 1;
+ }
++
++
++/******************************************************************************
++ *	RtlRunEncodeUnicodeString	(NTDLL.@)
++ *
++ * Make a string unreadable in memory (XP's edit controls keep passwords so):
++ * each byte is XORed with SEED and the byte encoded before it. A zero SEED
++ * is replaced by one taken from the time. RtlRunDecodeUnicodeString with the
++ * same seed restores the string.
++ */
++void WINAPI RtlRunEncodeUnicodeString( UCHAR *seed, UNICODE_STRING *str )
++{
++    UCHAR *bytes = (UCHAR *)str->Buffer;
++    unsigned int i;
++
++    if (!*seed)
++    {
++        LARGE_INTEGER now;
++        NtQuerySystemTime( &now );
++        *seed = (UCHAR)(now.QuadPart >> 8) | (UCHAR)now.QuadPart;
++        if (!*seed) *seed = 1;
++    }
++    if (!str->Length) return;
++    bytes[0] ^= *seed | 0x43;
++    for (i = 1; i < str->Length; i++) bytes[i] ^= bytes[i - 1] ^ *seed;
++}
++
++
++/******************************************************************************
++ *	RtlRunDecodeUnicodeString	(NTDLL.@)
++ */
++void WINAPI RtlRunDecodeUnicodeString( UCHAR seed, UNICODE_STRING *str )
++{
++    UCHAR *bytes = (UCHAR *)str->Buffer;
++    unsigned int i;
++
++    if (!str->Length) return;
++    for (i = str->Length - 1; i > 0; i--) bytes[i] ^= bytes[i - 1] ^ seed;
++    bytes[0] ^= seed | 0x43;
++}
+diff --git a/dlls/user32/lstr.c b/dlls/user32/lstr.c
+index a5a906a..f0e1387 100644
+--- a/dlls/user32/lstr.c
++++ b/dlls/user32/lstr.c
+@@ -26,11 +26,17 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
+ #include "windef.h"
+ #include "winbase.h"
+ #include "winnls.h"
+ #include "winuser.h"
+ #include "winerror.h"
++#include "winternl.h"
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(string);
+ 
+ 
+ /***********************************************************************
+@@ -153,3 +159,71 @@ BOOL WINAPI OemToCharW( LPCSTR s, LPWSTR d )
+     if (!s || !d) return FALSE;
+     return OemToCharBuffW( s, d, strlen( s ) + 1 );
+ }
++
++
++/* Code page conversions of the private exports below: a string of -1
++ * characters is NUL-terminated (counted with its NUL; -2 for the ANSI
++ * string of MBToWCSEx counts it without), a destination of -1 characters
++ * is allocated from the process heap to fit, and the result is the number
++ * of characters converted, as many as fit (0 on failure, which frees what
++ * was allocated). */
++static BOOL is_ansi_code_page( WORD code_page )
++{
++    return code_page == CP_ACP || code_page == GetACP();
++}
++
++/***********************************************************************
++ *           MBToWCSEx   (USER32.@)
++ */
++int WINAPI MBToWCSEx( WORD code_page, const char *src, int src_len, WCHAR **dst, int dst_len, BOOL alloc )
++{
++    ULONG bytes;
++    int ret;
++
++    TRACE( "%u %s %d %p %d %d\n", code_page, debugstr_an( src, src_len ), src_len, dst, dst_len, alloc );
++    if (!src_len || !dst_len || !src || src_len < -2 || dst_len < -1) return 0;
++    if (src_len < 0 && !(src_len = strlen( src ) + 2 + src_len)) return 0;
++    if (dst_len == -1)
++    {
++        if (!alloc) return 0;
++        dst_len = src_len;
++    }
++    if (alloc && !(*dst = HeapAlloc( GetProcessHeap(), 0, dst_len * sizeof(WCHAR) ))) return 0;
++
++    if (is_ansi_code_page( code_page ))
++        ret = RtlMultiByteToUnicodeN( *dst, dst_len * sizeof(WCHAR), &bytes, src, src_len ) ? 0 : bytes / sizeof(WCHAR);
++    else
++        ret = MultiByteToWideChar( code_page, 0, src, src_len, *dst, dst_len );
++    if (!ret && alloc) HeapFree( GetProcessHeap(), 0, *dst );
++    return ret;
++}
++
++/***********************************************************************
++ *           WCSToMBEx   (USER32.@)
++ */
++int WINAPI WCSToMBEx( WORD code_page, const WCHAR *src, int src_len, char **dst, int dst_len, BOOL alloc )
++{
++    NTSTATUS status;
++    ULONG bytes;
++    int ret;
++
++    TRACE( "%u %s %d %p %d %d\n", code_page, debugstr_wn( src, src_len ), src_len, dst, dst_len, alloc );
++    if (!src_len || !dst_len || !src || src_len < -1 || dst_len < -1) return 0;
++    if (src_len == -1) src_len = lstrlenW( src ) + 1;
++    if (dst_len == -1)
++    {
++        if (!alloc) return 0;
++        dst_len = src_len * 2;  /* a double-byte character set's worst case */
++    }
++    if (alloc && !(*dst = HeapAlloc( GetProcessHeap(), 0, dst_len ))) return 0;
++
++    if (is_ansi_code_page( code_page ))
++    {
++        /* a destination too small keeps what fits */
++        status = RtlUnicodeToMultiByteN( *dst, dst_len, &bytes, src, src_len * sizeof(WCHAR) );
++        ret = (!status || status == STATUS_BUFFER_OVERFLOW) ? bytes : 0;
++    }
++    else ret = WideCharToMultiByte( code_page, 0, src, src_len, *dst, dst_len, NULL, NULL );
++    if (!ret && alloc) HeapFree( GetProcessHeap(), 0, *dst );
++    return ret;
++}
+diff --git a/dlls/user32/uitools.c b/dlls/user32/uitools.c
+index 6efe783..826b146 100644
+--- a/dlls/user32/uitools.c
++++ b/dlls/user32/uitools.c
+@@ -1235,6 +1235,32 @@ static BOOL UITOOLS95_DrawFrameMenu(HDC dc, LPRECT r, UINT uFlags)
+ }
+ 
+ 
++/**********************************************************************
++ *          DrawFrame  (USER32.@)
++ *
++ * Private export that XP's common controls 6 call: a frame WIDTH borders
++ * wide along the inside of RECT. The low two bits of FLAGS are unused, bit 2
++ * inverts instead of painting, and the rest is a system colour index times
++ * 8, or 31 * 8 for the 50% grey pattern.
++ */
++BOOL WINAPI DrawFrame( HDC hdc, RECT *rect, int width, int flags )
++{
++    int cx = GetSystemMetrics( SM_CXBORDER ) * width, cy = GetSystemMetrics( SM_CYBORDER ) * width;
++    int w = rect->right - rect->left - cx, h = rect->bottom - rect->top - cy;
++    DWORD rop = (flags & 4) ? PATINVERT : PATCOPY;
++    int color = (flags & ~7) >> 3;
++    HBRUSH brush = color == COLOR_MENUBAR + 1 ? SYSCOLOR_Get55AABrush() : GetSysColorBrush( color );
++    HBRUSH old = SelectObject( hdc, brush );
++
++    PatBlt( hdc, rect->left, rect->top, cx, h, rop );
++    PatBlt( hdc, rect->left + cx, rect->top, w, cy, rop );
++    PatBlt( hdc, rect->left, rect->top + h, w, cy, rop );
++    PatBlt( hdc, rect->left + w, rect->top + cy, cx, h, rop );
++    SelectObject( hdc, old );
++    return TRUE;
++}
++
++
+ /**********************************************************************
+  *          DrawFrameControl  (USER32.@)
+  */
+diff --git a/dlls/user32/user32.spec b/dlls/user32/user32.spec
+index 19d9646..a45843d 100644
+--- a/dlls/user32/user32.spec
++++ b/dlls/user32/user32.spec
+@@ -430,7 +430,7 @@
+ @ stdcall DrawCaptionTempW(long long ptr long long wstr long) NtUserDrawCaptionTemp
+ @ stdcall DrawEdge(long ptr long long)
+ @ stdcall DrawFocusRect(long ptr)
+-@ stub DrawFrame
++@ stdcall DrawFrame(long ptr long long)
+ @ stdcall DrawFrameControl(long ptr long long)
+ @ stdcall DrawIcon(long long long long)
+ @ stdcall DrawIconEx(long long long long long long long long long) NtUserDrawIconEx
+@@ -843,7 +843,7 @@
+ @ stdcall LogicalToPhysicalPointForPerMonitorDPI(long ptr) NtUserLogicalToPerMonitorDPIPhysicalPoint
+ @ stdcall LookupIconIdFromDirectory(ptr long)
+ @ stdcall LookupIconIdFromDirectoryEx(ptr long long long long)
+-@ stub MBToWCSEx
++@ stdcall MBToWCSEx(long ptr long ptr long long)
+ # @ stub MBToWCSExt
+ # @ stub MB_GetString
+ # @ stub MITGetCursorUpdateHandle
+@@ -1209,7 +1209,7 @@
+ @ stdcall VkKeyScanExA(long long)
+ @ stdcall VkKeyScanExW(long long) NtUserVkKeyScanEx
+ @ stdcall VkKeyScanW(long)
+-@ stub WCSToMBEx
++@ stdcall WCSToMBEx(long ptr long ptr long long)
+ @ stdcall WINNLSEnableIME(long long)
+ @ stdcall WINNLSGetEnableStatus(long)
+ @ stdcall WINNLSGetIMEHotkey(long)

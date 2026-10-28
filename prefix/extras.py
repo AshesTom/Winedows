@@ -37,7 +37,7 @@ BRIDGE = ROOT / '.local/bridge'
 VERSION = '37'
 MARKER = '.xp-extras'
 HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
-           'xpnetcon.exe', 'linux-launch.exe')
+           'xpnetcon.exe', 'linux-launch.exe', 'shortcuts.cpl')
 # XP's Regional and Language Options and what it loads (assets/intl), native
 # in rundll32 and in XP Explorer, whose Control Panel lists it.
 INTL = ('intl.cpl', 'input.dll', 'syssetup.dll', 'sfcfiles.dll')
@@ -153,6 +153,9 @@ def registry(xpx):
               'REG_EXPAND_SZ')
         r.add('HKCR\\CLSID\\' + clsid + '\\InProcServer32', 'ThreadingModel', 'Apartment')
         r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved', clsid, name)
+    # Keyboard Shortcuts, a Control Panel item of the session (bridge-wm/hotkeys.py)
+    r.add(r'HKLM\Software\Microsoft\Windows\CurrentVersion\Control Panel\Cpls', 'Keyboard Shortcuts',
+          r'C:\xp\bin\shortcuts.cpl')
     # User Accounts: XP's mshta.exe instead of Wine's stub, with IE6's engine,
     # XP's shell32 (the account picture) and themeui (Theme.Manager, which
     # picks the Luna style sheet of its pages) native in it.
@@ -266,6 +269,10 @@ def copy_files(assets, prefix):
         shutil.copyfile(BRIDGE / helper, xp / 'bin' / helper)
     if (assets / 'tray').is_dir():
         shutil.copytree(assets / 'tray', xp / 'tray', dirs_exist_ok=True)
+    # XP's keyboard icon for Control Panel's Keyboard Shortcuts (bridge-wm/shortcuts.c)
+    if (assets / 'keyboard/main.cpl').is_file():
+        (xp / 'res').mkdir(exist_ok=True)
+        shutil.copyfile(assets / 'keyboard/main.cpl', xp / 'res/main.cpl')
     native = xp / 'native'
     for path in [assets / 'system32/duser.dll', *(assets / 'cpl').glob('*'), *(assets / 'shell').glob('*')]:
         if path.is_file():
@@ -987,6 +994,8 @@ def control_panel(assets, prefix, wine, xpx):
                 r.add(category, rf'C:\windows\{folder}\{name}', number)
             else:
                 r.add(category, rf'C:\windows\{folder}\{name}', str(number & 0xffffffff), 'REG_DWORD')
+    # Keyboard Shortcuts beside the keyboard and the mouse (Printers and Other Hardware)
+    r.add(category, r'C:\xp\bin\shortcuts.cpl', '2', 'REG_DWORD')
     # XP's shell32 keeps the items' names in a cache, which it does not read
     # again for items that changed (Wine's "Internet Settings" stayed).
     texts_cache = 'Windows Registry Editor Version 5.00\r\n\r\n' \

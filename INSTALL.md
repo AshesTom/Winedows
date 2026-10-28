@@ -138,12 +138,16 @@ Windows 7 のシェルは `master` ブランチにあります（`git switch mas
 | `linux_font` | `MS UI Gothic`（英語版の XP では `Tahoma`） | Linux のアプリの字体。`null` で変えません |
 | `linux_menu` | `true` | Linux のアプリをスタートメニューに入れます |
 | `welcome_screen` | `true` | ログイン後とログオフ中に XP の画面（Windows 7 のシェルでは「ようこそ」「ログオフしています」など）を出します |
+| `oobe` | `true` | prefix の最初のセッションで XP の「Windows へようこそ」（動画、音楽、最初の設定の画面）を出します。済むと prefix に `oobe.json` を書きます（消すともう一度出ます） |
 | `cursor_theme` | `win4wine-xp` | カーソルのテーマ。`null` で使いません |
+| `qt_style` | `true` | Qt のアプリの部品を、シェルの今のビジュアル スタイルとシステムの色で描きます（[qt-style/](qt-style/README.md)）。画面のプロパティで変えると追従します。`false` で Qt 自身のスタイルのままにします |
+| `gtk_style` | `true` | GTK 3 のアプリに、同じスタイルから作ったテーマを使います（XSETTINGS で指定するので、変えると追従します。Wayland のセッションではアプリの起動時に決まります）。スクロールバーは常に表示します。`false` でユーザーの GTK のテーマのままにします |
 | `shutdown_command`, `reboot_command` | `systemctl poweroff` / `reboot` | 終了オプションで実行するコマンド |
 | `outputs` | （無し） | Wayland のセッションの、出力ごとの設定。例: `{"HDMI-A-1": {"scale": 1.5}, "DP-1": {"scale": 1, "position": "2560,0"}}`（`mode` も書けます。出力の名前は `wlr-randr` で見られます） |
 | `shell` | `xp` | `reactos` で ReactOS のシェル（`reactos-session.json` に setup.sh が書きます） |
 | `primary` | 一番左の出力 | Wayland のセッションで Win32 の主モニターにする出力の名前。XP のデスクトップとタスクバーはここに出ます |
 | `composite` | `true` | Wine の窓の中身を X サーバーに覚えさせます（Composite の自動リダイレクト）。窓を動かしたり閉じたりしたとき、下の Wine の窓が描き直すまで黒く見えることがなくなります。`false` で使いません |
+| `wallet` | `auto` | ブラウザーや Electron のアプリ（Chromium の仲間）が Cookie と保存したパスワードの鍵を置くパスワード ウォレット。`auto` は利用者の KWallet（KDE が作ったウォレットがあれば）か GNOME キーリングを使い、ログインのパスワードで開きます（PAM の pam_kwallet5、pam_gnome_keyring）。ふだんのデスクトップと同じ鍵を読むので、XP のセッションでサイトからログアウトされません。`kwallet`、`gnome-keyring` で指定、`none` で使いません |
 | `window_snap` | `false` | `true` で窓を画面の半分に寄せられます（Windows 7 の Aero Snap 風。XP には無い機能です）。Win+←/→ で左右の半分、Win+↑ で最大化、Win+↓ で元に戻す・最小化。タイトルバーを画面の左右の端へドラッグすると半分に、上端へドラッグすると最大化します。最大化した窓は、タイトルバーをドラッグすると元の大きさに戻ります。次にログインしたときから効きます |
 
 ## 見た目と文字の大きさを変える

@@ -210,15 +210,20 @@ def stage_media(prefix, wine=None):
 
 
 # XP's default user marks its special folders in desktop.ini, as read on the
-# reference machine: [DeleteOnCopy] names a folder by its CSIDL while it keeps
-# its created name, and [.ShellClassInfo] gives its icon and tip.
+# reference machine: [.ShellClassInfo] gives its icon and tip. XP names My
+# Pictures and My Music when it creates them; Wine's are Pictures and Music,
+# so they get XP's name for their CSIDL (shell32's table: 39 -> 21779,
+# 13 -> 21790) as LocalizedResourceName. XP's [DeleteOnCopy] is left out:
+# for the folder's owner it keeps the folder's own name.
 SPECIAL_FOLDERS = (
-    ('users/{user}/Pictures', [('DeleteOnCopy', [('Owner', None), ('Personalized', '39'), ('PersonalizedName', None)]),
-                  ('.ShellClassInfo', [('InfoTip', '@Shell32.dll,-12688'),
-                                       ('IconFile', r'%SystemRoot%\system32\mydocs.dll'), ('IconIndex', '-101')])]),
-    ('users/{user}/Music', [('DeleteOnCopy', [('Owner', None), ('Personalized', '13'), ('PersonalizedName', None)]),
-               ('.ShellClassInfo', [('InfoTip', '@Shell32.dll,-12689'),
-                                    ('IconFile', r'%SystemRoot%\system32\SHELL32.dll'), ('IconIndex', '-237')])]),
+    ('users/{user}/Pictures', [('.ShellClassInfo', [('InfoTip', '@Shell32.dll,-12688'),
+                                                    ('IconFile', r'%SystemRoot%\system32\mydocs.dll'),
+                                                    ('IconIndex', '-101'),
+                                                    ('LocalizedResourceName', '@shell32.dll,-21779')])]),
+    ('users/{user}/Music', [('.ShellClassInfo', [('InfoTip', '@Shell32.dll,-12689'),
+                                                 ('IconFile', r'%SystemRoot%\system32\SHELL32.dll'),
+                                                 ('IconIndex', '-237'),
+                                                 ('LocalizedResourceName', '@shell32.dll,-21790')])]),
     ('users/{user}/AppData/Roaming/Microsoft/Windows/Recent',
      [('.ShellClassInfo', [('InfoTip', '@Shell32.dll,-12692'), ('IconFile', r'%SystemRoot%\system32\SHELL32.dll'),
                            ('IconIndex', '-21'), ('LocalizedResourceName', '@shell32.dll,-12691')])]),
@@ -239,11 +244,51 @@ def hidden(path):
     except (OSError, ValueError):
         return False
 
-def stage_folders(prefix, wine):
-    """Give the prefix's own special folders XP's names and icons.
+# What earlier versions wrote into a real Pictures or Music folder: replaced.
+EARLIER_FOLDERS = {
+    'Pictures': '[DeleteOnCopy]\r\nOwner={user}\r\nPersonalized=39\r\nPersonalizedName=Pictures\r\n[.ShellClassInfo]\r\n'
+                'InfoTip=@Shell32.dll,-12688\r\nIconFile=%SystemRoot%\\system32\\mydocs.dll\r\nIconIndex=-101\r\n',
+    'Music': '[DeleteOnCopy]\r\nOwner={user}\r\nPersonalized=13\r\nPersonalizedName=Music\r\n[.ShellClassInfo]\r\n'
+             'InfoTip=@Shell32.dll,-12689\r\nIconFile=%SystemRoot%\\system32\\SHELL32.dll\r\nIconIndex=-237\r\n',
+}
 
-    Only real directories inside the prefix are marked, never a link to the
-    user's home, and a desktop.ini other than ours is kept as it is.
+def stage_folder_settings(prefix, name, folder, content):
+    """Keep in the prefix the desktop.ini of FOLDER, a link to a directory outside it.
+
+    Wine (patch 0186) gives the directory that folder-settings/NAME links to
+    the system attribute and folder-settings/NAME.ini as its desktop.ini, so
+    nothing is written into the user's home. A desktop.ini of the
+    directory's own is kept and wins."""
+    settings = prefix / 'folder-settings'
+    link, ini = settings / name, settings / (name + '.ini')
+    target = folder.resolve()
+    try:
+        if any(entry.name.lower() == 'desktop.ini' for entry in target.iterdir()):
+            return
+    except OSError:
+        return
+    settings.mkdir(exist_ok=True)
+    if not link.is_symlink() or Path(os.readlink(link)) != target:
+        temporary = settings / f'.{name}.link'
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(target)
+        temporary.replace(link)
+    if not ini.is_file() or ini.read_bytes() != content.encode('ascii'):
+        temporary = settings / f'.{name}.ini'
+        temporary.write_text(content, encoding='ascii', newline='')
+        temporary.replace(ini)
+    # Hidden and system, as XP's own desktop.ini (Samba's format, as Wine stores it)
+    try:
+        os.setxattr(ini, 'user.DOSATTRIB', b'0x6')
+    except OSError:
+        pass
+
+def stage_folders(prefix, wine):
+    """Give the prefix's special folders XP's names and icons.
+
+    Real directories inside the prefix get their desktop.ini; for a link to
+    the user's home it is kept in the prefix (stage_folder_settings). A
+    desktop.ini other than ours is kept as it is.
     """
     user = pwd.getpwuid(os.getuid()).pw_name
     mydocs = (shell_system(prefix) / 'mydocs.dll').is_file()
@@ -252,7 +297,7 @@ def stage_folders(prefix, wine):
         relative = relative.format(user=user)
         folder = prefix / 'drive_c' / relative
         ini = folder / 'desktop.ini'
-        if not folder.is_dir() or folder.is_symlink() or ini.is_symlink():
+        if not folder.is_dir() or ini.is_symlink():
             continue
         if any(value.endswith('mydocs.dll') for _, entries in sections for _, value in entries if value) and not mydocs:
             continue
@@ -262,9 +307,16 @@ def stage_folders(prefix, wine):
             for key, value in entries:
                 lines.append(f'{key}={value or (user if key == "Owner" else folder.name)}')
         content = '\r\n'.join(lines) + '\r\n'
+        if folder.is_symlink():
+            if not folder.resolve().is_relative_to(prefix.resolve()):
+                stage_folder_settings(prefix, folder.name, folder, content)
+            continue
         if ini.exists():
+            earlier = EARLIER_FOLDERS.get(folder.name, '').format(user=user)
+            if earlier and ini.read_bytes() == earlier.encode('ascii'):
+                ini.write_text(content, encoding='ascii', newline='')
             # Earlier versions left ours visible; repair only those.
-            if hidden(ini) or ini.read_bytes() != content.encode('ascii'):
+            elif hidden(ini) or ini.read_bytes() != content.encode('ascii'):
                 continue
         else:
             ini.write_text(content, encoding='ascii', newline='')

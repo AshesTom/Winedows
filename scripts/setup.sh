@@ -181,6 +181,10 @@ arch_packages() {
         # the session: X, the WM and tray bridge, recovery terminal, root cursor
         xorg-server xorg-xsetroot xorg-setxkbmap xterm python python-xlib
         python-gobject glib2 gdk-pixbuf2 librsvg
+        # Windows Welcome at the first session: its pages, intro video and music (WMV and WMA)
+        python-cairo pango gstreamer gst-plugins-base gst-plugins-good gst-plugins-ugly gst-libav
+        # the Qt style that draws Linux applications with the shell's visual style (qt-style/)
+        qt6-base cmake libxcb
     )
     # 7z: 7zip, unless p7zip (which conflicts with it) already gives one
     command -v 7z >/dev/null || packages+=(7zip)
@@ -233,6 +237,11 @@ else
         # the session: X, the WM and tray bridge, recovery terminal, root cursor
         xserver-xorg x11-xserver-utils x11-xkb-utils xterm python3 python3-xlib
         python3-gi gir1.2-glib-2.0 gir1.2-gdkpixbuf-2.0 librsvg2-common
+        # Windows Welcome at the first session: its pages, intro video and music (WMV and WMA)
+        # the Qt style that draws Linux applications with the shell's visual style (qt-style/)
+        qt6-base-dev cmake libxcb1-dev
+        python3-gi-cairo gir1.2-pango-1.0 gir1.2-gstreamer-1.0 gstreamer1.0-plugins-base
+        gstreamer1.0-plugins-good gstreamer1.0-plugins-ugly gstreamer1.0-libav
         locales
     )
     if [[ $wayland == yes ]]; then
@@ -320,6 +329,12 @@ fi
 step 'Bridge'
 "$root/bridge-wm/build.sh"
 printf 'Built .local/bridge\n'
+
+step 'Qt style'
+# Linux applications' Qt widgets in the shell's visual style (session/supervisor.py)
+"$root/qt-style/build.sh" > "$local/qt-style-build.log" 2>&1 ||
+    { tail -20 "$local/qt-style-build.log" >&2; printf 'Qt style build failed; see .local/qt-style-build.log\n' >&2; exit 1; }
+printf 'Built .local/qt-style\n'
 
 labwc=$local/labwc-install/bin/labwc
 if [[ $wayland == yes ]]; then

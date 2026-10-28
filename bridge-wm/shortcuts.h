@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+#define IDS_NAME 1
+#define IDS_INFO 2
+#define IDS_KEY 3
+#define IDS_COMMAND 4
+#define IDD_MAIN 100
+#define IDD_ENTRY 101
+#define IDC_LIST 1001
+#define IDC_NEW 1002
+#define IDC_EDIT 1003
+#define IDC_REMOVE 1004
+#define IDC_APPLY 1005
+#define IDC_HOTKEY 1010
+#define IDC_WIN 1011
+#define IDC_COMMAND 1012
+#define IDC_BROWSE 1013

@@ -141,12 +141,16 @@ Restart the display manager (or reboot).
 | `linux_font` | `MS UI Gothic` (`Tahoma` for English XP) | font of Linux applications; `null` leaves it alone |
 | `linux_menu` | `true` | list Linux applications in the Start menu |
 | `welcome_screen` | `true` | show XP's screens after login and while logging off (Windows 7's "Welcome", "Logging off" and so on for the Windows 7 shell) |
+| `oobe` | `true` | show XP's Windows Welcome (intro video, music, first setup pages) in the prefix's first session; when done it writes `oobe.json` in the prefix (delete it to see it again) |
 | `cursor_theme` | `win4wine-xp` | cursor theme; `null` for none |
+| `qt_style` | `true` | Qt applications draw their widgets with the shell's current visual style and system colours ([qt-style/](../../qt-style/README.md)), and follow Display Properties' changes; `false` keeps Qt's own style |
+| `gtk_style` | `true` | GTK 3 applications take a theme made from the same style (XSETTINGS names it, so they follow its changes; the Wayland session sets it when they start) and always-visible scroll bars; `false` keeps the user's GTK theme |
 | `shutdown_command`, `reboot_command` | `systemctl poweroff` / `reboot` | commands run by Turn Off Computer |
 | `outputs` | (none) | the Wayland session's settings per output, e.g. `{"HDMI-A-1": {"scale": 1.5}, "DP-1": {"scale": 1, "position": "2560,0"}}` (`mode` too; `wlr-randr` lists the names) |
 | `shell` | `xp` | `reactos` for ReactOS's shell (setup.sh writes it into `reactos-session.json`) |
 | `primary` | the leftmost output | the output the Wayland session makes Win32's primary monitor; XP's desktop and taskbar are on it |
 | `composite` | `true` | the X server keeps the contents of Wine's windows (Composite's automatic redirection): moving or closing a window no longer shows the Wine windows below black until they repaint. `false` turns it off |
+| `wallet` | `auto` | The password wallet where browsers and Electron applications (Chromium-based) keep the key of their cookies and saved passwords. `auto` uses the user's KWallet (when KDE made a wallet) or GNOME Keyring, opened with the login password (PAM's pam_kwallet5, pam_gnome_keyring). They read the same key as in the usual desktop, so sites do not sign out in the XP session. `kwallet` or `gnome-keyring` chooses one, `none` uses none |
 | `window_snap` | `false` | `true` lets windows snap to half of the screen (like Windows 7's Aero Snap; XP has no such thing): Win+Left/Right for the left or right half, Win+Up to maximize, Win+Down to restore or minimize; dragging a title bar to the left or right edge of the screen snaps it to that half, to the top edge maximizes it; dragging a maximized window's title bar restores it. Takes effect at the next login |
 
 ## Changing the look and the text size

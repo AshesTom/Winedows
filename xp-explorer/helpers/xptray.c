@@ -29,7 +29,8 @@
 #define ID_POWER     1
 #define ID_NETWORK   2
 #define ID_VOLUME    3
-#define ID_COUNT     4
+#define ID_BLUETOOTH 4
+#define ID_COUNT     5
 #define TIMER_POLL   1
 #define TIMER_FIND   2
 #define TIMER_APPLY  3
@@ -158,6 +159,7 @@ static struct { const WCHAR *file; int id; HICON icon; } xp_icons[] = {
     { L"xpsp2res.dll", 1003, NULL }, /* 10 wireless connected */
     { L"xpsp2res.dll", 1004, NULL }, /* 11 wireless not connected */
     { L"xpsp2res.dll", 1018, NULL }, /* 12 wireless limited connectivity */
+    { L"xpsp2res.dll", 200, NULL },  /* 13 Bluetooth */
 };
 
 static HICON xp_icon(int index)
@@ -854,6 +856,196 @@ static void show_network(void)
     set_icon(ID_NETWORK, TRUE, xp_icon(index), tip, balloon ? title : NULL, balloon ? info : NULL, NIIF_INFO);
 }
 
+/* ---- Bluetooth ---------------------------------------------------------
+ * XP SP2's Bluetooth icon (xpsp2res.dll) while the system has an adapter,
+ * with XP's own menu of it (xpsp2res.dll's menu 2140): the radio through
+ * bluetoothctl, the devices and the wizard with the desktop's Bluetooth
+ * tools (KDE's bluedevil, else blueman or GNOME's); above XP's items, the
+ * paired devices, checked when connected, which a click connects or
+ * disconnects. */
+#define BT_ADD      2141
+#define BT_SHOW     2142
+#define BT_SEND     2143
+#define BT_RECEIVE  2144
+#define BT_PAN      2146
+#define BT_SETTINGS 2147
+#define BT_REMOVE   2158
+#define BT_ON       2159
+#define BT_OFF      2160
+#define BT_DEVICE   3000
+#define BT_DEVICES  24
+
+static int bluetooth = -1;   /* -1 no adapter, 0 radio off, 1 on */
+static BOOL bluetooth_removed;
+static struct { char address[18]; WCHAR name[64]; BOOL connected; } bt_devices[BT_DEVICES];
+static unsigned bt_count;
+
+/* The adapter (sysfs) and its radio (rfkill's soft block). */
+static void poll_bluetooth(void)
+{
+    WIN32_FIND_DATAW found;
+    HANDLE find = FindFirstFileW(L"Z:\\sys\\class\\bluetooth\\hci*", &found);
+    int state = -1;
+    if (find == INVALID_HANDLE_VALUE)
+    {
+        bluetooth = -1;
+        return;
+    }
+    FindClose(find);
+    state = 1;
+    find = FindFirstFileW(L"Z:\\sys\\class\\rfkill\\rfkill*", &found);
+    if (find != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            WCHAR path[MAX_PATH];
+            char text[32];
+            swprintf(path, MAX_PATH, L"Z:\\sys\\class\\rfkill\\%ls\\type", found.cFileName);
+            if (!read_text(path, text, sizeof(text)) || strncmp(text, "bluetooth", 9)) continue;
+            swprintf(path, MAX_PATH, L"Z:\\sys\\class\\rfkill\\%ls\\soft", found.cFileName);
+            if (read_text(path, text, sizeof(text)) && text[0] == '1') state = 0;
+            swprintf(path, MAX_PATH, L"Z:\\sys\\class\\rfkill\\%ls\\hard", found.cFileName);
+            if (read_text(path, text, sizeof(text)) && text[0] == '1') state = 0;
+        } while (FindNextFileW(find, &found));
+        FindClose(find);
+    }
+    bluetooth = state;
+}
+
+static void show_bluetooth(void)
+{
+    WCHAR tip[128];
+    if (bluetooth < 0 || bluetooth_removed)
+    {
+        set_icon(ID_BLUETOOTH, FALSE, NULL, L"", NULL, NULL, 0);
+        return;
+    }
+    xp_text(L"xpsp2res.dll", 1015, L"Bluetooth Devices", tip, ARRAYSIZE(tip));
+    set_icon(ID_BLUETOOTH, TRUE, xp_icon(13), tip, NULL, NULL, 0);
+}
+
+/* The paired devices and whether each is connected (bluetoothctl). */
+static void read_bluetooth_devices(void)
+{
+    static char text[16384];
+    char *line, *next;
+    bt_count = 0;
+    if (bluetooth <= 0 ||
+        !capture(L"for d in $(bluetoothctl devices Paired 2>/dev/null | awk '{print $2}'); do "
+                 L"info=$(bluetoothctl info \"$d\" 2>/dev/null); "
+                 L"c=$(printf '%s' \"$info\" | awk '/Connected:/{print $2; exit}'); "
+                 L"n=$(printf '%s' \"$info\" | sed -n 's/^[[:space:]]*Alias: //p' | head -1); "
+                 L"printf '%s %s %s\\n' \"$d\" \"${c:-no}\" \"$n\"; done", text, sizeof(text)))
+        return;
+    for (line = text; line && *line && bt_count < BT_DEVICES; line = next)
+    {
+        char address[18], connected[8];
+        int offset = 0;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (sscanf(line, "%17s %7s %n", address, connected, &offset) < 2) continue;
+        lstrcpynA(bt_devices[bt_count].address, address, sizeof(bt_devices[bt_count].address));
+        bt_devices[bt_count].connected = !strcmp(connected, "yes");
+        if (!MultiByteToWideChar(CP_UTF8, 0, offset ? line + offset : address, -1, bt_devices[bt_count].name,
+                                 ARRAYSIZE(bt_devices[bt_count].name)) || !bt_devices[bt_count].name[0])
+            MultiByteToWideChar(CP_UTF8, 0, address, -1, bt_devices[bt_count].name, ARRAYSIZE(bt_devices[bt_count].name));
+        bt_count++;
+    }
+}
+
+static void bluetooth_command(UINT command)
+{
+    static const WCHAR devices[] = L"kcmshell6 kcm_bluetooth 2>/dev/null || systemsettings kcm_bluetooth 2>/dev/null "
+                                   L"|| blueman-manager 2>/dev/null || gnome-control-center bluetooth";
+    WCHAR script[256];
+    switch (command)
+    {
+    case BT_ADD:
+        spawn(L"bluedevil-wizard 2>/dev/null || blueman-assistant 2>/dev/null || blueman-manager 2>/dev/null "
+              L"|| gnome-control-center bluetooth", NULL);
+        break;
+    case BT_SHOW:
+    case BT_SETTINGS:
+        spawn(devices, NULL);
+        break;
+    case BT_SEND:
+        spawn(L"bluedevil-sendfile 2>/dev/null || blueman-sendto", NULL);
+        break;
+    /* XP's radio switch is rfkill's block, which the icon reads (as bluedevil's). */
+    case BT_ON:
+        spawn(L"rfkill unblock bluetooth; sleep 1; bluetoothctl power on", NULL);
+        break;
+    case BT_OFF:
+        spawn(L"bluetoothctl power off; rfkill block bluetooth", NULL);
+        break;
+    case BT_REMOVE:
+        /* Until the next session, as XP's own is gone until Bluetooth Devices brings it back. */
+        bluetooth_removed = TRUE;
+        show_bluetooth();
+        break;
+    default:
+        if (command >= BT_DEVICE && command < BT_DEVICE + bt_count)
+        {
+            unsigned i = command - BT_DEVICE;
+            WCHAR address[18];
+            MultiByteToWideChar(CP_ACP, 0, bt_devices[i].address, -1, address, ARRAYSIZE(address));
+            swprintf(script, ARRAYSIZE(script), L"bluetoothctl %ls %ls",
+                     bt_devices[i].connected ? L"disconnect" : L"connect", address);
+            spawn(script, NULL);
+        }
+    }
+}
+
+/* XP's menu of its Bluetooth icon, with the paired devices above it. */
+static void bluetooth_menu(void)
+{
+    HMODULE module = xp_module(L"xpsp2res.dll");
+    HMENU loaded = NULL, menu;
+    POINT cursor;
+    UINT command;
+    if (module) loaded = LoadMenuW(module, MAKEINTRESOURCEW(2140));
+    menu = loaded ? GetSubMenu(loaded, 0) : CreatePopupMenu();
+    if (!loaded)
+    {
+        AppendMenuW(menu, MF_STRING, BT_ADD, L"&Add a Bluetooth Device");
+        AppendMenuW(menu, MF_STRING, BT_SHOW, L"Show Bluetooth &Devices");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING, BT_SEND, L"&Send a File");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING, BT_SETTINGS, L"&Open Bluetooth Settings");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING, BT_ON, L"&Turn Bluetooth Radio On");
+        AppendMenuW(menu, MF_STRING, BT_OFF, L"Turn &Bluetooth Radio Off");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING, BT_REMOVE, L"Remove Bluetooth &Icon");
+    }
+    poll_bluetooth();
+    /* The radio's state decides which of its two items applies. */
+    EnableMenuItem(menu, BT_ON, MF_BYCOMMAND | (bluetooth == 0 ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, BT_OFF, MF_BYCOMMAND | (bluetooth == 1 ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, BT_ADD, MF_BYCOMMAND | (bluetooth == 1 ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, BT_SEND, MF_BYCOMMAND | (bluetooth == 1 ? MF_ENABLED : MF_GRAYED));
+    /* No Linux counterpart here: receiving is the desktop's service, PAN NetworkManager's. */
+    EnableMenuItem(menu, BT_RECEIVE, MF_BYCOMMAND | MF_GRAYED);
+    EnableMenuItem(menu, BT_PAN, MF_BYCOMMAND | MF_GRAYED);
+    read_bluetooth_devices();
+    if (bt_count)
+    {
+        InsertMenuW(menu, 0, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+        for (unsigned i = bt_count; i-- > 0;)
+            InsertMenuW(menu, 0, MF_BYPOSITION | MF_STRING | (bt_devices[i].connected ? MF_CHECKED : 0),
+                        BT_DEVICE + i, bt_devices[i].name);
+    }
+    SetMenuDefaultItem(menu, BT_SHOW, FALSE);
+    GetCursorPos(&cursor);
+    SetForegroundWindow(window);
+    command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, window, NULL);
+    PostMessageW(window, WM_NULL, 0, 0);
+    if (loaded) DestroyMenu(loaded);
+    else DestroyMenu(menu);
+    if (command) bluetooth_command(command);
+}
+
 static void poll(void)
 {
     static int last_up = -2;
@@ -868,6 +1060,11 @@ static void poll(void)
     {
         poll_volume();
         show_volume();
+    }
+    if (tick % 3 == 0)
+    {
+        poll_bluetooth();
+        show_bluetooth();
     }
     tick++;
 }
@@ -2640,15 +2837,18 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPAR
         switch (LOWORD(lparam))
         {
         case WM_LBUTTONUP:
+            if (wparam == ID_BLUETOOTH) break;   /* XP's opens on a double click */
             if (wparam == ID_VOLUME) show_popup();
             else if (wparam == ID_NETWORK) show_network_connections();
             else show_power_meter();
             break;
         case WM_LBUTTONDBLCLK:
             if (wparam == ID_VOLUME) run_settings(CMD_MIXER);
+            else if (wparam == ID_BLUETOOTH) bluetooth_command(BT_SHOW);
             break;
         case WM_RBUTTONUP:
-            context_menu((UINT)wparam);
+            if (wparam == ID_BLUETOOTH) bluetooth_menu();
+            else context_menu((UINT)wparam);
             break;
         }
         return 0;

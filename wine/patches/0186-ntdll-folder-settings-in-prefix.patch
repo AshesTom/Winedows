@@ -1,0 +1,170 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] ntdll: keep the desktop.ini of the profile's home folders in the prefix
+
+Purpose: show XP's My Pictures and My Music (their names and icons) for
+the profile's Pictures and Music, which are links to the user's home,
+without writing anything there.
+XP behavior: SHGetFolderPath(CSIDL_MYPICTURES/CSIDL_MYMUSIC with
+CSIDL_FLAG_CREATE) creates "My Pictures" and "My Music" with a hidden
+system desktop.ini (InfoTip, IconFile and IconIndex: mydocs.dll,-101 and
+SHELL32.dll,-237) and marks the folder read-only. The shell reads a
+folder's desktop.ini only when the folder is read-only or a system folder;
+its LocalizedResourceName names the folder (XP's own name for CSIDL 39 is
+shell32 string 21779, for CSIDL 13 string 21790).
+Wine before: the profile's Pictures and Music link to ~/Pictures and
+~/Music, which have no desktop.ini; XP's Start menu and folders showed
+"Pictures" and "Music" with the plain folder icon.
+Change: <prefix>/folder-settings/<name> is a link to a folder and
+<name>.ini its desktop.ini (prefix/stage.py writes them). That folder
+reads as a system folder, a lookup of desktop.ini in it that finds none of
+its own opens <name>.ini, and setting its attributes changes nothing, so
+nothing is written into the folder. The links are read once per process.
+Evidence: XP's shell32 (SHGetFolderLocation, SHGetFileInfo and the
+profile's IShellFolder) gives "My Pictures" with mydocs.dll,-101 and
+"My Music" with SHELL32.dll,-237 for the links, and the linked folders
+get neither a file nor an extended attribute.
+Scope: only folders listed in the prefix's folder-settings.
+---
+ dlls/ntdll/unix/file.c | 94 +++++++++++++++++++++++++++++++++
+ 1 file changed, 94 insertions(+)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index ac9e247..c70bbab 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -1651,6 +1651,77 @@ static BOOL keep_directory_readonly( const struct stat *st )
+ }
+ 
+ 
++/* Folder settings kept in the prefix, for folders outside it (the profile's
++ * folders in the user's home): <prefix>/folder-settings/<name> is a link to
++ * the folder and <name>.ini is its desktop.ini. The folder reads as a system
++ * folder and its desktop.ini (when it has none of its own) is that file, so
++ * the shell shows the folder's name and icon without anything written into
++ * the folder. */
++struct folder_settings
++{
++    dev_t dev;
++    ino_t ino;
++    char *ini;
++};
++
++static struct folder_settings *folder_settings;
++static unsigned int folder_settings_count;
++static pthread_once_t folder_settings_once = PTHREAD_ONCE_INIT;
++
++static void load_folder_settings(void)
++{
++    struct folder_settings *grown;
++    struct dirent *entry;
++    struct stat st;
++    char *dir, *path;
++    size_t len;
++    DIR *list;
++
++    if (!(dir = malloc( strlen( config_dir ) + sizeof("/folder-settings") ))) return;
++    strcpy( dir, config_dir );
++    strcat( dir, "/folder-settings" );
++    if (!(list = opendir( dir )))
++    {
++        free( dir );
++        return;
++    }
++    while ((entry = readdir( list )))
++    {
++        len = strlen( entry->d_name );
++        if (entry->d_name[0] == '.' || (len > 4 && !strcmp( entry->d_name + len - 4, ".ini" ))) continue;
++        if (!(path = malloc( strlen( dir ) + len + sizeof("/.ini") ))) break;
++        sprintf( path, "%s/%s", dir, entry->d_name );
++        if (stat( path, &st ) || !S_ISDIR( st.st_mode )) goto next;
++        strcat( path, ".ini" );
++        if (access( path, F_OK )) goto next;
++        if (!(grown = realloc( folder_settings, (folder_settings_count + 1) * sizeof(*grown) ))) goto next;
++        folder_settings = grown;
++        folder_settings[folder_settings_count].dev = st.st_dev;
++        folder_settings[folder_settings_count].ino = st.st_ino;
++        folder_settings[folder_settings_count++].ini = path;
++        TRACE( "%s: %s\n", debugstr_a(entry->d_name), debugstr_a(path) );
++        continue;
++    next:
++        free( path );
++    }
++    closedir( list );
++    free( dir );
++}
++
++/* the desktop.ini that the prefix keeps for the folder ST, or NULL */
++static const char *get_folder_settings( const struct stat *st )
++{
++    unsigned int i;
++
++    if (!S_ISDIR( st->st_mode )) return NULL;
++    pthread_once( &folder_settings_once, load_folder_settings );
++    for (i = 0; i < folder_settings_count; i++)
++        if (folder_settings[i].dev == st->st_dev && folder_settings[i].ino == st->st_ino)
++            return folder_settings[i].ini;
++    return NULL;
++}
++
++
+ /* decode the xattr-stored DOS attributes */
+ static int parse_samba_dos_attrib_data( char *data, int len, const struct stat *st )
+ {
+@@ -1695,6 +1766,7 @@ static int fd_get_file_info( HANDLE handle, int fd, unsigned int options,
+     ret = fstat( fd, st );
+     if (ret == -1) return ret;
+     *attr |= get_file_attributes( st );
++    if (get_folder_settings( st )) *attr |= FILE_ATTRIBUTE_SYSTEM;
+     if (reparse_tag) *reparse_tag = 0;
+     /* consider mount points to be reparse points (IO_REPARSE_TAG_MOUNT_POINT) */
+     if (options & FILE_OPEN_REPARSE_POINT)
+@@ -1755,6 +1827,8 @@ static NTSTATUS fd_set_file_info( int fd, UINT attr, BOOL force_set_xattr )
+     struct stat st;
+ 
+     if (fstat( fd, &st ) == -1) return errno_to_status( errno );
++    /* nothing is written into a folder that the prefix keeps the settings of */
++    if (get_folder_settings( &st )) return STATUS_SUCCESS;
+     if (attr & FILE_ATTRIBUTE_READONLY)
+     {
+         if (S_ISDIR( st.st_mode))
+@@ -1824,6 +1898,7 @@ static int get_file_info( const char *path, struct stat *st, ULONG *attr, ULONG
+         free( parent_path );
+     }
+     *attr |= get_file_attributes( st );
++    if (get_folder_settings( st )) *attr |= FILE_ATTRIBUTE_SYSTEM;
+ 
+     attr_len = xattr_get( path, XATTR_REPARSE, buffer, sizeof(buffer) );
+     if (attr_len >= 0 && attr_len >= sizeof(ULONG))
+@@ -3543,6 +3618,7 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+                                   UINT disposition, BOOL open_reparse, BOOL is_unix, unsigned int reparse_count )
+ {
+     static const WCHAR invalid_charsW[] = { INVALID_NT_CHARS, '/', 0 };
++    static const WCHAR desktop_iniW[] = {'d','e','s','k','t','o','p','.','i','n','i'};
+     const WCHAR *name = attr->ObjectName->Buffer + nt_pos;
+     unsigned int name_len = (attr->ObjectName->Length / sizeof(WCHAR)) - nt_pos;
+     NTSTATUS status;
+@@ -3648,6 +3724,24 @@ static NTSTATUS lookup_unix_name( int root_fd, OBJECT_ATTRIBUTES *attr, UNICODE_
+             free( reparse_name );
+         }
+ 
++        /* the desktop.ini that the prefix keeps for this folder */
++        if (status == STATUS_OBJECT_NAME_NOT_FOUND && !name_len && end - name == ARRAY_SIZE(desktop_iniW)
++            && !wcsnicmp( name, desktop_iniW, ARRAY_SIZE(desktop_iniW) ))
++        {
++            const char *ini;
++            char *new_name;
++
++            unix_name[pos] = 0;
++            if (!fstatat( root_fd, unix_name, &st, 0 ) && (ini = get_folder_settings( &st )))
++            {
++                if (disposition == FILE_CREATE) return STATUS_OBJECT_NAME_COLLISION;
++                if (!(new_name = realloc( unix_name, strlen( ini ) + 1 ))) return STATUS_NO_MEMORY;
++                *buffer = strcpy( new_name, ini );
++                TRACE( "%s -> %s\n", debugstr_us(attr->ObjectName), debugstr_a(ini) );
++                return STATUS_SUCCESS;
++            }
++        }
++
+         /* if this is the last element, not finding it is not necessarily fatal */
+         if (!name_len)
+         {
