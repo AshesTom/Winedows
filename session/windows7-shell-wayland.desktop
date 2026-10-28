@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=Windows 7 Shell (Wine, Wayland)
-Comment=Windows 7's shell on Wine with native Wayland and X11 applications, per-monitor scaling (experimental)
-Exec=/usr/local/bin/windows7-shell-wayland-session
-TryExec=/usr/local/bin/windows7-shell-wayland-session
-Type=Application
-DesktopNames=Windows7-Shell;

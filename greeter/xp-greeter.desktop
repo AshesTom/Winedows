@@ -1,5 +1,0 @@
-[Desktop Entry]
-Name=XP Welcome screen
-Comment=LightDM greeter drawn like Windows XP's Welcome screen
-Exec=/usr/local/share/win4wine/greeter/code/xp-greeter.py
-Type=Application

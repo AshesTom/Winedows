@@ -1,5 +1,0 @@
-[Desktop Entry]
-Name=Windows 7 logon screen
-Comment=LightDM greeter drawn like Windows 7's logon screen
-Exec=/usr/local/share/win4wine/greeter/code/win7-greeter.py
-Type=Application

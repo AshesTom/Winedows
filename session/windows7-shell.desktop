@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=Windows 7 Shell (Wine, X11)
-Comment=Windows 7's shell on Wine with native X11 applications (experimental)
-Exec=/usr/local/bin/windows7-shell-session
-TryExec=/usr/local/bin/windows7-shell-session
-Type=Application
-DesktopNames=Windows7-Shell;

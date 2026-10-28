@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=ReactOS Shell (Wine, Wayland)
-Comment=ReactOS's shell on Wine with native Wayland and X11 applications, per-monitor scaling
-Exec=/usr/local/bin/reactos-shell-wayland-session
-TryExec=/usr/local/bin/reactos-shell-wayland-session
-Type=Application
-DesktopNames=ReactOS-Shell;
