@@ -32,7 +32,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = 'reactos-shell.json'
 # Bump when the registry settings below change; stage then applies them again.
-VERSION = 4
+VERSION = 5
 # Loaded natively by ros-explorer.exe only; Wine has builtin modules of these names.
 SHELL_DLLS = ('shell32', 'browseui', 'shdocvw', 'shlwapi', 'comctl32', 'zipfldr')
 # ReactOS-only modules (no Wine builtin of the name): ros-explorer.exe loads them by name.
@@ -144,6 +144,9 @@ class Prefix:
 
     def registrations(self):
         """What a Wine update of the prefix rewrites or a locale change resets."""
+        # Without SDL, Wine's controller driver reads controllers through udev
+        # instead of waking up a thousand times a second (prefix/registry.py).
+        self.reg(r'HKLM\System\CurrentControlSet\Services\WineBus', 'Enable SDL', 0, 'REG_DWORD')
         for name in SHELL_DLLS:
             self.reg(r'HKCU\Software\Wine\DllOverrides', name, 'builtin')
             self.reg(r'HKCU\Software\Wine\AppDefaults\ros-explorer.exe\DllOverrides', name, 'native')

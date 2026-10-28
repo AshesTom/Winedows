@@ -192,6 +192,10 @@ crisp on every output; set the DPI to the scale of the output you mostly use (14
 - Before 2026-10-13, `setup.sh` could fail while setting a new prefix's look (`Setting the theme failed`).
   Update, then run `scripts/setup.sh --media ISO --theme luna` (or `classic`) again.
 - If the Welcome screen does not appear: `/var/log/lightdm/seat0-greeter.log`. When something it needs is missing, it falls back to LightDM's usual greeter.
+- If a Windows game does not see a controller as an XInput gamepad: the session's prefixes turn off SDL in Wine's
+  controller driver (controllers are read through udev; SDL woke the CPU a thousand times a second).
+  `wine reg add 'HKLM\System\CurrentControlSet\Services\WineBus' /v 'Enable SDL' /t REG_DWORD /d 1 /f` brings it back
+  (from the next session).
 
 ## Uninstall
 

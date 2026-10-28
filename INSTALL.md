@@ -192,6 +192,9 @@ Wayland のセッションでは、Linux のアプリは出力ごとの倍率（
   （`lightdm --show-config` でどのファイルの値かが分かります。`greeter/install.sh` もそのときは知らせます）。その行を消すかコメントにしてください。
 - ようこそ画面のユーザーの絵は AccountsService のものです（ようこそ画面は LightDM のユーザーで動くので、ホームの `~/.face` は読めません）。
   `accountsservice` を入れてから XP のセッションに一度ログインすると、セッションが絵を AccountsService に渡します。
+- Windows のゲームでコントローラーが XInput のゲームパッドとして見えないとき: セッションの prefix では、Wine のコントローラーの
+  ドライバーの SDL を切っています（コントローラーは udev から読みます。SDL は 1 秒に 1000 回 CPU を起こすため）。
+  `wine reg add 'HKLM\System\CurrentControlSet\Services\WineBus' /v 'Enable SDL' /t REG_DWORD /d 1 /f` で戻せます（次のセッションから）。
 
 ## 元に戻す
 

@@ -6,10 +6,11 @@ import struct
 import subprocess
 import tempfile
 
-VERSION = 30
+VERSION = 31
 FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\JapaneseXPLuna'
 # The classic fonts of a new prefix (prefix/theme-settings.c classic-initialize).
 CLASSIC_FONT_PROFILE = r'HKCU\Software\Win4Wine\ThemeProfiles\XPClassic'
+WINEBUS = r'HKLM\System\CurrentControlSet\Services\WineBus'
 # Wine's Unix root folder, a desktop item of Wine's shell namespace
 UNIX_ROOT = '{9D20AAE8-0625-44B0-9CA7-71889C2254D9}'
 # The classic theme's fonts per language of the XP media, read with public SPI
@@ -229,6 +230,12 @@ def install(run, exists, language='ja'):
     reading of the English Luna theme and its defaults give the fonts and
     metrics that public calls report on the English reference machine."""
     japanese = language == 'ja'
+    # Wine's game controller driver (winebus.sys) waits for SDL's events in
+    # steps of a millisecond: a thousand wakeups a second of winedevice.exe
+    # for the whole session, with or without a controller. Controllers are
+    # read through udev (hidraw and evdev) instead; a 1 brings SDL back.
+    if not exists(WINEBUS, 'Enable SDL'):
+        run('reg', 'add', WINEBUS, '/v', 'Enable SDL', '/t', 'REG_DWORD', '/d', '0', '/f')
     # Seed defaults once. Migrations preserve disabled profiles, custom fonts,
     # and even unrecognized values: the builtin reader validates or falls back.
     for name, (kind, data) in font_profile_defaults().items() if japanese else ():
