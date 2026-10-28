@@ -121,10 +121,10 @@ sudo rm -f /usr/share/wayland-sessions/windows7-shell-wayland.desktop /usr/local
 
 ## 制限
 
-- **Aero のガラスは試作です。** 既定の見た目は「Windows 7 ベーシック」（Aero のテーマを、デスクトップの合成なしで描いたもの）です。
-  `win7-session.json` に `"aero": true`（または `W7_AERO=1 windows7/7.sh run`）で、タスクバーとスタートメニューがガラスになり、
-  配色の色とガラスの反射が付きます（Wine のパッチ 0152）。混ぜてぼかすのは X のコンポジター（picom と
-  [windows7/picom.conf](../../windows7/picom.conf)）です。窓の枠のガラス、ライブ サムネイル、Aero Peek はまだです。
+- **Aero のガラス（試作、既定）**: タスクバー、スタートメニュー、窓の枠がガラスになり、Aero のボタン、配色の色（スカイ）、
+  ガラスの反射、タスクバーのライブ サムネイルと Aero Peek があります（Wine のパッチ 0152・0153）。セッションが picom
+  （[windows7/picom.conf](../../windows7/picom.conf)）を起動してガラスを混ぜてぼかします。picom が無いとき、または
+  `win7-session.json` の `"aero": false`（`W7_AERO=0 windows7/7.sh run`）では Windows 7 ベーシックです。Peek で隠れた窓の輪郭はまだ出ません。
 - ネットワーク、ヘルプとサポート、コントロール パネルの中身の多くは、Wine にその部品が無いので使えません。
 - スタートメニューの「ロック」「スリープ」「休止状態」は何もしません。
 

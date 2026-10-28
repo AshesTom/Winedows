@@ -109,6 +109,8 @@ arch_packages() {
         # the session: X, the WM and tray bridge, recovery terminal, root cursor
         xorg-server xorg-xsetroot xorg-setxkbmap xterm python python-xlib
         python-gobject glib2 gdk-pixbuf2 librsvg
+        # Aero glass: the X compositor that blends and blurs it
+        picom
     )
     # 7z: 7zip, unless p7zip (which conflicts with it) already gives one
     command -v 7z >/dev/null || packages+=(7zip)
@@ -158,6 +160,8 @@ else
         xserver-xorg x11-xserver-utils x11-xkb-utils xterm python3 python3-xlib
         python3-gi gir1.2-glib-2.0 gir1.2-gdkpixbuf-2.0 librsvg2-common
         locales
+        # Aero glass: the X compositor that blends and blurs it
+        picom
     )
     if [[ $wayland == yes ]]; then
         packages+=(
@@ -329,7 +333,7 @@ config, wine, prefix, locale = sys.argv[1:]
 settings = {'wine': wine, 'prefix': prefix, 'locale': locale}
 if locale.startswith('ja'):
     settings['input_method'] = 'fcitx5'
-settings.update(shell='win7', cursor_theme='win4wine-win7')
+settings.update(shell='win7', cursor_theme='win4wine-win7', aero=True)
 open(config, 'w').write(json.dumps(settings, indent=2) + '\n')
 EOF
     printf 'Wrote %s\n' "$config"

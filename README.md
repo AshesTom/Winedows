@@ -122,11 +122,11 @@ Everything built, extracted and the prefix live in `.local/` of the checkout. In
 
 ## Limits
 
-- **Aero Glass is experimental**: by default the look is "Windows 7 Basic" (the Aero theme drawn without desktop
-  composition). With `"aero": true` in `win7-session.json` (or `W7_AERO=1 windows7/7.sh run`), the taskbar and Start
-  menu are drawn over glass, tinted with the colorization color and with the glass's reflection (Wine patch 0152);
-  an X compositor, picom with [windows7/picom.conf](windows7/picom.conf), blends and blurs them. Glass window frames,
-  live thumbnails and Aero Peek are not done yet.
+- **Aero Glass (experimental, the default)**: the taskbar, Start menu and window frames are glass with Aero's caption
+  buttons, tinted with the window color (Sky) and the glass's reflection, with live taskbar thumbnails and Aero Peek
+  (Wine patches 0152 and 0153). The session starts picom ([windows7/picom.conf](windows7/picom.conf)) to blend and blur
+  the glass; without picom, or with `"aero": false` in `win7-session.json` (`W7_AERO=0 windows7/7.sh run`), it is
+  Windows 7 Basic. Peek shows no outlines of the hidden windows yet.
 - Network, Help and Support and most of Control Panel are missing: Wine has no counterparts for their components.
 - Lock, Sleep and Hibernate in the Start menu do nothing.
 

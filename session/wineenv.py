@@ -5,6 +5,7 @@ program started with "win4wine-wine" outside the session gets the session's
 prefix, Wine and opt-ins, and looks and behaves as one started from the shell."""
 import os
 from pathlib import Path
+import shutil
 
 # The shell a session starts. The prefix is made for it (prefix/win7.py); its
 # staging step runs before each start.
@@ -20,6 +21,14 @@ CONFIGS = {'win7': 'win7-session.json'}
 
 def config_dir():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'win4wine'
+
+
+def aero(config, base=os.environ):
+    """Whether CONFIG's session has Aero glass: the default ("aero": false
+    for Windows 7 Basic), in an X session (not Wayland), with picom to blend
+    the glass; without a compositor the glass would show black, so it stays
+    Windows 7 Basic."""
+    return bool(config.get('aero', True)) and not base.get('WAYLAND_DISPLAY') and shutil.which('picom') is not None
 
 
 def environment(base, config, shell):
@@ -52,8 +61,9 @@ def environment(base, config, shell):
     # when the Linux session itself runs in another locale.
     if config.get('locale'):
         env.update(LANG=config['locale'], LC_ALL=config['locale'])
-    if config.get('aero'):
-        # Desktop composition in Windows 7's shell: Aero glass (Wine patch
-        # 0152), blended and blurred by the session's X compositor.
+    if aero(config, base):
+        # Desktop composition in Windows 7's session: Aero glass (Wine
+        # patches 0152, 0153), blended and blurred by the session's X
+        # compositor (supervisor.py starts picom).
         env['WIN4WINE_AERO'] = '1'
     return env

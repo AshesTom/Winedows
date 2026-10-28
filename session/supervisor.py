@@ -21,7 +21,7 @@ from xml.sax.saxutils import escape
 from Xlib import X, display, error
 
 import dpi
-from wineenv import SHELLS, environment
+from wineenv import SHELLS, aero, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path.home() / '.config/win4wine/win7-session.json'
@@ -32,6 +32,7 @@ IM_VARIABLES = ('XMODIFIERS', 'GTK_IM_MODULE', 'QT_IM_MODULE', 'SDL_IM_MODULE', 
 
 class Session:
     def __init__(self, config):
+        self.config = config
         self.wine = str(Path(config['wine']).resolve(strict=True))
         self.prefix = Path(config['prefix']).resolve(strict=True)
         # The shell: XP's explorer from the user's media, or (opt-in, experimental)
@@ -489,6 +490,11 @@ class Session:
             time.sleep(.5)
             if wm.poll() is not None:
                 raise RuntimeError('WM failed; see wm.log')
+        if not self.compositor and aero(self.config, self.env):
+            # Aero glass: picom blends the glass windows and blurs behind them
+            self.spawn(['picom', '--config', str(ROOT / 'windows7/picom.conf')], 'picom')
+        elif self.config.get('aero', True) and not self.compositor:
+            print('Aero needs picom: Windows 7 Basic instead', file=sys.stderr)
         if self.cursor_theme and shutil.which('xsetroot') and not self.compositor:
             # The WM's root cursor comes from the core cursor font; xsetroot takes the theme's.
             subprocess.run(['xsetroot', '-cursor_name', 'left_ptr'], env=self.env, check=False)

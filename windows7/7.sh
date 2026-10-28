@@ -13,8 +13,9 @@
 #   W7_WINE       the Wine to run (default: .local/wine-install/bin/wine)
 #   W7_DISPLAY    the nested X display (default: the first free one from :5)
 #   W7_WINEDEBUG  Wine's debug channels (default: +timestamp,fixme-all)
-#   W7_AERO       1: Aero glass (desktop composition, Wine patch 0152; needs an X
-#                 compositor, picom, else the glass is black); default: Windows 7 Basic
+#   W7_AERO       1 (the default): Aero glass (desktop composition, Wine patches
+#                 0152 and 0153; the session starts picom, and stays Windows 7
+#                 Basic without it); 0: Windows 7 Basic
 #   W7_HOME       the home the prefix's folders link to, for a new prefix (default: $HOME)
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
@@ -23,8 +24,8 @@ assets=$local/assets-win7
 prefix=$(realpath -m -- "${W7_PREFIX:-$local/prefix-win7}")
 state=$(realpath -m -- "${W7_LOG:-$local/w7-run}")
 wine=$(realpath -m -- "${W7_WINE:-$local/wine-install/bin/wine}")
-aero=${W7_AERO:-0}
-packages='cabextract 7zip mingw-w64-gcc xorg-server-xephyr xorg-server-xvfb python-xlib python-gobject python-cairo xterm xorg-xsetroot'
+aero=${W7_AERO:-1}
+packages='picom cabextract 7zip mingw-w64-gcc xorg-server-xephyr xorg-server-xvfb python-xlib python-gobject python-cairo xterm xorg-xsetroot'
 
 need() {
     local tool missing=()
@@ -112,8 +113,7 @@ settings = dict(wine=wine, prefix=prefix, state=state, debug=debug, shell='win7'
                 shutdown_command=['true'], reboot_command=['true'])
 if language == 'ja':
     settings['input_method'] = 'fcitx5'
-if aero == '1':
-    settings['aero'] = True
+settings['aero'] = aero == '1'
 open(path, 'w').write(json.dumps(settings, indent=2) + '\n')
 EOF
     echo "$display" > "$state/display"
@@ -128,14 +128,9 @@ EOF
         kill -0 $xephyr 2>/dev/null || { cat "$state/xephyr.log" >&2; exit 1; }
         sleep 0.1
     done
-    if [[ $aero == 1 ]]; then
-        if command -v picom >/dev/null; then
-            # Blends the glass windows (_WIN4WINE_GLASS) and blurs what is behind them.
-            DISPLAY=$display picom --config "$root/windows7/picom.conf" > "$state/picom.log" 2>&1 &
-        else
-            echo "W7_AERO=1 without picom: the glass stays black (sudo pacman -S picom)" >&2
-        fi
-    fi
+    # (the session starts picom for Aero glass, or stays Windows 7 Basic without it)
+    [[ $aero != 1 ]] || command -v picom >/dev/null ||
+        echo "W7_AERO=1 needs picom (sudo pacman -S picom): Windows 7 Basic instead" >&2
     echo "Windows 7 session on $display ($size); logs in $state ($0 log)"
     # Only X in the window: no Wayland, and a D-Bus of its own, so that the
     # session's tray bridge does not take the desktop's StatusNotifierWatcher.
