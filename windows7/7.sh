@@ -3,7 +3,8 @@
 # (Arch / CachyOS, no system files touched; scripts/setup.sh installs the real session).
 #
 #   windows7/7.sh setup ISO       build Wine and the bridge, extract the Windows 7 files, create the prefix
-#   windows7/7.sh run [WxH]       open the Windows 7 session in a Xephyr window (default: 1280x800)
+#   windows7/7.sh run [WxH]       open the Windows 7 session in a window (default: 1280x800): a rootful
+#                                 Xwayland on a Wayland desktop (drawn by the GPU), Xephyr on an X one
 #   windows7/7.sh log [NAME]      follow a log of the running session (default: xp-shell, the shell's)
 #   windows7/7.sh kill            stop the session and everything that runs in the prefix
 #
@@ -14,8 +15,10 @@
 #   W7_DISPLAY    the nested X display (default: the first free one from :5)
 #   W7_WINEDEBUG  Wine's debug channels (default: +timestamp,fixme-all)
 #   W7_AERO       1 (the default): Aero glass (desktop composition, Wine patches
-#                 0152 and 0153; the session starts picom, and stays Windows 7
-#                 Basic without it); 0: Windows 7 Basic
+#                 0152 and 0153; the session starts its compositor, w7-dwm);
+#                 0: Windows 7 Basic
+#   W7_NESTED     the nested X server: xwayland or xephyr (default: xwayland on a
+#                 Wayland desktop that has it, else xephyr)
 #   W7_HOME       the home the prefix's folders link to, for a new prefix (default: $HOME)
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
@@ -25,7 +28,7 @@ prefix=$(realpath -m -- "${W7_PREFIX:-$local/prefix-win7}")
 state=$(realpath -m -- "${W7_LOG:-$local/w7-run}")
 wine=$(realpath -m -- "${W7_WINE:-$local/wine-install/bin/wine}")
 aero=${W7_AERO:-1}
-packages='picom cabextract 7zip mingw-w64-gcc xorg-server-xephyr xorg-server-xvfb python-xlib python-gobject python-cairo xterm xorg-xsetroot'
+packages='cabextract 7zip mingw-w64-gcc xorg-server-xephyr xorg-xwayland xorg-server-xvfb python-xlib python-gobject python-cairo xterm xorg-xsetroot libxcomposite libxdamage libxfixes mesa'
 
 need() {
     local tool missing=()
@@ -41,7 +44,7 @@ need() {
 running_display() {
     local display
     display=$(cat "$state/display" 2>/dev/null) || return 1
-    [[ -e /tmp/.X11-unix/X${display#:} ]] && pgrep -f "^Xephyr $display " >/dev/null && echo "$display"
+    [[ -e /tmp/.X11-unix/X${display#:} ]] && pgrep -f "^(Xephyr|Xwayland) $display " >/dev/null && echo "$display"
 }
 
 stop_prefix() {
@@ -89,7 +92,18 @@ setup)
     echo "Done. Start it with: $0 run"
     ;;
 run)
-    need Xephyr dbus-run-session
+    nested=${W7_NESTED:-}
+    if [[ -z $nested ]]; then
+        # A rootful Xwayland draws with the GPU (glamor, DRI3) and so does the
+        # compositor in it; Xephyr draws in software, which makes Aero slow.
+        nested=xephyr
+        [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v Xwayland >/dev/null && nested=xwayland
+    fi
+    case $nested in
+    xwayland) need Xwayland dbus-run-session ;;
+    xephyr) need Xephyr dbus-run-session ;;
+    *) echo "W7_NESTED must be xwayland or xephyr" >&2; exit 2 ;;
+    esac
     [[ -x $wine ]] || { echo "Run $0 setup ISO first" >&2; exit 1; }
     [[ -f $prefix/win7-shell.json ]] || { echo "No Windows 7 prefix in $prefix: run $0 setup ISO first" >&2; exit 1; }
     "$root/bridge-wm/build.sh"
@@ -119,19 +133,23 @@ EOF
     echo "$display" > "$state/display"
     dpi=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import dpi; print(dpi.prefix_dpi(sys.argv[2]))' \
         "$root/session" "$prefix" 2>/dev/null || echo 96)
-    Xephyr "$display" -screen "$size" -dpi "$dpi" -title "Windows 7 Shell (debug, $display)" -no-host-grab \
-        -nolisten tcp > "$state/xephyr.log" 2>&1 &
-    xephyr=$!
-    trap 'kill $xephyr 2>/dev/null || true' EXIT
+    if [[ $nested == xwayland ]]; then
+        Xwayland "$display" -geometry "$size" -decorate -dpi "$dpi" -nolisten tcp > "$state/xserver.log" 2>&1 &
+    else
+        Xephyr "$display" -screen "$size" -dpi "$dpi" -title "Windows 7 Shell (debug, $display)" -no-host-grab \
+            -nolisten tcp > "$state/xserver.log" 2>&1 &
+    fi
+    xserver=$!
+    trap 'kill $xserver 2>/dev/null || true' EXIT
     for _ in $(seq 50); do
         [[ -e /tmp/.X11-unix/X${display#:} ]] && break
-        kill -0 $xephyr 2>/dev/null || { cat "$state/xephyr.log" >&2; exit 1; }
+        kill -0 $xserver 2>/dev/null || { cat "$state/xserver.log" >&2; exit 1; }
         sleep 0.1
     done
-    # (the session starts picom for Aero glass, or stays Windows 7 Basic without it)
-    [[ $aero != 1 ]] || command -v picom >/dev/null ||
-        echo "W7_AERO=1 needs picom (sudo pacman -S picom): Windows 7 Basic instead" >&2
-    echo "Windows 7 session on $display ($size); logs in $state ($0 log)"
+    # (the session starts w7-dwm for Aero glass, or stays Windows 7 Basic without it)
+    [[ $aero != 1 || -x $local/bridge/w7-dwm ]] ||
+        echo "W7_AERO=1 needs w7-dwm (sudo pacman -S libxcomposite libxdamage libxfixes mesa): Windows 7 Basic instead" >&2
+    echo "Windows 7 session on $display ($size, $nested); logs in $state ($0 log)"
     # Only X in the window: no Wayland, and a D-Bus of its own, so that the
     # session's tray bridge does not take the desktop's StatusNotifierWatcher.
     env -u WAYLAND_DISPLAY -u WIN4WINE_IPC -u XDG_SESSION_TYPE -u SESSION_MANAGER \
@@ -144,7 +162,7 @@ log)
     ;;
 kill)
     if display=$(running_display); then
-        pkill -f "^Xephyr $display " || true
+        pkill -f "^(Xephyr|Xwayland) $display " || true
     fi
     stop_prefix
     ;;

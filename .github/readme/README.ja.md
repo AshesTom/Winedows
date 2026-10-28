@@ -122,10 +122,14 @@ sudo rm -f /usr/share/wayland-sessions/windows7-shell-wayland.desktop /usr/local
 ## 制限
 
 - **Aero のガラス（試作、既定）**: タスクバー、スタートメニュー、窓の枠がガラスになり、Aero のボタン、配色の色（スカイ）、
-  ガラスの反射、タスクバーのライブ サムネイルと Aero Peek があります（Wine のパッチ 0152・0153）。セッションが picom
-  （[windows7/picom.conf](../../windows7/picom.conf)）を起動してガラスを混ぜてぼかします。picom が無いとき、または
-  `win7-session.json` の `"aero": false`（`W7_AERO=0 windows7/7.sh run`）では Windows 7 ベーシックです。Peek で隠れた窓の輪郭はまだ出ません。
-- ネットワーク、ヘルプとサポート、コントロール パネルの中身の多くは、Wine にその部品が無いので使えません。
+  ガラスの反射、タスクバーのライブ サムネイルと Aero Peek があります（Wine のパッチ 0152・0153）。セッションの
+  コンポジター w7-dwm（[windows7/dwm.c](../../windows7/dwm.c)。EGL の OpenGL ES）がガラスを混ぜて後ろをぼかし、Windows 7 の窓の影を付けます。w7-dwm が
+  無いとき（ビルドの時に EGL の開発用ファイルが無かった）、または `win7-session.json` の `"aero": false`（`W7_AERO=0 windows7/7.sh run`）では Windows 7 ベーシックです。Peek で隠れた窓の輪郭はまだ出ません。
+  Wayland のデスクトップでは、`windows7/7.sh run` は Xephyr ではなく、GPU で描く rootful の Xwayland でセッションを開きます。
+- 通知領域は Windows 7 のもの（SysTray（stobject）、ネットワーク（pnidui）と音量（SndVolSSO）のアイコン。利用者の Windows 7 の
+  ファイルから）です。状態はまだ正しくありません。音量は出力デバイスが無いと言い、ネットワークは「識別中」のままです（Wine に
+  ネットワークの一覧と接続のサービスが無いため）。
+- ネットワークのフォルダー、ヘルプとサポート、コントロール パネルの中身の多くは、Wine にその部品が無いので使えません。
 - スタートメニューの「ロック」「スリープ」「休止状態」は何もしません。
 
 ## 仕組み

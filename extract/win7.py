@@ -25,7 +25,7 @@ import media  # noqa: E402
 RT_GROUP_ICON = 14
 
 # Bump when the extracted files change; setup.sh then extracts again.
-EXTRACT_VERSION = 6
+EXTRACT_VERSION = 7
 # The image's language -> our language (the session's and the prefix's).
 LANGUAGES = {'ja-JP': 'ja', 'en-US': 'en'}
 # Windows 7's shell and the DLLs it uses from Windows 7 (prefix/win7.py says which
@@ -33,7 +33,12 @@ LANGUAGES = {'ja-JP': 'ja', 'en-US': 'en'}
 SYSTEM32 = ('explorerframe.dll', 'shell32.dll', 'shlwapi.dll', 'propsys.dll', 'shdocvw.dll',
             'dui70.dll', 'duser.dll', 'profapi.dll', 'sndvolsso.dll', 'winbrand.dll', 'shacct.dll',
             'thumbcache.dll', 'authui.dll', 'linkinfo.dll', 'actxprxy.dll',
-            'imageres.dll', 'sud.dll', 'DeviceCenter.dll')
+            'imageres.dll', 'sud.dll', 'DeviceCenter.dll',
+            # The notification area's system icons and their flyouts, as Windows 7
+            # has them: SysTray (stobject, with batmeter for the power), the network
+            # (pnidui, with QUtil, and VAN for the list of networks) and the volume
+            # (SndVolSSO, and SndVol.exe for its flyout and mixer).
+            'stobject.dll', 'batmeter.dll', 'devobj.dll', 'pnidui.dll', 'qutil.dll', 'van.dll', 'sndvol.exe')
 # Their 32-bit copies (SysWOW64): every program of the session uses Windows 7's
 # shell DLLs for its file dialogs (prefix/win7.py).
 SYSWOW64 = ('explorerframe.dll', 'shell32.dll', 'shlwapi.dll', 'propsys.dll', 'shdocvw.dll', 'dui70.dll',
@@ -48,6 +53,8 @@ COMPONENTS = ('microsoft-windows-explorer', 'microsoft-windows-explorerframe', '
               'microsoft-windows-authentication-authui', 'microsoft-windows-linkinfo',
               'microsoft-windows-activexproxy', 'microsoft-windows-imageres', 'microsoft-windows-sud',
               'microsoft-windows-devicecenter',
+              # The notification area's SysTray and the list of networks
+              'microsoft-windows-stobject', 'microsoft-windows-batmeter', 'microsoft-windows-van',
               # The shell's settings (Explorer\Advanced) and the Network folder's registration.
               'microsoft-windows-shell-client', 'microsoft-windows-networkexplorer',
               # Text files' type, icon and verbs (Wine's Notepad opens them).

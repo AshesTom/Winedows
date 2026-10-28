@@ -124,10 +124,14 @@ Everything built, extracted and the prefix live in `.local/` of the checkout. In
 
 - **Aero Glass (experimental, the default)**: the taskbar, Start menu and window frames are glass with Aero's caption
   buttons, tinted with the window color (Sky) and the glass's reflection, with live taskbar thumbnails and Aero Peek
-  (Wine patches 0152 and 0153). The session starts picom ([windows7/picom.conf](windows7/picom.conf)) to blend and blur
-  the glass; without picom, or with `"aero": false` in `win7-session.json` (`W7_AERO=0 windows7/7.sh run`), it is
-  Windows 7 Basic. Peek shows no outlines of the hidden windows yet.
-- Network, Help and Support and most of Control Panel are missing: Wine has no counterparts for their components.
+  (Wine patches 0152 and 0153). The session's own compositor, w7-dwm ([windows7/dwm.c](windows7/dwm.c), OpenGL ES
+  through EGL), blends the glass, blurs behind it and casts Windows 7's window shadows; without it (no EGL development files when it was built), or with
+  `"aero": false` in `win7-session.json` (`W7_AERO=0 windows7/7.sh run`), it is Windows 7 Basic. On a Wayland desktop,
+  `windows7/7.sh run` opens the session in a rootful Xwayland, drawn by the GPU, rather than Xephyr. Peek shows no outlines of the hidden windows yet.
+- The notification area is Windows 7's own: SysTray (stobject), the network icon (pnidui) and the volume icon
+  (SndVolSSO), from the user's Windows 7 files. Their state is not right yet: the volume says no output device is
+  installed and the network stays at "Identifying" (Wine has no network list and connection services for them).
+- The Network folder, Help and Support and most of Control Panel are missing: Wine has no counterparts for their components.
 - Lock, Sleep and Hibernate in the Start menu do nothing.
 
 ## How it works

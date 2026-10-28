@@ -42,7 +42,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = 'win7-shell.json'
 # Bump when the registry settings below change; stage then applies them again.
-VERSION = 18
+VERSION = 19
 LOCALES = {'ja': 'ja_JP.UTF-8', 'en': 'en_US.UTF-8'}
 # Wine's own Common Controls 6 (which an earlier version of this prefix replaced).
 SXS = 'amd64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef'
@@ -64,9 +64,35 @@ NAMES = (
 # thumbnails).
 NATIVE = ('explorerframe', 'shell32', 'shlwapi', 'propsys', 'shdocvw', 'dui70', 'duser', 'profapi',
           'thumbcache', 'linkinfo')
-# Native in the shell only: the taskbar's volume, the Start menu's
-# branding, user picture and shut down.
-SHELL_ONLY = ('sndvolsso', 'winbrand', 'shacct', 'authui')
+# Native in the shell only: the notification area's system icons (SysTray,
+# power, network, volume), the Start menu's branding, user picture and shut down.
+SHELL_ONLY = ('sndvolsso', 'winbrand', 'shacct', 'authui', 'stobject', 'batmeter', 'devobj', 'pnidui', 'qutil',
+              'van')
+# Programs of the notification area, in system32: the volume's flyout and mixer.
+TRAY_PROGRAMS = ('sndvol',)
+# The notification area's COM objects (DLL, threading model): SysTray and its
+# invoker (stobject), the network icon's shell service object and its pages
+# (pnidui; its component, netshell, registers the Network Connections folder
+# too, whose files would be Windows 7's netshell.dll, so only these), and the
+# list of networks (VAN). New prefixes get stobject's and VAN's from their
+# components' manifests too.
+TRAY_CLASSES = {
+    '{35CEC8A3-2BE6-11D2-8773-92E220524153}': ('stobject', 'Both'),
+    '{730F6CDC-2C86-11D2-8773-92E220524153}': ('stobject', 'Both'),
+    '{C2796011-81BA-4148-8FCA-C6643245113F}': ('pnidui', 'Both'),
+    '{A09C534C-0057-462E-8402-2A21D38BFCA1}': ('pnidui', 'Apartment'),
+    '{7D9239E5-782C-4126-99AD-81F0E8DA8F5C}': ('pnidui', 'Apartment'),
+    '{D032FDC6-3736-4AF0-BE08-6F6E52979BBD}': ('pnidui', 'Apartment'),
+    '{03A0E2CD-23A9-45ed-968F-6FDA22B2285E}': ('pnidui', 'Apartment'),
+    '{996d2d72-4c19-47f8-8f58-0bb13e80a659}': ('pnidui', 'Apartment'),
+    '{db4f3fa7-5a08-4100-95de-b46df509b902}': ('van', 'Apartment'),
+    '{5326dddc-ec38-428d-b219-ce6dadb35de3}': ('van', 'Apartment'),
+}
+# The network icon's shell service object, which explorer starts
+PNIDUI_SSO = '{C2796011-81BA-4148-8FCA-C6643245113F}'
+# Windows Audio's services, which SndVolSSO.dll and SndVol.exe ask the service
+# manager about (windows7/audiosrv.c answers as both).
+AUDIO_SERVICES = ('AudioSrv', 'AudioEndpointBuilder')
 # Wine's programs that keep Wine's shell DLLs: its desktop and services, the
 # programs that link Wine to Linux (menus, the browser, start for `wine NAME`
 # and Linux launchers) and those built on Wine's shell32 (its Control Panel).
@@ -159,12 +185,16 @@ class Prefix:
         # (its comctl32.dll stays there, for Windows 7's DLLs only)
         for folder, system in (('native', self.system), ('wow64', self.path / 'drive_c/windows/syswow64')):
             native = self.path / 'drive_c/w7' / folder
-            for source in sorted(native.glob('*.dll')):
+            for source in sorted([*native.glob('*.dll'), *native.glob('*.exe')]):
                 if source.name.lower() == 'comctl32.dll':
                     continue
                 self.place(source, system / source.name)
             for source in sorted(native.glob('*/*.mui')):
                 self.place(source, system / source.parent.name / source.name)
+        # Windows Audio's services (windows7/audiosrv.c)
+        audiosrv = ROOT / '.local/bridge/audiosrv.exe'
+        if audiosrv.is_file():
+            self.place(audiosrv, self.system / 'audiosrv.exe')
         # Wine's own Common Controls 6, for every other program.
         wine_controls = self.wine.parent.parent / 'lib/wine/x86_64-windows/comctl32_v6.dll'
         assembly = self.path / f'drive_c/windows/winsxs/{SXS}/comctl32.dll'
@@ -191,6 +221,20 @@ class Prefix:
         for view, system in (('/reg:64', 'system32'), ('/reg:32', 'syswow64')):
             self.run('reg', 'add', rf'HKCR\CLSID\{clsid}\InProcServer32', '/ve', '/t', 'REG_EXPAND_SZ',
                      '/d', rf'%SystemRoot%\{system}\{proxies}.dll', '/f', view)
+
+    def tray_registrations(self):
+        """The notification area's COM objects (TRAY_CLASSES) and Windows Audio's services."""
+        for clsid, (dll, threading) in TRAY_CLASSES.items():
+            key = rf'HKCR\CLSID\{clsid}\InProcServer32'
+            self.run('reg', 'add', key, '/ve', '/t', 'REG_EXPAND_SZ', '/d', rf'%SystemRoot%\system32\{dll}.dll', '/f',
+                     '/reg:64')
+            self.reg(key, 'ThreadingModel', threading)
+        self.reg(rf'HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\ShellServiceObjects\{PNIDUI_SSO}',
+                 'AutoStart', '')
+        for service in AUDIO_SERVICES:
+            if self.run('sc', 'query', service, check=False).returncode:
+                self.run('sc', 'create', service, 'binpath=', r'C:\windows\system32\audiosrv.exe', 'type=', 'share',
+                         'start=', 'auto', check=False)
 
     def builtin(self, program, undo=False):
         """Give PROGRAM (an executable's name) Wine's shell DLLs instead of Windows 7's
@@ -257,9 +301,11 @@ class Prefix:
                          '/d', r'@C:\w7\res\notepad.exe.mui,-469', '/f', view)
                 self.run('reg', 'add', r'HKCR\.txt\ShellNew', '/v', 'ItemName', '/t', 'REG_EXPAND_SZ',
                          '/d', r'@C:\w7\res\notepad.exe.mui,-470', '/f', view)
-        # Linux tray icons and the input method's mode stay in the notification
-        # area (Windows 7's "always show all icons and notifications").
-        self.reg(r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer', 'EnableAutoTray', 0, 'REG_DWORD')
+        # Windows 7's own notification area: new icons go behind its arrow
+        # until the user shows them (prefixes before had "always show all").
+        self.run('reg', 'delete', r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer', '/v', 'EnableAutoTray',
+                 '/f', check=False)
+        self.tray_registrations()
         icons = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel'
         for clsid in HIDDEN_DESKTOP_ITEMS:
             self.reg(icons, clsid, 1, 'REG_DWORD')
@@ -526,6 +572,10 @@ def shell_only_files(prefix, assets):
             if not target.exists() and (assets / f'{system}/{name}.dll').is_file():
                 prefix.copy(assets / f'{system}/{name}.dll', assets / f'{system}/{ui}/{name}.dll.mui', target)
                 missing = True
+    for name in TRAY_PROGRAMS:
+        target = prefix.path / f'drive_c/w7/native/{name}.exe'
+        if not target.exists() and (assets / f'system32/{name}.exe').is_file():
+            prefix.copy(assets / f'system32/{name}.exe', assets / f'system32/{ui}/{name}.exe.mui', target)
     return missing
 
 

@@ -33,3 +33,21 @@ compile "$root/.local/bridge/linux-links.exe" "$root/session/linux-links.c" -lol
 compile "$root/.local/bridge/playsound.exe" "$root/session/playsound.c" -mwindows -lwinmm -lshell32
 # The session's keyboard layout follows XP's input languages (session/keyboard.py).
 compile "$root/.local/bridge/keyboard-watch.exe" "$root/session/keyboard-watch.c" -mwindows -lshell32 -ladvapi32
+# Windows Audio's services for Windows 7's volume icon (windows7/audiosrv.c), 64-bit.
+MINGW_CC=x86_64-w64-mingw32-gcc compile "$root/.local/bridge/audiosrv.exe" "$root/windows7/audiosrv.c" -ladvapi32
+# Aero glass: the Windows 7 session's compositor (windows7/dwm.c), a Linux program.
+dwm_libs='x11 xcomposite xdamage xfixes xext egl glesv2'
+if pkg-config --exists $dwm_libs; then
+    temporary=$(mktemp "$root/.local/bridge/w7-dwm.XXXXXX")
+    # shellcheck disable=SC2046
+    if "${CC:-cc}" -std=gnu11 -Wall -Wextra -Werror -O2 "$root/windows7/dwm.c" -o "$temporary" \
+        $(pkg-config --cflags --libs $dwm_libs); then
+        chmod 755 "$temporary"
+        mv -f -- "$temporary" "$root/.local/bridge/w7-dwm"
+    else
+        rm -f -- "$temporary"
+        exit 1
+    fi
+else
+    echo "w7-dwm not built (no development files for: $dwm_libs): Windows 7 Basic instead of Aero" >&2
+fi

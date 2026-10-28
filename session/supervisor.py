@@ -21,7 +21,7 @@ from xml.sax.saxutils import escape
 from Xlib import X, display, error
 
 import dpi
-from wineenv import SHELLS, aero, environment
+from wineenv import COMPOSITOR, SHELLS, aero, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path.home() / '.config/win4wine/win7-session.json'
@@ -491,10 +491,15 @@ class Session:
             if wm.poll() is not None:
                 raise RuntimeError('WM failed; see wm.log')
         if not self.compositor and aero(self.config, self.env):
-            # Aero glass: picom blends the glass windows and blurs behind them
-            self.spawn(['picom', '--config', str(ROOT / 'windows7/picom.conf')], 'picom')
+            # Aero glass: w7-dwm blends the glass windows and blurs behind them
+            dwm = self.spawn([str(COMPOSITOR)], 'dwm')
+            time.sleep(.3)
+            if dwm.poll() is not None:
+                # No GL or Composite on this display: the glass would be black.
+                print('w7-dwm failed (see dwm.log): Windows 7 Basic instead', file=sys.stderr)
+                self.env.pop('WIN4WINE_AERO', None)
         elif self.config.get('aero', True) and not self.compositor:
-            print('Aero needs picom: Windows 7 Basic instead', file=sys.stderr)
+            print('Aero needs w7-dwm (bridge-wm/build.sh): Windows 7 Basic instead', file=sys.stderr)
         if self.cursor_theme and shutil.which('xsetroot') and not self.compositor:
             # The WM's root cursor comes from the core cursor font; xsetroot takes the theme's.
             subprocess.run(['xsetroot', '-cursor_name', 'left_ptr'], env=self.env, check=False)

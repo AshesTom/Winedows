@@ -5,7 +5,6 @@ program started with "win4wine-wine" outside the session gets the session's
 prefix, Wine and opt-ins, and looks and behaves as one started from the shell."""
 import os
 from pathlib import Path
-import shutil
 
 # The shell a session starts. The prefix is made for it (prefix/win7.py); its
 # staging step runs before each start.
@@ -23,12 +22,16 @@ def config_dir():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'win4wine'
 
 
+# The session's compositor for Aero glass (windows7/dwm.c, bridge-wm/build.sh).
+COMPOSITOR = Path(__file__).resolve().parents[1] / '.local/bridge/w7-dwm'
+
+
 def aero(config, base=os.environ):
     """Whether CONFIG's session has Aero glass: the default ("aero": false
-    for Windows 7 Basic), in an X session (not Wayland), with picom to blend
-    the glass; without a compositor the glass would show black, so it stays
-    Windows 7 Basic."""
-    return bool(config.get('aero', True)) and not base.get('WAYLAND_DISPLAY') and shutil.which('picom') is not None
+    for Windows 7 Basic), in an X session (not Wayland), with w7-dwm built to
+    blend the glass; without a compositor the glass would show black, so it
+    stays Windows 7 Basic."""
+    return bool(config.get('aero', True)) and not base.get('WAYLAND_DISPLAY') and os.access(COMPOSITOR, os.X_OK)
 
 
 def environment(base, config, shell):
@@ -64,6 +67,6 @@ def environment(base, config, shell):
     if aero(config, base):
         # Desktop composition in Windows 7's session: Aero glass (Wine
         # patches 0152, 0153), blended and blurred by the session's X
-        # compositor (supervisor.py starts picom).
+        # compositor (supervisor.py starts w7-dwm).
         env['WIN4WINE_AERO'] = '1'
     return env

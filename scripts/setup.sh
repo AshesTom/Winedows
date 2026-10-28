@@ -109,8 +109,8 @@ arch_packages() {
         # the session: X, the WM and tray bridge, recovery terminal, root cursor
         xorg-server xorg-xsetroot xorg-setxkbmap xterm python python-xlib
         python-gobject glib2 gdk-pixbuf2 librsvg
-        # Aero glass: the X compositor that blends and blurs it
-        picom
+        # Aero glass: the session's X compositor (windows7/dwm.c) is built with these
+        libxcomposite libxdamage libxfixes mesa
     )
     # 7z: 7zip, unless p7zip (which conflicts with it) already gives one
     command -v 7z >/dev/null || packages+=(7zip)
@@ -160,8 +160,8 @@ else
         xserver-xorg x11-xserver-utils x11-xkb-utils xterm python3 python3-xlib
         python3-gi gir1.2-glib-2.0 gir1.2-gdkpixbuf-2.0 librsvg2-common
         locales
-        # Aero glass: the X compositor that blends and blurs it
-        picom
+        # Aero glass: the session's X compositor (windows7/dwm.c) is built with these
+        libxcomposite-dev libxdamage-dev libxfixes-dev libegl-dev libgles-dev
     )
     if [[ $wayland == yes ]]; then
         packages+=(
