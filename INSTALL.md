@@ -3,7 +3,7 @@
 **日本語** · [English](.github/readme/INSTALL.en.md)
 
 > [!WARNING]
-> - Windows XP の ISO はご自身で入手してください。利用は自己責任でお願いします（[README の注意](README.md#注意)）。
+> - Windows XP の ISO はご自身で入手してください。利用は自己責任でお願いします（[README の注意](.github/readme/README.ja.md#注意)）。
 > - 実験的なプロジェクトです。確かめているのは、**新しくインストールした Debian 13** に `scripts/setup.sh` で入れた場合だけです。
 >   すでに使っている環境への導入は試していません。導入スクリプトはパッケージを入れ、LightDM の設定を変えることがあります
 >   （下の「2. スクリプトがすること」）。仮想マシンや試験用のマシンで試すことをおすすめします。
@@ -22,8 +22,8 @@
 XP のシェルを使う利用者で（root ではなく）実行してください。パッケージとシステムのファイルには sudo を使います。
 
 ```sh
-git clone https://github.com/mikuta0407/win4wine.git ~/win4wine
-cd ~/win4wine
+git clone -b WinXP https://github.com/AshesTom/Winedows.git ~/winedows
+cd ~/winedows
 scripts/setup.sh --media /path/to/WindowsXPSP3.iso --greeter
 ```
 
@@ -79,7 +79,7 @@ scripts/setup.sh --media /path/to/WindowsXPSP3.iso --greeter
 `session.json` のロケールと日本語入力の設定は `setup.sh` が書き換えます。ログオフし、Ctrl+Alt+F2 の文字の画面（または SSH）で:
 
 ```sh
-cd ~/win4wine
+cd ~/winedows
 mv .local/assets .local/assets-ja
 mv .local/prefix .local/prefix-ja
 scripts/setup.sh --media /path/to/English-XP.iso --greeter
@@ -161,7 +161,7 @@ Windows 7 のシェルは `master` ブランチにあります（`git switch mas
 3. 次のどれかを実行します。
 
    ```sh
-   cd ~/win4wine
+   cd ~/winedows
    scripts/setup.sh --media /path/to/WindowsXPSP3.iso --theme classic   # XP の「Windows クラシック」。戻すときは --theme luna
    scripts/setup.sh --media /path/to/WindowsXPSP3.iso --dpi 120          # 文字の大きさ。96 が標準（XP の「通常のサイズ」）
    scripts/setup.sh --media /path/to/WindowsXPSP3.iso --font-smoothing cleartype   # ClearType。戻すときは --font-smoothing standard

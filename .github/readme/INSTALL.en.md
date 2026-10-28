@@ -3,7 +3,7 @@
 [日本語](../../INSTALL.md) · **English**
 
 > [!WARNING]
-> - Obtain the Windows XP ISO yourself, and use this at your own risk (see [Caution in the README](README.en.md#caution)).
+> - Obtain the Windows XP ISO yourself, and use this at your own risk (see [Caution in the README](../../README.md#caution)).
 > - This is an experimental project. It has only been tested on a **freshly installed Debian 13** set up with `scripts/setup.sh`;
 >   installing it on a system already in use has not been tried. The script installs packages and may change LightDM's
 >   settings (see "2. What the script does"). A virtual machine or a spare machine is recommended.
@@ -23,8 +23,8 @@
 Run it as the user who will use the XP shell (not as root). It uses sudo for packages and system files.
 
 ```sh
-git clone https://github.com/mikuta0407/win4wine.git ~/win4wine
-cd ~/win4wine
+git clone -b WinXP https://github.com/AshesTom/Winedows.git ~/winedows
+cd ~/winedows
 scripts/setup.sh --media /path/to/WindowsXPSP3.iso --greeter
 ```
 
@@ -82,7 +82,7 @@ the other ISO: `setup.sh` does not make them again while they exist. The Wine bu
 locale and the input method in `session.json`. Log off, and on the text console (Ctrl+Alt+F2) or over SSH:
 
 ```sh
-cd ~/win4wine
+cd ~/winedows
 mv .local/assets .local/assets-ja
 mv .local/prefix .local/prefix-ja
 scripts/setup.sh --media /path/to/English-XP.iso --greeter
@@ -164,7 +164,7 @@ session's Wine is not running: log off first.
 3. Run one of these:
 
    ```sh
-   cd ~/win4wine
+   cd ~/winedows
    scripts/setup.sh --media /path/to/WindowsXPSP3.iso --theme classic   # XP's "Windows Classic"; --theme luna goes back
    scripts/setup.sh --media /path/to/WindowsXPSP3.iso --dpi 120          # text size; 96 is normal (XP's "Normal size")
    scripts/setup.sh --media /path/to/WindowsXPSP3.iso --font-smoothing cleartype   # ClearType; --font-smoothing standard goes back
