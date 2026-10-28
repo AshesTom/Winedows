@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "unixshell.h"
 
 typedef struct
 {
@@ -189,71 +190,38 @@ static BOOL find_interface(const WCHAR *guid, WCHAR *ifname, size_t size)
     return ok;
 }
 
-/* Wine runs a Unix executable named in CreateProcess natively; it cannot
- * wait for one, nor give it a Win32 pipe as stdout (xptray.c). */
-static BOOL spawn(const char *script)
+/* The shell through unixshell.c, with UTF-8 scripts (they name SSIDs). */
+static WCHAR *wide(const char *text)
 {
-    WCHAR line[4096];
-    STARTUPINFOW startup = {.cb = sizeof(startup)};
-    PROCESS_INFORMATION process;
-    int n = swprintf(line, ARRAYSIZE(line), L"/usr/bin/env -u WINEDEBUG -u WINEDLLOVERRIDES /bin/sh -c \"");
-    /* Windows' quoting: backslashes count only before a quote. */
-    for (const char *c = script; *c && n < (int)ARRAYSIZE(line) - 8; c++)
-    {
-        size_t slashes = 0;
-        while (c[slashes] == '\\') slashes++;
-        if (c[slashes] == '"' || !c[slashes])
-            for (size_t i = 0; i < slashes; i++) line[n++] = '\\';
-        for (size_t i = 0; i < slashes; i++) line[n++] = '\\';
-        c += slashes;
-        if (!*c) break;
-        if (*c == '"') line[n++] = '\\';
-        line[n++] = (unsigned char)*c;
-    }
-    line[n++] = '"';
-    line[n] = 0;
-    if (!CreateProcessW(L"Z:\\usr\\bin\\env", line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startup,
-                        &process))
-        return FALSE;
-    if (process.hThread) CloseHandle(process.hThread);
-    if (process.hProcess) CloseHandle(process.hProcess);
-    return TRUE;
+    int length = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+    WCHAR *out = length ? malloc(length * sizeof(WCHAR)) : NULL;
+    if (out) MultiByteToWideChar(CP_UTF8, 0, text, -1, out, length);
+    return out;
 }
 
+static BOOL spawn(const char *script)
+{
+    WCHAR *line = wide(script);
+    BOOL ok = line && unix_spawn(line);
+    free(line);
+    return ok;
+}
+
+/* SCRIPT's output without its errors (nmcli's warnings), as a string to free(),
+ * or NULL when it did not finish within TIMEOUT milliseconds. */
 static char *capture(const char *script, DWORD timeout)
 {
-    WCHAR path[MAX_PATH], done[MAX_PATH + 8];
-    char unix_path[MAX_PATH], *command, *output = NULL;
-    size_t length;
-    if (!GetTempFileNameW(L"Z:\\tmp", L"wzc", 0, path)) return NULL;
-    swprintf(done, ARRAYSIZE(done), L"%ls.done", path);
-    WideCharToMultiByte(CP_UTF8, 0, path + 2, -1, unix_path, sizeof(unix_path), NULL, NULL);
-    for (char *p = unix_path; *p; p++) if (*p == '\\') *p = '/';
-    length = strlen(script) + strlen(unix_path) * 2 + 48;
-    if ((command = malloc(length)))
+    size_t length = strlen(script) + 16;
+    char *quiet = malloc(length), *output = NULL;
+    WCHAR *line;
+    if (!quiet) return NULL;
+    snprintf(quiet, length, "(%s) 2>/dev/null", script);
+    if ((line = wide(quiet)))
     {
-        snprintf(command, length, "(%s) > '%s' 2>/dev/null; : > '%s.done'", script, unix_path, unix_path);
-        if (spawn(command))
-        {
-            ULONGLONG started = GetTickCount64();
-            while (GetFileAttributesW(done) == INVALID_FILE_ATTRIBUTES && GetTickCount64() - started < timeout)
-                Sleep(20);
-            HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (file != INVALID_HANDLE_VALUE)
-            {
-                DWORD size = GetFileSize(file, NULL), read = 0;
-                if (size != INVALID_FILE_SIZE && (output = malloc(size + 1)))
-                {
-                    ReadFile(file, output, size, &read, NULL);
-                    output[read] = 0;
-                }
-                CloseHandle(file);
-            }
-        }
-        free(command);
+        output = unix_output(line, timeout);
+        free(line);
     }
-    DeleteFileW(path);
-    DeleteFileW(done);
+    free(quiet);
     return output;
 }
 

@@ -52,13 +52,11 @@ BOOL unix_spawn(const WCHAR *script)
     return TRUE;
 }
 
-BOOL unix_capture(const WCHAR *script, char *buffer, DWORD size)
+char *unix_output(const WCHAR *script, DWORD timeout)
 {
     WCHAR path[MAX_PATH], done_path[MAX_PATH + 8], unix_path[MAX_PATH], *command;
-    DWORD done = 0;
-    BOOL ok = FALSE;
-    *buffer = 0;
-    if (!GetTempFileNameW(L"Z:\\tmp", L"xpu", 0, path)) return FALSE;
+    char *output = NULL;
+    if (!GetTempFileNameW(L"Z:\\tmp", L"xpu", 0, path)) return NULL;
     swprintf(done_path, ARRAYSIZE(done_path), L"%ls.done", path);
     /* Z:\tmp\... is /tmp/... for the shell. */
     wcscpy(unix_path, path + 2);
@@ -70,7 +68,7 @@ BOOL unix_capture(const WCHAR *script, char *buffer, DWORD size)
         if (unix_spawn(command))
         {
             ULONGLONG started = GetTickCount64();
-            while (GetFileAttributesW(done_path) == INVALID_FILE_ATTRIBUTES && GetTickCount64() - started < 10000)
+            while (GetFileAttributesW(done_path) == INVALID_FILE_ATTRIBUTES && GetTickCount64() - started < timeout)
                 Sleep(20);
             /* Only a finished script's output: a slower one would be cut short. */
             if (GetFileAttributesW(done_path) != INVALID_FILE_ATTRIBUTES)
@@ -78,7 +76,12 @@ BOOL unix_capture(const WCHAR *script, char *buffer, DWORD size)
                 HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
                 if (file != INVALID_HANDLE_VALUE)
                 {
-                    ok = ReadFile(file, buffer, size - 1, &done, NULL);
+                    DWORD size = GetFileSize(file, NULL), done = 0;
+                    if (size != INVALID_FILE_SIZE && (output = malloc(size + 1)))
+                    {
+                        if (!ReadFile(file, output, size, &done, NULL)) done = 0;
+                        output[done] = 0;
+                    }
                     CloseHandle(file);
                 }
             }
@@ -87,8 +90,17 @@ BOOL unix_capture(const WCHAR *script, char *buffer, DWORD size)
     }
     DeleteFileW(path);
     DeleteFileW(done_path);
-    buffer[done] = 0;
-    return ok;
+    return output;
+}
+
+BOOL unix_capture(const WCHAR *script, char *buffer, DWORD size)
+{
+    char *output = unix_output(script, 10000);
+    *buffer = 0;
+    if (!output) return FALSE;
+    lstrcpynA(buffer, output, (int)size);
+    free(output);
+    return TRUE;
 }
 
 void unix_quote(const WCHAR *source, WCHAR *target, size_t capacity)

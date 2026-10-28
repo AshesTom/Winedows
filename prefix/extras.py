@@ -34,6 +34,7 @@ import xp_schemes
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / 'session'))
 import linux_apps  # noqa: E402
+import wine_reg  # noqa: E402
 import xp_update  # noqa: E402
 
 BRIDGE = ROOT / '.local/bridge'
@@ -531,10 +532,8 @@ def security_center(assets, prefix, wine, xpx):
     # setup offers, unless chosen otherwise; the Windows Update Agent reads it
     # from the 64-bit view.
     auto_update = r'HKLM\Software\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update'
-    if subprocess.run([wine, 'reg', 'query', auto_update, '/v', 'AUOptions', '/reg:64'], env=env,
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-        subprocess.run([wine, 'reg', 'add', auto_update, '/v', 'AUOptions', '/t', 'REG_DWORD', '/d', '4', '/f',
-                        '/reg:64'], env=env, check=False, stdout=subprocess.DEVNULL)
+    if wine_reg.query(wine, env, auto_update, 'AUOptions', view=64) is None:
+        wine_reg.add(wine, env, auto_update, '/v', 'AUOptions', '/t', 'REG_DWORD', '/d', '4', '/reg:64')
 
 
 # XP's Help and Support Center (assets/helpctr) in PCHealth\HelpCtr\Binaries,
@@ -916,14 +915,10 @@ def xp_user_defaults(prefix, wine):
     env = wine_env(prefix)
 
     def query(key, name):
-        out = subprocess.run([wine, 'reg', 'query', key, '/v', name], env=env, capture_output=True,
-                             text=True).stdout
-        line = next((l for l in out.splitlines() if l.strip().startswith(name)), '')
-        return line.split(None, 2)[2].strip() if len(line.split(None, 2)) > 2 else ''
+        return wine_reg.query(wine, env, key, name) or ''
 
     def add(key, name, kind, value):
-        subprocess.run([wine, 'reg', 'add', key, '/v', name, '/t', kind, '/d', value, '/f'], env=env,
-                       stdout=subprocess.DEVNULL, check=False)
+        wine_reg.add(wine, env, key, '/v', name, '/t', kind, '/d', value)
 
     # Once per prefix: the user's later choices in Display Properties (its
     # Appearance page, a theme's colours, Effects) stay. A prefix that had
@@ -955,15 +950,12 @@ def registered_owner(prefix, wine):
     full name, or its login, while it is empty: a name set since stays."""
     env = wine_env(prefix)
     key = r'HKLM\Software\Microsoft\Windows NT\CurrentVersion'
-    out = subprocess.run([wine, 'reg', 'query', key, '/v', 'RegisteredOwner', '/reg:32'], env=env,
-                         capture_output=True, text=True).stdout
-    if re.search(r'RegisteredOwner\s+REG_SZ\s+\S', out):
+    if wine_reg.query(wine, env, key, 'RegisteredOwner', view=32):
         return
     account = pwd.getpwuid(os.getuid())
     owner = account.pw_gecos.split(',')[0].strip() or account.pw_name
     for view in ('/reg:32', '/reg:64'):
-        subprocess.run([wine, 'reg', 'add', key, '/v', 'RegisteredOwner', '/t', 'REG_SZ', '/d', owner, '/f', view],
-                       env=env, stdout=subprocess.DEVNULL, check=False)
+        wine_reg.add(wine, env, key, '/v', 'RegisteredOwner', '/t', 'REG_SZ', '/d', owner, view)
 
 
 # The categories of XP's Control Panel (its category view's "or pick a

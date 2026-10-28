@@ -90,8 +90,8 @@ for dll in rasdlg dot3dlg; do
     compile "$root/.local/bridge/netcon/$dll.dll" -std=gnu11 -shared "$helpers/netshell-$dll.c" "$helpers/netshell-$dll.def"
 done
 # XP's wireless dialogs (wzcdlg.dll) with NetworkManager for the Wireless Zero Configuration service.
-compile "$root/.local/bridge/netcon/wzcsapi.dll" -std=gnu11 -shared "$helpers/netshell-wzcsapi.c" \
-    "$helpers/netshell-wzcsapi.def" -lole32 -lshell32 -luuid
+DEPENDS=$helpers/unixshell.h compile "$root/.local/bridge/netcon/wzcsapi.dll" -std=gnu11 -shared \
+    "$helpers/netshell-wzcsapi.c" "$helpers/unixshell.c" "$helpers/netshell-wzcsapi.def" -lole32 -lshell32 -luuid
 compile "$root/.local/bridge/startmenu.exe" -std=gnu11 "$helpers/startmenu.c" -lshell32 -lole32 -luuid -ladvapi32 -luser32
 compile "$root/.local/bridge/startmenu-view.exe" "$helpers/startmenu-view.c" -mwindows -lshell32 -lole32 -luuid \
     -luxtheme -lgdi32 -luser32 -ladvapi32

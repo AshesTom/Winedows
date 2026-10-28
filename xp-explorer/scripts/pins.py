@@ -28,6 +28,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent / 'session'))
 import linux_apps  # noqa: E402
+import wine_reg  # noqa: E402
 PROGRAMS = r'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
 STATE = r'C:\xp\linux-apps'
 LAUNCH = STATE + r'\linux-launch.exe'
@@ -269,12 +270,13 @@ def main():
     missing = [p for p in own if p.lower() not in current]
     if missing:
         subprocess.run([args.wine, r'C:\xp\bin\startmenu.exe', 'pin', *missing], env=env)
+
+
 def managed(prefix, wine, path):
     """Whether startmenu.exe previously managed PATH as a recent program."""
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG='-all')
-    out = subprocess.run([wine, 'reg', 'query', RECENT.replace('HKEY_CURRENT_USER', 'HKCU'), '/v', 'Pins'],
-                         env=env, capture_output=True, text=True).stdout
-    return path.lower() in out.lower()
+    pins = wine_reg.query(wine, env, RECENT.replace('HKEY_CURRENT_USER', 'HKCU'), 'Pins') or ''
+    return path.lower() in pins.lower()
 
 
 if __name__ == '__main__':

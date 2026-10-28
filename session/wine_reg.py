@@ -10,12 +10,14 @@ TIMEOUT = 60
 TYPES = ('REG_EXPAND_SZ', 'REG_MULTI_SZ', 'REG_BINARY', 'REG_DWORD', 'REG_QWORD', 'REG_SZ')
 
 
-def query(wine, env, key, name=None):
+def query(wine, env, key, name=None, view=None):
     """The data of the value NAME of KEY (its default value without NAME) as
     reg query prints it: '' for a value without data, None when the key or
-    the value is missing or reg.exe fails."""
+    the value is missing or reg.exe fails. VIEW 32 or 64 chooses that
+    registry view (reg's /reg:32 and /reg:64)."""
+    options = (f'/reg:{view}',) if view else ()
     try:
-        result = subprocess.run([wine, 'reg', 'query', key, *(('/v', name) if name else ('/ve',))], env=env,
+        result = subprocess.run([wine, 'reg', 'query', key, *(('/v', name) if name else ('/ve',)), *options], env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors='replace',
                                 timeout=TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
