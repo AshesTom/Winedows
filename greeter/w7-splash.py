@@ -2,7 +2,8 @@
 """Show Windows 7's Welcome screen while its shell starts, or its log-off or
 shut-down screen while the session ends: the Windows 7 counterpart of
 xp-splash.py, with its arguments and the words it reads from stdin
-('logoff', 'saving', 'shutdown').
+('logoff', 'saving', 'shutdown'; and 'preparing' after Welcome, while the
+prefix is updated).
 
 LogonUI shows these as its status (authui's UIFILE 12400, atom(Status)): the
 wait animation (imageres.dll's BITMAP 5000-5004, 18 frames of 12 to 30
@@ -28,7 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # shut-down line, for a restart too (the reference machine's sequence;
 # winlogon's own "Windows is shutting down..." is not the one shown).
 STATUS = {'logon': ('winlogon', 1002), 'logoff': ('winlogon', 1003), 'saving': ('winlogon', 1003),
-          'shutdown': ('wininit', 1002)}
+          'shutdown': ('wininit', 1002),
+          # after Welcome while the shell's prefix is being updated: Windows 7's
+          # line for a profile's first logon (winlogon.exe.mui 1009)
+          'preparing': ('winlogon', 1009)}
 # imageres.dll's wait animation: frame size -> its strip
 WAIT = {12: 5000, 16: 5001, 20: 5002, 25: 5003, 30: 5004}
 FRAMES = 18
@@ -100,6 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('logon', 'logoff'))
     parser.add_argument('--dpi', type=int, default=96, help="the shell's LogPixels")
+    parser.add_argument('--media', help="extract/win7.py's output, when the logon screen is not installed")
     args = parser.parse_args()
     try:
         import w7logon
@@ -107,7 +112,7 @@ def main():
         from xpres import Resources
         from Xlib import X, display
         cache = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'win4wine/w7logon'
-        _, assets = w7logon.setup(cache)
+        _, assets = w7logon.setup(cache, args.media)
         strings = {}
         for name in ('winlogon', 'wininit'):
             mui = sorted(assets.root.glob(f'*/{name}.exe.mui'))
@@ -150,12 +155,12 @@ def main():
     d.flush()
 
     def finish(*_):
-        if state['mode'] != 'logon':
+        if state['mode'] not in ('logon', 'preparing'):
             # Keep the last line on the screen until the display manager ends the X server.
             xdraw.set_root_background(d, state['base'])
         sys.exit(0)
     signal.signal(signal.SIGTERM, finish)
-    words = sys.stdin.fileno() if args.mode == 'logoff' else None
+    words = sys.stdin.fileno()
     next_frame = time.monotonic() + FRAME_TIME
     while True:
         fds = [d.fileno()] + ([words] if words is not None else [])

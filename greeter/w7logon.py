@@ -82,14 +82,36 @@ SWITCH_SHIFT, IDS_SWITCH_USER = -15, 12123
 LIST_NAME_Y = 0      # the name's top below the frame
 
 
-def setup(cache):
-    config = json.loads(CONFIG.read_text())
-    root = Path(config['assets'])
+def setup(cache, media=None):
+    """The logon screen's settings and files: those greeter/install.sh
+    installed, or else (MEDIA: extract/win7.py's output, for a session
+    started without the greeter, such as windows7/7.sh's) links to the
+    extracted files in CACHE, in the greeter's layout."""
+    if CONFIG.is_file() or not media:
+        config = json.loads(CONFIG.read_text())
+        root = Path(config['assets'])
+    else:
+        config, root = {}, media_layout(Path(media), Path(cache) / 'media')
     missing = [name for name in REQUIRED if not (root / name).is_file()]
     if missing:
         raise FileNotFoundError('missing ' + ', '.join(missing))
     os.environ['FONTCONFIG_FILE'] = str(fontconfig(root / 'fonts', Path(cache)))
     return config, Assets(root)
+
+
+def media_layout(media, target):
+    """TARGET with links to MEDIA's files where greeter/install.sh copies them."""
+    ui = json.loads((media / 'media.json').read_text())['ui_language']
+    links = {'authui.dll': 'system32/authui.dll', 'imageres.dll': 'system32/imageres.dll',
+             'basebrd.dll': 'branding/basebrd.dll', 'user.bmp': 'pictures/user.bmp',
+             'fonts': 'fonts', ui: f'system32/{ui}'}
+    target.mkdir(parents=True, exist_ok=True)
+    for name, source in links.items():
+        link = target / name
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(media / source)
+    return target
 
 
 class Assets:

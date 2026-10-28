@@ -122,7 +122,7 @@ prefix/win7.py builtin .local/prefix-win7 app.exe --undo   # Windows 7 の DLL �
 - ログオン後と終わるとき: シェルが動き出すまで「ようこそ」、ログオフ中は「ログオフしています...」、終了と再起動では
   「シャットダウンしています...」を、ログオン画面の背景に回る印と一緒に出します（`greeter/w7-splash.py`）。文字は
   winlogon.exe と wininit.exe の MUI、回る印は imageres.dll の BITMAP 5000〜5004（18 コマ）、並び方は authui のレイアウト（状態の表示）と
-  実機で測ったものです。ログオン画面と同じファイルを使うので、`--greeter` で入れたときに出ます（session.json の `welcome_screen` で止められます）。
+  実機で測ったものです。ログオン画面と同じファイルを使い、`--greeter` で入れたときはそのファイルを、`windows7/7.sh run` のようにログオン画面なしで始めたときは取り出したファイル（prefix の `win7-shell.json` の `assets`）を読みます（session.json の `welcome_screen` で止められます）。prefix の更新（Wine の更新のあとなど）の間は、Windows 7 が初めてのログオンで出す「デスクトップを準備しています...」（winlogon.exe.mui の 1009）を「ようこそ」の代わりに出します。
 
 ## セッション
 

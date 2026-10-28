@@ -334,10 +334,43 @@ class Session:
         log = (self.state / 'welcome.log').open('ab', buffering=0)
         self.logs.append(log)
         extra = ['--assets', str(self.xp_assets())] if self.welcome_screen == 'greeter/xp-splash.py' else []
+        if self.welcome_screen == 'greeter/w7-splash.py' and self.win7_assets():
+            # without the logon screen installed (windows7/7.sh), the extracted files
+            extra = ['--media', str(self.win7_assets())]
         self.welcome = subprocess.Popen([sys.executable, str(ROOT / self.welcome_screen), mode,
                                          '--dpi', str(self.dpi), *extra],
                                         stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
                                         start_new_session=True)
+
+    def win7_assets(self):
+        """The Windows 7 files the prefix was made from (win7-shell.json), if any."""
+        try:
+            return Path(json.loads((self.prefix / 'win7-shell.json').read_text())['assets'])
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def say_welcome(self, word):
+        """Change the Welcome screen's line ('preparing': "Preparing your desktop...")."""
+        if self.welcome and self.welcome.poll() is None:
+            try:
+                self.welcome.stdin.write(word.encode() + b'\n')
+                self.welcome.stdin.flush()
+            except OSError:
+                pass
+
+    def stage(self):
+        """Install the shell family in its dedicated prefix (runtime overrides
+        select it). An update of the prefix takes a while: the Welcome screen
+        then says "Preparing your desktop...", as Windows 7 does at a first logon."""
+        script, *command = self.shell['stage']
+        stage = subprocess.Popen(['python3', str(ROOT / script), *command, str(self.prefix), '--wine', self.wine],
+                                 stdout=subprocess.PIPE, text=True)
+        for line in stage.stdout:
+            print(line, end='', flush=True)
+            if line.startswith('Updating the Windows 7 shell prefix'):
+                self.say_welcome('preparing')
+        if stage.wait():
+            raise subprocess.CalledProcessError(stage.returncode, stage.args)
 
     def wait_welcome(self, timeout=5):
         """Wait until the screen is up (it names its window), so that the session's
@@ -508,9 +541,7 @@ class Session:
         self.spawn(['python3', str(ROOT / 'bridge-wm/tray.py'), '--ipc', str(self.ipc)], 'tray')
         im = self.start_input_method()
         im_restarts = deque()
-        # Install only the shell family in this dedicated prefix. Runtime overrides select them.
-        script, *command = self.shell['stage']
-        subprocess.run(['python3', str(ROOT / script), *command, str(self.prefix), '--wine', self.wine], check=True)
+        self.stage()
         self.keyboard()
         if self.linux_menu:
             self.start_linux_menu()
