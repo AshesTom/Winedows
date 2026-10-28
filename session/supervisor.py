@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from xml.sax.saxutils import escape
-from Xlib import X, display, error
+from Xlib import X, Xatom, display, error
 
 import appearance
 import dpi
@@ -394,12 +394,34 @@ class Session:
 
     def keyboard(self):
         """The session's keyboard layout from XP's input languages (Wine patch
-        0043), or the Linux system's while the prefix has none."""
+        0043), or the Linux system's while the prefix has none; it runs no
+        Wine program, so it goes on beside the next steps. The process, or None."""
         if not self.xp_shell:
-            return
+            return None
         with (self.state / 'keyboard.log').open('ab') as log:
-            subprocess.run([sys.executable, str(ROOT / 'session/keyboard.py'), 'apply', str(self.prefix)],
-                           env=self.env, stdout=log, stderr=subprocess.STDOUT, timeout=30, check=False)
+            return subprocess.Popen([sys.executable, str(ROOT / 'session/keyboard.py'), 'apply', str(self.prefix)],
+                                    env=self.env, stdout=log, stderr=subprocess.STDOUT)
+
+    def wait_wm(self, wm, timeout=5):
+        """Until the WM manages the display (its _NET_SUPPORTING_WM_CHECK window)
+        and XSETTINGS has an owner, which the GTK theme needs: a few
+        milliseconds where a fixed half second was waited."""
+        check = self.d.intern_atom('_NET_SUPPORTING_WM_CHECK')
+        selection = self.d.intern_atom('_XSETTINGS_S%d' % self.d.get_default_screen())
+        root = self.d.screen().root
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if wm.poll() is not None:
+                raise RuntimeError('WM failed; see wm.log')
+            try:
+                found = root.get_full_property(check, Xatom.WINDOW)
+                # A window of a WM that ended is gone with it.
+                if found and found.value and self.d.get_selection_owner(selection) != X.NONE and \
+                        self.d.create_resource_object('window', found.value[0]).get_full_property(check, Xatom.WINDOW):
+                    return
+            except error.XError:
+                pass
+            time.sleep(0.01)
 
     def keyboard_watch(self):
         """Follow the input languages that XP's Regional and Language Options set."""
@@ -698,9 +720,7 @@ class Session:
             wm = self.spawn(['python3', str(ROOT / 'bridge-wm/wm.py'), '--ipc', str(self.ipc),
                              '--xsettings', json.dumps(settings)] +
                             ([] if self.composite else ['--no-composite']), 'wm')
-            time.sleep(.5)
-            if wm.poll() is not None:
-                raise RuntimeError('WM failed; see wm.log')
+            self.wait_wm(wm)
         if self.cursor_theme and shutil.which('xsetroot') and not self.compositor:
             # The WM's root cursor comes from the core cursor font; xsetroot takes the theme's.
             subprocess.run(['xsetroot', '-cursor_name', 'left_ptr'], env=self.env, check=False)
@@ -733,7 +753,7 @@ class Session:
         self.tell_welcome('applying')
         self.status('starting', step='settings')
         self.tell_welcome('progress 0 Keyboard layout')
-        self.keyboard()
+        keyboard = self.keyboard()
         self.tell_welcome('progress 30 Sounds')
         self.repair_sound_scheme()
         self.tray_defaults()
@@ -744,6 +764,11 @@ class Session:
         else:
             self.update_recent_programs()
             self.start_startmenu_view()
+        if keyboard:
+            try:
+                keyboard.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                keyboard.kill()
         self.tell_welcome('welcome')
         crashes = deque()
         attempt = 0

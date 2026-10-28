@@ -242,15 +242,49 @@ static void set_icon(UINT id, BOOL show, HICON icon, const WCHAR *tip, const WCH
 
 /* ---- Linux side --------------------------------------------------------- */
 
-/* Reads a small file such as one of sysfs; returns FALSE if it is missing. */
+/* The files of sysfs and /proc that the poll reads every second stay open:
+ * read again from their start, they give the kernel's current value, and
+ * Wine reads a handle it knows without the wineserver, where opening and
+ * closing each one took a request each (about a hundred a second). */
+static struct { WCHAR path[MAX_PATH]; HANDLE file; } opened[48];
+static unsigned opened_next;
+
+/* Reads the file at PATH from its start into BUFFER (terminated); its
+ * length, or -1 when it is missing. */
+static int read_file(const WCHAR *path, char *buffer, DWORD size)
+{
+    unsigned slot = ARRAYSIZE(opened);
+    DWORD done = 0;
+    for (unsigned i = 0; i < ARRAYSIZE(opened); i++)
+        if (opened[i].file && !wcscmp(opened[i].path, path)) slot = i;
+    for (int attempt = 0; attempt < 2; attempt++)
+    {
+        OVERLAPPED start = {0};
+        if (slot == ARRAYSIZE(opened))
+        {
+            HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                                      0, NULL);
+            if (file == INVALID_HANDLE_VALUE) return -1;
+            slot = opened_next++ % ARRAYSIZE(opened);
+            if (opened[slot].file) CloseHandle(opened[slot].file);
+            lstrcpynW(opened[slot].path, path, MAX_PATH);
+            opened[slot].file = file;
+        }
+        if (ReadFile(opened[slot].file, buffer, size - 1, &done, &start)) break;
+        /* Gone with its device (or replaced by another of the same name): open it again. */
+        CloseHandle(opened[slot].file);
+        opened[slot].file = NULL;
+        slot = ARRAYSIZE(opened);
+        done = 0;
+    }
+    buffer[done] = 0;
+    return slot == ARRAYSIZE(opened) ? -1 : (int)done;
+}
+
+/* Reads the first line of a small file such as one of sysfs; returns FALSE if it is missing. */
 static BOOL read_text(const WCHAR *path, char *buffer, DWORD size)
 {
-    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD done = 0;
-    if (file == INVALID_HANDLE_VALUE) return FALSE;
-    ReadFile(file, buffer, size - 1, &done, NULL);
-    CloseHandle(file);
-    buffer[done] = 0;
+    if (read_file(path, buffer, size) < 0) return FALSE;
     buffer[strcspn(buffer, "\r\n")] = 0;
     return TRUE;
 }
@@ -333,13 +367,7 @@ static void poll_power(void)
 /* The whole routing table: read_text keeps only a first line. */
 static void read_routes(char *route, DWORD size)
 {
-    HANDLE file = CreateFileW(L"Z:\\proc\\net\\route", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD done = 0;
-    route[0] = 0;
-    if (file == INVALID_HANDLE_VALUE) return;
-    ReadFile(file, route, size - 1, &done, NULL);
-    CloseHandle(file);
-    route[done] = 0;
+    if (read_file(L"Z:\\proc\\net\\route", route, size) < 0) route[0] = 0;
 }
 
 /* Whether NAME has a route in ROUTE, or with DEFAULT_ONLY the default route. */
@@ -428,15 +456,10 @@ static void poll_interface(NETSTATE *state, const char *route, BOOL detail)
     }
     /* Without NetworkManager: the link quality of /proc/net/wireless (out of 70). */
     {
-        HANDLE file = CreateFileW(L"Z:\\proc\\net\\wireless", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-        DWORD done = 0;
         char name[32];
         state->signal = -1;
         state->ssid[0] = 0;
-        if (file == INVALID_HANDLE_VALUE) return;
-        ReadFile(file, text, sizeof(text) - 1, &done, NULL);
-        CloseHandle(file);
-        text[done] = 0;
+        if (read_file(L"Z:\\proc\\net\\wireless", text, sizeof(text)) < 0) return;
         WideCharToMultiByte(CP_UTF8, 0, state->name, -1, name, sizeof(name), NULL, NULL);
         for (line = strtok(text, "\n"); line; line = strtok(NULL, "\n"))
         {

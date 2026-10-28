@@ -67,9 +67,14 @@ char *unix_output(const WCHAR *script, DWORD timeout)
         swprintf(command, capacity, L"(%ls) > '%ls' 2>&1; : > '%ls.done'", script, unix_path, unix_path);
         if (unix_spawn(command))
         {
-            ULONGLONG started = GetTickCount64();
-            while (GetFileAttributesW(done_path) == INVALID_FILE_ATTRIBUTES && GetTickCount64() - started < timeout)
-                Sleep(20);
+            ULONGLONG started = GetTickCount64(), waited = 0;
+            /* Most scripts end within milliseconds (wpctl, nmcli): look often
+             * at first, so that the caller's window waits no longer than that. */
+            while (GetFileAttributesW(done_path) == INVALID_FILE_ATTRIBUTES && waited < timeout)
+            {
+                Sleep(waited < 100 ? 2 : 20);
+                waited = GetTickCount64() - started;
+            }
             /* Only a finished script's output: a slower one would be cut short. */
             if (GetFileAttributesW(done_path) != INVALID_FILE_ATTRIBUTES)
             {

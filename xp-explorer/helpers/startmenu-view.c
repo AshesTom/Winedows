@@ -296,9 +296,19 @@ static void menu_closed(void)
     }
 }
 
+/* The shell keeps its Start menu window: looked for again only once it is
+ * gone (a restarted shell), not on each tick of the timer, where the search
+ * went through every window of the desktop. */
+static HWND start_menu(void)
+{
+    static HWND found;
+    if (!found || !IsWindow(found)) found = FindWindowW(L"DV2ControlHost", L"Start Menu");
+    return found;
+}
+
 static void refresh_overlay(void)
 {
-    HWND found = FindWindowW(L"DV2ControlHost", L"Start Menu");
+    HWND found = start_menu();
     BOOL visible = found && IsWindowVisible(found);
     if (!visible)
     {

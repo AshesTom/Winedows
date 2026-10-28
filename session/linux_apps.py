@@ -596,7 +596,7 @@ class Menu:
         temp.write_text(json.dumps({'links': links, 'folders': sorted(folders)}, ensure_ascii=False, indent=1) + '\n')
         temp.replace(self.state_file)
 
-    def save_relaunch(self, links):
+    def save_relaunch(self, links, found):
         """relaunch.tsv: for the proxy, the application a Linux window belongs to,
         found by its WM_CLASS class or Wayland app_id (lower case): KEY, name,
         command (the shortcut's) and icon, each as Windows 7's taskbar takes them
@@ -604,7 +604,6 @@ class Menu:
         Keys in order of trust: StartupWMClass, the desktop file ID, the
         ID's last dotted part, the program's name."""
         locales = locale_names()
-        found = entries()
         rows, keyed = [], {}
         for file_id, item in sorted(links.items()):
             path, entry = found.get(file_id, (None, None))
@@ -655,11 +654,11 @@ class Menu:
                 except OSError:
                     shutil.copyfile(target, path)
 
-    def wanted(self):
-        """{file ID: link description} for the current desktop entries."""
+    def wanted(self, found):
+        """{file ID: link description} for the desktop entries FOUND (entries())."""
         locales = locale_names()
         result, used = {}, set()
-        for file_id, (path, entry) in sorted(entries().items()):
+        for file_id, (path, entry) in sorted(found.items()):
             args = command(entry, path, locales)
             name = (localized(entry, 'Name', locales) or '').translate(INVALID).strip(' .')
             if not args or not name:
@@ -687,7 +686,9 @@ class Menu:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / 'icons').mkdir(exist_ok=True)
         old, folders = self.load()
-        new = {} if remove else self.wanted()
+        # Read once: the desktop entries are parsed again for each use otherwise.
+        found = {} if remove else entries()
+        new = self.wanted(found)
         self.install_launcher(item['launcher'] for item in new.values())
         for file_id, item in new.items():
             item['hash'] = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()
@@ -740,7 +741,7 @@ class Menu:
                     del done[file_id]
         self.remove_strays(done)
         self.save(done, folders)
-        self.save_relaunch(done)
+        self.save_relaunch(done, found)
         self.save_programs(done)
         return len(lines), len(old.keys() - new.keys())
 

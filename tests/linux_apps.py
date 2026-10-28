@@ -96,11 +96,11 @@ def check_offline(base):
         'kde-sub.desktop': 'ゲーム\\Sub.lnk',
         'launch.desktop': 'アクセサリ\\Launch.lnk',
     }
-    links = {k: v['link'] for k, v in menu.wanted().items()}
+    links = {k: v['link'] for k, v in menu.wanted(linux_apps.entries()).items()}
     assert links == flat, links
     # The session's: all of them in the Linux Applications folder
     menu.flat = False
-    wanted = menu.wanted()
+    wanted = menu.wanted(linux_apps.entries())
     links = {k: v['link'] for k, v in wanted.items()}
     assert links == {k: 'Linux アプリケーション\\' + v for k, v in flat.items()}, links
     terminal = 'x-terminal-emulator' if linux_apps.shutil.which('x-terminal-emulator') else 'xterm'
