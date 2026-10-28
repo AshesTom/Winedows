@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crash the XP shell in a disposable X session and check visible recovery."""
+"""Crash the Windows 7 shell in a disposable X session and check visible recovery."""
 import argparse
 import json
 import os
@@ -49,7 +49,7 @@ try:
     wait(lambda: status()['state'] == 'xp-shell', 'initial shell readiness')
     for count in range(config.get('failures', 3)):
         previous = status().get('attempt', 0)
-        subprocess.run([config['wine'], 'taskkill', '/IM', 'xp-explorer.exe', '/F'],
+        subprocess.run([config['wine'], 'taskkill', '/IM', 'w7-explorer.exe', '/F'],
                        env=env, timeout=10, check=True)
         wait(lambda: status()['state'] == 'fallback' or
              status()['state'] == 'xp-shell' and status().get('attempt', 0) > previous,

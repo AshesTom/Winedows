@@ -18,7 +18,7 @@ XP にはモニターごとの DPI が無いので、XP のシェルの DPI は 
 ## 使い方
 
 - `scripts/setup.sh --media ISO --wayland` で、labwc と wlroots をビルドし（`wayland/build.sh`、`.local/labwc-install`）、
-  セッションを登録します（`session/install.sh --wayland`）。`--shell reactos` や `--shell win7` と一緒なら、そのシェルの
+  セッションを登録します（`session/install.sh --wayland`）。その
   Wayland のセッションを登録します。`--greeter` と一緒なら、ログオン画面の既定のセッションも Wayland になります。
 - 出力の倍率と位置は `session.json` の `"outputs"`、Win32 の主モニターは `"primary"`（出力の名前）で決めます。
   例: `"outputs": {"HDMI-A-1": {"scale": 1.5}, "DP-1": {"scale": 1, "position": "2560,0"}}, "primary": "HDMI-A-1"`。
@@ -136,7 +136,7 @@ XP にはモニターごとの DPI が無いので、XP のシェルの DPI は 
   タスク バーのプロパティ、Win+E のフォルダの窓、タスクバーの設定（小さいアイコン・結合）で、違いは時計、カーソル、Mousepad の
   文字（GTK の Wayland と X11 の描き方の違い）と、X11 のセッションの方が実機と違う所（スタート ボタンと利用者の画像の縁）だけです。
   倍率 1.5（144 DPI）でも同じです。XP と ReactOS のシェルでは、変更前の labwc と比べ、違いは丸い角と Linux の窓の置き方だけです。
-  試験用の仮想マシンの実際の出力（DRM、1280×800）でも、`setup.sh --shell win7 --wayland --greeter` から、ログオン画面、
+  試験用の仮想マシンの実際の出力（DRM、1280×800）でも、`setup.sh --wayland --greeter` から、ログオン画面、
   スタートメニュー、メモ帳と Mousepad（Wayland）、日本語入力（Mousepad は text-input-v3、メモ帳は XIM）、Win+E、Alt+Tab、
   タスクバーの右クリックのプロパティでの小さいアイコン、ログオフでログオン画面に戻ることを確かめています。
 - 自動の試験: `tests/wayland_compositor.py`（Wine を使わず、Wine の窓の印を付けた X の窓で compositor の規則を確かめます。

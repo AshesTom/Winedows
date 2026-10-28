@@ -24,7 +24,7 @@ import dpi
 from wineenv import SHELLS, environment
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = Path.home() / '.config/win4wine/session.json'
+DEFAULT_CONFIG = Path.home() / '.config/win4wine/win7-session.json'
 # Seconds the shut-down screen waits for the system to end the session (compositor)
 POWER_OFF_WAIT = 60
 IM_VARIABLES = ('XMODIFIERS', 'GTK_IM_MODULE', 'QT_IM_MODULE', 'SDL_IM_MODULE', 'CLUTTER_IM_MODULE')
@@ -36,7 +36,7 @@ class Session:
         self.prefix = Path(config['prefix']).resolve(strict=True)
         # The shell: XP's explorer from the user's media, or (opt-in, experimental)
         # ReactOS's explorer in a prefix made for it.
-        self.shell = SHELLS.get(config.get('shell', 'xp'))
+        self.shell = SHELLS.get(config.get('shell', 'win7'))
         if not self.shell:
             raise SystemExit('Unsupported shell')
         if not (self.prefix / self.shell['marker']).is_file():

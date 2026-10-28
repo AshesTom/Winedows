@@ -26,20 +26,10 @@ compile "$root/.local/bridge/wallpaper-convert.exe" -municode "$root/prefix/wall
 # Windows 7's shell prefix (prefix/win7.py).
 compile "$root/.local/bridge/theme-fonts.exe" "$root/prefix/theme-fonts.c" -luxtheme
 compile "$root/.local/bridge/user-profile.exe" -municode "$root/prefix/user-profile.c" -lole32 -lshell32 -luuid
-# Linux applications in the XP Start menu (session/linux_apps.py).
+# Linux applications in the Start menu (session/linux_apps.py).
 compile "$root/.local/bridge/linux-launch.exe" "$root/session/linux-launch.c" -mwindows -luser32
 compile "$root/.local/bridge/linux-links.exe" "$root/session/linux-links.c" -lole32 -lshell32 -luuid
 # XP's logon and log off sounds (session/supervisor.py).
 compile "$root/.local/bridge/playsound.exe" "$root/session/playsound.c" -mwindows -lwinmm -lshell32
 # The session's keyboard layout follows XP's input languages (session/keyboard.py).
 compile "$root/.local/bridge/keyboard-watch.exe" "$root/session/keyboard-watch.c" -mwindows -lshell32 -ladvapi32
-# XP Explorer's helpers (xp-explorer/helpers), for the session too: the
-# notification area's network, battery and volume icons, the Start menu's
-# most used programs, and the stand-in iexplore.exe that opens the Linux browser.
-helpers=$root/xp-explorer/helpers
-i686-w64-mingw32-windres -I "$helpers" "$helpers/xptray.rc" -O coff -o "$root/.local/bridge/xptray.res"
-compile "$root/.local/bridge/xptray.exe" -std=gnu11 "$helpers/xptray.c" "$root/.local/bridge/xptray.res" \
-    -mwindows -lcomctl32 -lgdi32 -luser32 -lkernel32
-rm -f "$root/.local/bridge/xptray.res"
-compile "$root/.local/bridge/startmenu.exe" -std=gnu11 "$helpers/startmenu.c" -lshell32 -lole32 -luuid -ladvapi32 -luser32
-compile "$root/.local/bridge/iexplore.exe" -std=gnu11 "$helpers/iexplore.c" -mwindows -lshell32

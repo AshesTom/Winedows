@@ -6,22 +6,16 @@ prefix, Wine and opt-ins, and looks and behaves as one started from the shell.""
 import os
 from pathlib import Path
 
-# The shells a session can start. The prefix is made for one of them
-# (prefix/create.py or prefix/reactos.py); its staging step runs before each
-# start. XP's Welcome screen uses images extracted from the XP media.
+# The shell a session starts. The prefix is made for it (prefix/win7.py); its
+# staging step runs before each start.
 SHELLS = {
-    'xp': dict(marker='xp-shell.json', module='xp-explorer', command=r'C:\xp\xp-explorer.exe',
-               stage=('prefix/stage.py',), welcome='greeter/xp-splash.py', folders=False, name=None, switcher=None),
-    'reactos': dict(marker='reactos-shell.json', module='ros-explorer', command=r'C:\ros\ros-explorer.exe',
-                    stage=('prefix/reactos.py', 'stage'), welcome=None, folders=True, name='reactos',
-                    switcher='reactos'),
-    # Experimental: Windows 7's x64 explorer (prefix/win7.py).
+    # Windows 7's x64 explorer (prefix/win7.py).
     'win7': dict(marker='win7-shell.json', module='w7-explorer', command=r'C:\w7\w7-explorer.exe',
                  stage=('prefix/win7.py', 'stage'), welcome='greeter/w7-splash.py', folders=True, name='win7',
                  switcher='win7'),
 }
-# Each shell's session.json, in ~/.config/win4wine (setup.sh)
-CONFIGS = {'xp': 'session.json', 'reactos': 'reactos-session.json', 'win7': 'win7-session.json'}
+# The shell's session.json, in ~/.config/win4wine (setup.sh)
+CONFIGS = {'win7': 'win7-session.json'}
 
 
 def config_dir():

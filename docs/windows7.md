@@ -5,11 +5,10 @@ Windows 7 SP1（x64）の `explorer.exe` とその周りの DLL を、XP のシ�
 XP のシェルと同じ Wine、同じ bridge（ウィンドウマネージャー、代理ウィンドウ、トレイ）、同じ supervisor で動きます。
 
 ```sh
-scripts/setup.sh --shell win7 --media /path/to/Windows7SP1x64.iso
+scripts/setup.sh --media /path/to/Windows7SP1x64.iso
 ```
 
-ログイン画面でセッション「**Windows 7 Shell (Wine, X11)**」を選びます。XP や ReactOS のシェルも入れてあれば、セッションが並びます。
-`--greeter` を付けると、LightDM のログイン画面が Windows 7 のログオン画面になり、そのまま Windows 7 のシェルに入ります。
+ログイン画面でセッション「**Windows 7 Shell (Wine, X11)**」を選びます。`--greeter` を付けると、LightDM のログイン画面が Windows 7 のログオン画面になり、そのまま Windows 7 のシェルに入ります。
 
 > [!WARNING]
 > XP のシェルより新しく、確かめた範囲も狭い試作です。下の「制限」を読んでから試してください。
@@ -204,7 +203,7 @@ session.json（`~/.config/win4wine/win7-session.json`）の `"shell": "win7"` �
   四角になっていました。
 - タスクバーのボタンを指したときの窓の一覧は、実機の Windows 7 ベーシックと同じ見た目です（シェルにはデスクトップの合成が無いと
   答えます。Wine の 0125）。
-- Wayland のセッション「Windows 7 Shell (Wine, Wayland)」もあります（`setup.sh --shell win7 --wayland`）。モニターごとの倍率が
+- Wayland のセッション「Windows 7 Shell (Wine, Wayland)」もあります（`setup.sh --wayland`）。モニターごとの倍率が
   使え、スタート ボタンの縁は compositor が本物の透明度で描きます（[wayland.md](wayland.md)）。
 
 Windows 7 のシェルのために足した Wine のパッチは 0094〜0136 です（[patches.md](patches.md)）。

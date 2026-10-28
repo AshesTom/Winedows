@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""win4wine-wine [--shell xp|reactos|win7] [WINE ARGUMENTS...]
+"""win4wine-wine [--shell win7] [WINE ARGUMENTS...]
 
 Run "wine" as the session runs it: in the shell's prefix, with the session's
 Wine and its opt-ins (WIN4WINE_EXTERNAL_SHELL and the rest, session/wineenv.py),
@@ -55,8 +55,8 @@ def main(argv):
         return fail(f'the {shell} shell is not set up ({config_dir() / CONFIGS[shell]})')
 
     config = json.loads(found[shell].read_text())
-    if config.get('shell', 'xp') != shell:
-        return fail(f'{found[shell]} is for the {config.get("shell", "xp")} shell')
+    if config.get('shell', 'win7') != shell:
+        return fail(f'{found[shell]} is for the {config.get("shell", "win7")} shell')
     # Another shell's session (--shell from its terminal) leaves none of its own opt-ins.
     base = {k: v for k, v in os.environ.items() if not k.startswith('WIN4WINE_')}
     try:
