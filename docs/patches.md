@@ -1,6 +1,6 @@
 # Wine のパッチ
 
-`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 151 本のパッチがあります。
+`wine/patches/` には、未改変の Wine 11.0（`wine/upstream.env` の commit）に上から順に当てる 152 本のパッチがあります。
 当てるのは `wine/build.sh` で、実際の適用は `wine/patch-state.py` が行います（途中まで当たったソースにも、足りない分だけを当てます）。
 
 番号の付け直しや、以前の番号との対応表は [history/patch-history.md](history/patch-history.md) にあります。
@@ -266,6 +266,12 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 0149 | ntdll: XP のセッションで、実行ファイルの横に XP の comctl32.dll（native。システムのディレクトリは除く）があるときは comctl32 の SxS のリダイレクトを使わず、その XP の Common Controls 6 だけを使う（画面のプロパティのボタンがクラシックになっていた。ReactOS のシェルは 0143）（AshesTom） | あり（XP のセッション） |
 | 0150 | user32: XP のセッションで、XP の comctl32 を横に置いたプロセスは、コモン コントロールのクラス名を版つきにしない（Internet Explorer 6 のメニュー バー、ツール バー、アドレス バー、ステータス バーが作られなかった）（AshesTom） | あり（XP のセッション） |
 | 0151 | user32: PrivateExtractIconsW で 2 つの大きさ（32 と 16、48 と 16）を一度に取るとき、それぞれの大きさのアイコンをその大きさに選んだ画像から作る（16x16 が 32x32・48x48 の縮小になり、縁のアルファが無かった。XP のクイック起動とシステムのイメージ リストのアイコン。実機と 0 画素差。Wine 全体） | なし |
+
+### Windows 7 の Aero（0152）
+
+| 番号 | 内容 | opt-in |
+|---|---|---|
+| 0152 | dwmapi、uxtheme、winex11: Windows 7 のシェルの Aero のガラス。`WIN4WINE_AERO=1`（session.json の `"aero"`）のとき w7-explorer.exe でデスクトップの合成を有効にし（DwmIsCompositionEnabled、IsCompositionActive、DwmGetColorizationColor）、DwmEnableBlurBehindWindow の窓を ARGB の X の窓にして、画素のアルファを保ったまま、配色の色（ColorizationColor）とテーマの DWMWindow のアトラスの反射（パート 40）をその下に重ねる。X のコンポジター（picom、`windows7/picom.conf`）が `_WIN4WINE_GLASS` の窓の後ろをぼかす。テーマの Composited・TextGlow による合成の文字とグロー（タスクバーの時計）、クラス全体を基底クラスより先に探すプロパティの順（ShowDesktop::Button のガラス）は Wine 全体 | 合成は あり（`WIN4WINE_AERO`） |
 
 ## 並び順の考え方
 

@@ -4,7 +4,7 @@
 |---|---|
 | [architecture.md](architecture.md) | 仕組み。部品の役割、WM と proxy と IPC、Linux の窓の XP の枠、トレイ、セッション、ログイン画面、DPI |
 | [design.md](design.md) | 設計の要点。どの部品を XP のものにしたか、守っていることとその理由 |
-| [patches.md](patches.md) | Wine の 151 本のパッチの一覧、opt-in の判定、並び順、書式、足し方 |
+| [patches.md](patches.md) | Wine の 152 本のパッチの一覧、opt-in の判定、並び順、書式、足し方 |
 | [development.md](development.md) | 開発の手順。chroot でのビルド、試験、手作業での導入、既存の環境の更新 |
 | [windows7.md](windows7.md) | Windows 7 のシェル（実験的）。Windows 7 の ISO から作るセッション、取り出すファイル、部品のマニフェストからのレジストリ、prefix、制限 |
 | [wayland.md](wayland.md) | Wayland のセッション（試験中）。パッチを当てた labwc、モニターごとの倍率、X11 のセッションとの違い |

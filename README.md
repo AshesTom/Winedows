@@ -122,9 +122,11 @@ Everything built, extracted and the prefix live in `.local/` of the checkout. In
 
 ## Limits
 
-- **No Aero Glass yet**: the look is "Windows 7 Basic" (the Aero theme drawn without desktop composition). Glass, live
-  thumbnails and Aero Peek need the Desktop Window Manager's composition, which Wine does not have. This is the next
-  goal of this branch.
+- **Aero Glass is experimental**: by default the look is "Windows 7 Basic" (the Aero theme drawn without desktop
+  composition). With `"aero": true` in `win7-session.json` (or `W7_AERO=1 windows7/7.sh run`), the taskbar and Start
+  menu are drawn over glass, tinted with the colorization color and with the glass's reflection (Wine patch 0152);
+  an X compositor, picom with [windows7/picom.conf](windows7/picom.conf), blends and blurs them. Glass window frames,
+  live thumbnails and Aero Peek are not done yet.
 - Network, Help and Support and most of Control Panel are missing: Wine has no counterparts for their components.
 - Lock, Sleep and Hibernate in the Start menu do nothing.
 
@@ -139,6 +141,9 @@ LightDM ─ Windows 7 logon screen (greeter/win7-greeter.py)
         │    (Wayland session: a patched labwc instead, wayland/)
         └─ fcitx5 + Mozc, tray bridge (bridge-wm/tray.py)
 ```
+
+To try the session in a window of your current desktop without installing it: `windows7/7.sh setup ISO`, then
+`windows7/7.sh run` (Arch / CachyOS; `windows7/7.sh` with no argument lists its commands and switches).
 
 The design documents are in Japanese; [docs/README.md](docs/README.md) lists them. Some of them still describe the XP
 shell, with which this branch shares Wine, the bridge and the session.

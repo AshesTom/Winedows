@@ -1,0 +1,788 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] dwmapi, uxtheme, winex11: Aero glass for Windows 7's shell
+
+Purpose: Windows 7's taskbar and Start menu in Aero, over glass, instead of
+Windows 7 Basic.
+Windows 7 behavior: with desktop composition, explorer asks
+DwmIsCompositionEnabled and uxtheme's IsCompositionActive, opens the
+Aero theme's "...Composited" classes, draws its taskbar and Start menu with
+their translucent images (buffered paint with alpha), and calls
+DwmEnableBlurBehindWindow on them. The DWM blends such a window by the
+alpha of its pixels over what is behind it, blurred, under the
+colorization color (HKCU\Software\Microsoft\Windows\DWM ColorizationColor,
+the Aero theme's 0x6B74B8FC) and the glass's reflection (part 40 of the
+theme's DWMWindow atlas). The clock draws with plain DrawThemeText: the
+theme's Composited and TextGlow properties make uxtheme draw it with alpha
+and a glow. The Show desktop button (ShowDesktop::Button) gives its glass
+image for the whole class, which Windows takes before Button's push button
+image: a class is searched whole (state, part, class) before the class it
+overrides.
+Wine before: DwmIsCompositionEnabled gave FALSE in the shell (0125, as on
+Windows 7 Basic), IsCompositionActive was a stub that gave FALSE,
+DwmEnableBlurBehindWindow returned E_NOTIMPL and DwmGetColorizationColor
+E_NOTIMPL. Forcing composition on alone left the taskbar black (its window
+surface sent X an opaque copy of pixels whose alpha is mostly 0), the clock
+invisible (GDI text leaves alpha 0), and the Show desktop button an opaque
+grey push button (uxtheme searched every class for the part before the
+derived class's own class-wide properties). draw_composited_text read the
+rows of a top-down DIB upside down (GetObject gives a positive height).
+Change: in the Windows 7 shell's process, DwmIsCompositionEnabled gives
+TRUE when the session sets WIN4WINE_AERO=1 (session.json "aero").
+IsCompositionActive gives what DwmIsCompositionEnabled gives.
+DwmGetColorizationColor gives the colorization color.
+DwmEnableBlurBehindWindow, with composition, sets the window's
+"__win4wine_glass" property to the colorization color and
+"__win4wine_glass_reflection" to the reflection (decoded with WIC from the
+theme file's atlas stream), and has its surface made again. winex11 gives
+such a window an ARGB visual and a surface that keeps the alpha of its
+pixels, puts the color and the reflection (stretched to a wider window)
+under them at each flush, and sets _WIN4WINE_GLASS on its X window, for the
+X compositor that blurs what is behind it. DrawThemeTextEx honours the
+theme's Composited, TextGlow, TextGlowSize, GlowColor and GlowIntensity
+and DTT_GLOWSIZE: composited text is drawn from its grayscale coverage over
+a box-spread glow, in a DIB whose row order is probed. MSSTYLES_FindProperty
+searches each class whole before the class it overrides.
+Scope: composition only with WIN4WINE_AERO=1 in w7-explorer.exe, so only
+it marks glass windows; the theme lookup order and the theme's composited
+text apply to every program; the blur region is not kept (the whole window).
+---
+--- a/dlls/dwmapi/Makefile.in
++++ b/dlls/dwmapi/Makefile.in
+@@ -1,5 +1,6 @@
+ MODULE    = dwmapi.dll
+-IMPORTS   = user32
++IMPORTS   = user32 advapi32 gdi32
++DELAYIMPORTS = uxtheme windowscodecs
+ IMPORTLIB = dwmapi
+ 
+ SOURCES = \
+--- a/dlls/dwmapi/dwmapi_main.c
++++ b/dlls/dwmapi/dwmapi_main.c
+@@ -28,6 +28,9 @@
+ #include "wingdi.h"
+ #include "winuser.h"
+ #include "dwmapi.h"
++#include "uxtheme.h"
++#include "vssym32.h"
++#include "wincodec.h"
+ #include "wine/debug.h"
+ #include "wine/win4wine.h"
+ 
+@@ -66,7 +69,12 @@
+ 
+     *enabled = FALSE;
+     if (win7_shell_process())
++    {
++        /* win4wine: Aero (desktop composition) when the session asks for it */
++        WCHAR aero[2];
++        *enabled = GetEnvironmentVariableW( L"WIN4WINE_AERO", aero, ARRAY_SIZE(aero) ) == 1 && aero[0] == '1';
+         return S_OK;
++    }
+     version.dwOSVersionInfoSize = sizeof(version);
+     if (!RtlGetVersion(&version))
+         *enabled = (version.dwMajorVersion > 6 || (version.dwMajorVersion == 6 && version.dwMinorVersion >= 3));
+@@ -97,11 +105,109 @@
+ /**********************************************************************
+  *           DwmGetColorizationColor      (DWMAPI.@)
+  */
++/* win4wine: the glass's colorization color, as Windows keeps it
++ * (HKCU\Software\Microsoft\Windows\DWM ColorizationColor), else Windows 7's
++ * default (the Aero theme's "Sky"). */
++static DWORD colorization_color(void)
++{
++    DWORD color = 0x6b74b8fc, value, size = sizeof(value);
++
++    if (!RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM", L"ColorizationColor",
++                      RRF_RT_REG_DWORD, NULL, &value, &size))
++        color = value;
++    return color;
++}
++
++HRESULT WINAPI WICCreateImagingFactory_Proxy(UINT, IWICImagingFactory **);
++
++static BOOL CALLBACK first_stream(HMODULE module, const WCHAR *type, WCHAR *name, LONG_PTR param)
++{
++    HRSRC *found = (HRSRC *)param;
++
++    *found = FindResourceW(module, name, type);
++    return !*found;
++}
++
++/* win4wine: the glass's reflection, as Windows 7's DWM draws it over the
++ * colorization color: part 40 of the theme's DWMWindow atlas (the theme
++ * file's PNG stream), premultiplied, as a top-down DIB section, or 0. */
++static HBITMAP glass_reflection(void)
++{
++    static HBITMAP reflection;
++    static BOOL tried;
++    BITMAPINFO info = {{ sizeof(info.bmiHeader) }};
++    IWICImagingFactory *factory = NULL;
++    IWICBitmapDecoder *decoder = NULL;
++    IWICBitmapFrameDecode *frame = NULL;
++    IWICBitmapSource *converted = NULL;
++    IWICStream *stream = NULL;
++    WCHAR path[MAX_PATH];
++    HMODULE theme_file = NULL;
++    HRSRC resource = NULL;
++    HTHEME theme;
++    RECT rect = {0};
++    WICRect wic_rect;
++    void *bits;
++
++    if (tried) return reflection;
++    tried = TRUE;
++    if (!(theme = OpenThemeData(NULL, L"DWMWindow"))) return 0;
++    if (FAILED(GetThemeRect(theme, 40, 0, TMT_ATLASRECT, &rect)) || IsRectEmpty(&rect) ||
++        FAILED(GetCurrentThemeName(path, ARRAY_SIZE(path), NULL, 0, NULL, 0)) ||
++        !(theme_file = LoadLibraryExW(path, NULL, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)))
++        goto done;
++    EnumResourceNamesW(theme_file, L"STREAM", first_stream, (LONG_PTR)&resource);
++    if (!resource || FAILED(WICCreateImagingFactory_Proxy(WINCODEC_SDK_VERSION, &factory)) ||
++        FAILED(IWICImagingFactory_CreateStream(factory, &stream)) ||
++        FAILED(IWICStream_InitializeFromMemory(stream, LockResource(LoadResource(theme_file, resource)),
++                                               SizeofResource(theme_file, resource))) ||
++        FAILED(IWICImagingFactory_CreateDecoderFromStream(factory, (IStream *)stream, NULL,
++                                                          WICDecodeMetadataCacheOnDemand, &decoder)) ||
++        FAILED(IWICBitmapDecoder_GetFrame(decoder, 0, &frame)) ||
++        FAILED(WICConvertBitmapSource(&GUID_WICPixelFormat32bppPBGRA, (IWICBitmapSource *)frame, &converted)))
++        goto done;
++    info.bmiHeader.biWidth = rect.right - rect.left;
++    info.bmiHeader.biHeight = -(rect.bottom - rect.top);
++    info.bmiHeader.biPlanes = 1;
++    info.bmiHeader.biBitCount = 32;
++    if (!(reflection = CreateDIBSection(NULL, &info, DIB_RGB_COLORS, &bits, NULL, 0))) goto done;
++    wic_rect.X = rect.left;
++    wic_rect.Y = rect.top;
++    wic_rect.Width = rect.right - rect.left;
++    wic_rect.Height = rect.bottom - rect.top;
++    if (FAILED(IWICBitmapSource_CopyPixels(converted, &wic_rect, wic_rect.Width * 4, wic_rect.Width * 4 * wic_rect.Height, bits)))
++    {
++        DeleteObject(reflection);
++        reflection = 0;
++    }
++done:
++    if (converted) IWICBitmapSource_Release(converted);
++    if (frame) IWICBitmapFrameDecode_Release(frame);
++    if (decoder) IWICBitmapDecoder_Release(decoder);
++    if (stream) IWICStream_Release(stream);
++    if (factory) IWICImagingFactory_Release(factory);
++    if (theme_file) FreeLibrary(theme_file);
++    CloseThemeData(theme);
++    TRACE("reflection %p %s\n", reflection, wine_dbgstr_rect(&rect));
++    return reflection;
++}
++
+ HRESULT WINAPI DwmGetColorizationColor(DWORD *colorization, BOOL *opaque_blend)
+ {
+-    FIXME("(%p, %p) stub\n", colorization, opaque_blend);
++    BOOL enabled = FALSE;
+ 
+-    return E_NOTIMPL;
++    TRACE("(%p, %p)\n", colorization, opaque_blend);
++
++    if (!colorization || !opaque_blend)
++        return E_INVALIDARG;
++    if (DwmIsCompositionEnabled(&enabled) != S_OK || !enabled)
++    {
++        FIXME("(%p, %p): no desktop composition\n", colorization, opaque_blend);
++        return E_NOTIMPL;
++    }
++    *colorization = colorization_color();
++    *opaque_blend = FALSE;
++    return S_OK;
+ }
+ 
+ /**********************************************************************
+@@ -183,9 +289,42 @@
+  */
+ HRESULT WINAPI DwmEnableBlurBehindWindow(HWND hWnd, const DWM_BLURBEHIND *pBlurBuf)
+ {
+-    FIXME("%p %p\n", hWnd, pBlurBuf);
++    BOOL enabled = FALSE, glass;
+ 
+-    return E_NOTIMPL;
++    TRACE("%p %p\n", hWnd, pBlurBuf);
++
++    if (!pBlurBuf)
++        return E_INVALIDARG;
++    /* win4wine: with Aero (DwmIsCompositionEnabled), the window keeps the
++     * alpha of its pixels and the X compositor blurs what is behind it
++     * (winex11's glass windows). The blur region is not kept: the whole
++     * window is glass where its pixels are translucent. */
++    if (DwmIsCompositionEnabled(&enabled) != S_OK || !enabled)
++    {
++        FIXME("%p %p: no desktop composition\n", hWnd, pBlurBuf);
++        return E_NOTIMPL;
++    }
++    if (!IsWindow(hWnd))
++        return E_HANDLE;
++    if (!(pBlurBuf->dwFlags & DWM_BB_ENABLE))
++        return S_OK;
++    glass = pBlurBuf->fEnable != 0;
++    if (!GetPropW(hWnd, L"__win4wine_glass") == !glass)
++        return S_OK;
++    /* winex11 puts the colorization color under the window's pixels */
++    if (glass)
++    {
++        HBITMAP reflection = glass_reflection();
++
++        if (reflection) SetPropW(hWnd, L"__win4wine_glass_reflection", reflection);
++        SetPropW(hWnd, L"__win4wine_glass", (HANDLE)(ULONG_PTR)(colorization_color() | !colorization_color()));
++    }
++    else RemovePropW(hWnd, L"__win4wine_glass");
++    /* A new window surface, with or without alpha */
++    SetWindowPos(hWnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
++                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
++    RedrawWindow(hWnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
++    return S_OK;
+ }
+ 
+ /**********************************************************************
+--- a/dlls/uxtheme/draw.c
++++ b/dlls/uxtheme/draw.c
+@@ -2106,18 +2106,92 @@
+         DrawTextW(hdc, text, count, rect, flags);
+ }
+ 
++/* GetObject gives a DIB section's height as positive whichever way its rows
++ * go (as on Windows), so the device's top-left pixel tells: it is the first
++ * pixel of the bits of a top-down DIB, of their last row for a bottom-up one. */
++static BOOL dib_is_top_down(HDC hdc, const DIBSECTION *dib)
++{
++    DWORD *first = dib->dsBm.bmBits;
++    DWORD *last = (DWORD *)((BYTE *)dib->dsBm.bmBits + (dib->dsBm.bmHeight - 1) * dib->dsBm.bmWidthBytes);
++    DWORD saved_first = *first, saved_last = *last;
++    POINT origin = {0, 0};
++    COLORREF probe;
++    BOOL top_down;
++
++    if (dib->dsBm.bmHeight == 1) return TRUE;
++    DPtoLP(hdc, &origin, 1);
++    GdiFlush();
++    *first = 0x00010203;
++    *last = 0x00040506;
++    probe = GetPixel(hdc, origin.x, origin.y);
++    top_down = probe == RGB(0x01, 0x02, 0x03) || (probe != RGB(0x04, 0x05, 0x06) && dib->dsBmih.biHeight < 0);
++    *first = saved_first;
++    *last = saved_last;
++    return top_down;
++}
++
+ static DWORD *dib_row(const DIBSECTION *dib, int y)
+ {
++    /* dsBmih.biHeight is made negative for a top-down DIB (dib_is_top_down) */
+     int row = dib->dsBmih.biHeight > 0 ? dib->dsBm.bmHeight - 1 - y : y;
+     return (DWORD *)((BYTE *)dib->dsBm.bmBits + row * dib->dsBm.bmWidthBytes);
+ }
+ 
++static void draw_changed_pixels_text(HDC hdc, const DIBSECTION *dib, const RECT *area, const WCHAR *text,
++                                     int count, DWORD flags, RECT *rect, const DTTOPTS *options)
++{
++    int x, y, width = area->right - area->left, height = area->bottom - area->top;
++    DWORD *before;
++
++    if (!(before = malloc(width * height * sizeof(DWORD))))
++    {
++        draw_text_or_callback(hdc, text, count, flags, rect, options);
++        return;
++    }
++    GdiFlush();
++    for (y = 0; y < height; y++)
++        memcpy(before + y * width, dib_row(dib, area->top + y) + area->left, width * sizeof(DWORD));
++    draw_text_or_callback(hdc, text, count, flags, rect, options);
++    GdiFlush();
++    for (y = 0; y < height; y++)
++    {
++        DWORD *row = dib_row(dib, area->top + y) + area->left;
++        for (x = 0; x < width; x++)
++            if ((row[x] & 0xffffff) != (before[y * width + x] & 0xffffff)) row[x] |= 0xff000000;
++    }
++    free(before);
++}
++
++/* Blend COLOR with coverage COVER (0-255) into a premultiplied pixel. */
++static DWORD blend_premultiplied(DWORD dst, COLORREF color, UINT cover)
++{
++    UINT inv = 255 - cover;
++    UINT a = cover + ((dst >> 24) * inv + 127) / 255;
++    UINT r = (GetRValue(color) * cover + ((dst >> 16) & 0xff) * inv + 127) / 255;
++    UINT g = (GetGValue(color) * cover + ((dst >> 8) & 0xff) * inv + 127) / 255;
++    UINT b = (GetBValue(color) * cover + (dst & 0xff) * inv + 127) / 255;
++    return (a << 24) | (r << 16) | (g << 8) | b;
++}
++
++/* DTT_COMPOSITED (or the theme's Composited): text on a surface with alpha (a
++ * buffered paint's, or a window on Aero glass), which GDI's text leaves
++ * transparent. As uxtheme does on Windows, the text is drawn from its
++ * grayscale coverage, so its own pixels and edges get their alpha, over a
++ * glow of GLOW pixels (DTT_GLOWSIZE, the theme's TextGlowSize) in
++ * GLOW_COLOR. */
+ static void draw_composited_text(HDC hdc, const WCHAR *text, int count, DWORD flags, RECT *rect,
+-                                 const DTTOPTS *options)
++                                 const DTTOPTS *options, int glow, COLORREF glow_color, int glow_intensity)
+ {
+     DIBSECTION dib;
+-    RECT area = *rect;
+-    DWORD *before;
++    RECT area = *rect, text_rect;
++    BITMAPINFO info = {{ sizeof(info.bmiHeader) }};
++    BYTE *cover = NULL, *halo = NULL;
++    DWORD *mask_bits;
++    HBITMAP mask_bitmap = 0;
++    HFONT mask_font = 0;
++    HDC mask_dc = 0;
++    LOGFONTW font;
++    COLORREF color = GetTextColor(hdc);
+     int x, y, width, height;
+ 
+     if (GetObjectW(GetCurrentObject(hdc, OBJ_BITMAP), sizeof(dib), &dib) != sizeof(dib) ||
+@@ -2126,30 +2200,89 @@
+         draw_text_or_callback(hdc, text, count, flags, rect, options);
+         return;
+     }
++    if (dib_is_top_down(hdc, &dib)) dib.dsBmih.biHeight = -dib.dsBmih.biHeight;
+     LPtoDP(hdc, (POINT *)&area, 2);
++    text_rect = area;
++    InflateRect(&area, glow, glow);
+     area.left = max(area.left, 0);
+     area.top = max(area.top, 0);
+     area.right = min(area.right, dib.dsBm.bmWidth);
+     area.bottom = min(area.bottom, dib.dsBm.bmHeight);
+     width = area.right - area.left;
+     height = area.bottom - area.top;
+-    if (width <= 0 || height <= 0 || !(before = malloc(width * height * sizeof(DWORD))))
++    if (width <= 0 || height <= 0) return;
++    if ((options && (options->dwFlags & DTT_CALLBACK)) || GetGraphicsMode(hdc) != GM_COMPATIBLE ||
++        !GetObjectW(GetCurrentObject(hdc, OBJ_FONT), sizeof(font), &font))
+     {
+-        draw_text_or_callback(hdc, text, count, flags, rect, options);
++        draw_changed_pixels_text(hdc, &dib, &area, text, count, flags, rect, options);
+         return;
+     }
++
++    /* The text's coverage: white grayscale-antialiased text on black. */
++    info.bmiHeader.biWidth = width;
++    info.bmiHeader.biHeight = -height;
++    info.bmiHeader.biPlanes = 1;
++    info.bmiHeader.biBitCount = 32;
++    font.lfQuality = ANTIALIASED_QUALITY;
++    if (!(mask_dc = CreateCompatibleDC(hdc)) ||
++        !(mask_bitmap = CreateDIBSection(mask_dc, &info, DIB_RGB_COLORS, (void **)&mask_bits, NULL, 0)) ||
++        !(mask_font = CreateFontIndirectW(&font)) ||
++        !(cover = calloc(width * height, 2)))
++    {
++        if (mask_dc) DeleteDC(mask_dc);
++        if (mask_bitmap) DeleteObject(mask_bitmap);
++        if (mask_font) DeleteObject(mask_font);
++        draw_changed_pixels_text(hdc, &dib, &area, text, count, flags, rect, options);
++        return;
++    }
++    halo = cover + width * height;
++    SelectObject(mask_dc, mask_bitmap);
++    SelectObject(mask_dc, mask_font);
++    SetTextColor(mask_dc, RGB(255, 255, 255));
++    SetBkMode(mask_dc, TRANSPARENT);
++    SetTextAlign(mask_dc, GetTextAlign(hdc));
++    SetTextCharacterExtra(mask_dc, GetTextCharacterExtra(hdc));
++    OffsetRect(&text_rect, -area.left, -area.top);
++    DrawTextW(mask_dc, text, count, &text_rect, flags & ~DT_CALCRECT);
+     GdiFlush();
+     for (y = 0; y < height; y++)
+-        memcpy(before + y * width, dib_row(&dib, area.top + y) + area.left, width * sizeof(DWORD));
+-    draw_text_or_callback(hdc, text, count, flags, rect, options);
++        for (x = 0; x < width; x++)
++        {
++            DWORD pixel = mask_bits[y * width + x];
++            cover[y * width + x] = max(max(pixel & 0xff, (pixel >> 8) & 0xff), (pixel >> 16) & 0xff);
++        }
++
+     GdiFlush();
++    if (glow > 0)
++    {
++        /* The glow: the coverage spread by a box of GLOW pixels each way. */
++        int radius = glow, i, j;
++        for (y = 0; y < height; y++)
++            for (x = 0; x < width; x++)
++            {
++                UINT sum = 0, n = 0;
++                for (j = max(0, y - radius); j <= min(height - 1, y + radius); j++)
++                    for (i = max(0, x - radius); i <= min(width - 1, x + radius); i++)
++                        sum += cover[j * width + i], n++;
++                halo[y * width + x] = min(255, sum * glow_intensity / (n * 100) * 2);
++            }
++        for (y = 0; y < height; y++)
++        {
++            DWORD *row = dib_row(&dib, area.top + y) + area.left;
++            for (x = 0; x < width; x++)
++                if (halo[y * width + x]) row[x] = blend_premultiplied(row[x], glow_color, halo[y * width + x]);
++        }
++    }
+     for (y = 0; y < height; y++)
+     {
+         DWORD *row = dib_row(&dib, area.top + y) + area.left;
+         for (x = 0; x < width; x++)
+-            if ((row[x] & 0xffffff) != (before[y * width + x] & 0xffffff)) row[x] |= 0xff000000;
++            if (cover[y * width + x]) row[x] = blend_premultiplied(row[x], color, cover[y * width + x]);
+     }
+-    free(before);
++    free(cover);
++    DeleteDC(mask_dc);
++    DeleteObject(mask_bitmap);
++    DeleteObject(mask_font);
+ }
+ 
+ /***********************************************************************
+@@ -2166,6 +2299,9 @@
+     COLORREF oldTextColor;
+     int oldBkMode;
+     int fontProp = TMT_FONT;
++    BOOL composited, theme_bool;
++    int glow_size = 0, glow_intensity;
++    COLORREF glow_color;
+ 
+     TRACE("%p %p %d %d %s:%d 0x%08lx %p %p\n", hTheme, hdc, iPartId, iStateId,
+         debugstr_wn(pszText, iCharCount), iCharCount, flags, rect, options);
+@@ -2174,7 +2310,7 @@
+         return E_HANDLE;
+ 
+     if(options) {
+-        if(options->dwFlags & ~(DTT_TEXTCOLOR | DTT_FONTPROP | DTT_CALLBACK | DTT_COMPOSITED))
++        if(options->dwFlags & ~(DTT_TEXTCOLOR | DTT_FONTPROP | DTT_CALLBACK | DTT_COMPOSITED | DTT_GLOWSIZE))
+             FIXME("unsupported flags 0x%08lx\n", options->dwFlags);
+         if(options->dwFlags & DTT_FONTPROP)
+             fontProp = options->iFontPropId;
+@@ -2187,6 +2323,24 @@
+             textColor = GetTextColor(hdc);
+     }
+ 
++    /* As on Windows, the theme can ask for composited and glowing text
++     * itself (Composited, TextGlow, TextGlowSize: Windows 7's taskbar clock
++     * on Aero glass draws with plain DrawThemeText). */
++    composited = options && (options->dwFlags & DTT_COMPOSITED);
++    if (!composited && SUCCEEDED(GetThemeBool(hTheme, iPartId, iStateId, TMT_COMPOSITED, &theme_bool)))
++        composited = theme_bool;
++    if (options && (options->dwFlags & DTT_GLOWSIZE))
++        glow_size = options->iGlowSize;
++    else if (SUCCEEDED(GetThemeBool(hTheme, iPartId, iStateId, TMT_TEXTGLOW, &theme_bool)) && theme_bool &&
++             FAILED(GetThemeInt(hTheme, iPartId, iStateId, TMT_TEXTGLOWSIZE, &glow_size)))
++        glow_size = 0;
++    if (FAILED(GetThemeColor(hTheme, iPartId, iStateId, TMT_GLOWCOLOR, &glow_color)))
++        glow_color = RGB(255, 255, 255);
++    if (FAILED(GetThemeInt(hTheme, iPartId, iStateId, TMT_GLOWINTENSITY, &glow_intensity)) || glow_intensity <= 0)
++        glow_intensity = 100;
++    if (glow_size < 0 || glow_size > 32) glow_size = 0;
++    TRACE("composited %d glow %d color %08lx intensity %d\n", composited, glow_size, glow_color, glow_intensity);
++
+     hr = GetThemeFont(hTheme, hdc, iPartId, iStateId, fontProp, &logfont);
+     if(SUCCEEDED(hr)) {
+         hFont = CreateFontIndirectW(&logfont);
+@@ -2224,8 +2378,8 @@
+                  SUCCEEDED(GetThemeColor(hTheme, iPartId, iStateId, TMT_TEXTSHADOWCOLOR, &shadow_color)))
+             draw_continuous_shadow(hdc, pszText, iCharCount, flags, rect, offset, shadow_color);
+     }
+-    if (options && (options->dwFlags & DTT_COMPOSITED) && !(flags & DT_CALCRECT))
+-        draw_composited_text(hdc, pszText, iCharCount, flags, rect, options);
++    if (!(flags & DT_CALCRECT) && (composited || glow_size > 0))
++        draw_composited_text(hdc, pszText, iCharCount, flags, rect, options, glow_size, glow_color, glow_intensity);
+     else
+         draw_text_or_callback(hdc, pszText, iCharCount, flags, rect, options);
+     SetBkMode(hdc, oldBkMode);
+--- a/dlls/uxtheme/msstyles.c
++++ b/dlls/uxtheme/msstyles.c
+@@ -1457,30 +1457,39 @@
+  * preference, but may be ignored in the attempt to locate the property.
+  * Will scan the entire chain of overrides for this class.
+  */
++/* A part/state of this class only, not of the classes it overrides */
++static PTHEME_PARTSTATE find_own_part_state(PTHEME_CLASS tc, int iPartId, int iStateId)
++{
++    PTHEME_PARTSTATE cur;
++
++    for (cur = tc->partstate; cur; cur = cur->next)
++        if (cur->iPartId == iPartId && cur->iStateId == iStateId) return cur;
++    return NULL;
++}
++
+ PTHEME_PROPERTY MSSTYLES_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId, int iPropertyPrimitive, int iPropertyId)
+ {
+-    PTHEME_CLASS next = tc;
++    PTHEME_CLASS cls;
+     PTHEME_PARTSTATE ps;
+     PTHEME_PROPERTY tp;
+ 
+     TRACE("(%p, %d, %d, %d)\n", tc, iPartId, iStateId, iPropertyId);
+-     /* Try and find an exact match on part & state */
+-    while(next && (ps = MSSTYLES_FindPartState(next, iPartId, iStateId, &next))) {
+-        if((tp = MSSTYLES_PSFindProperty(ps, iPropertyPrimitive, iPropertyId))) {
++    /* As on Windows, a class is searched whole (the state, then the part, then
++     * the class itself) before the class it overrides: Windows 7's
++     * ShowDesktop::Button gives its own image for the whole class, which
++     * comes before Button's push button image. */
++    for (cls = tc; cls; cls = cls->overrides)
++    {
++        if ((ps = find_own_part_state(cls, iPartId, iStateId)) &&
++            (tp = MSSTYLES_PSFindProperty(ps, iPropertyPrimitive, iPropertyId)))
++            return tp;
++        if (iStateId && (ps = find_own_part_state(cls, iPartId, 0)) &&
++            (tp = MSSTYLES_PSFindProperty(ps, iPropertyPrimitive, iPropertyId)))
++            return tp;
++        if (iPartId && (ps = find_own_part_state(cls, 0, 0)) &&
++            (tp = MSSTYLES_PSFindProperty(ps, iPropertyPrimitive, iPropertyId)))
+             return tp;
+-        }
+     }
+-    /* If that fails, and we didn't already try it, search for just part */
+-    if(iStateId != 0)
+-        iStateId = 0;
+-    /* As a last ditch attempt..go for just class */
+-    else if(iPartId != 0)
+-        iPartId = 0;
+-    else
+-        return NULL;
+-
+-    if((tp = MSSTYLES_FindProperty(tc, iPartId, iStateId, iPropertyPrimitive, iPropertyId)))
+-        return tp;
+     return NULL;
+ }
+ 
+--- a/dlls/uxtheme/system.c
++++ b/dlls/uxtheme/system.c
+@@ -675,10 +675,15 @@
+ */
+ BOOL WINAPI IsCompositionActive(void)
+ {
+-    FIXME(": stub\n");
+-
+-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
++    /* win4wine: as on Windows, desktop composition is active when dwmapi says
++     * so (Windows 7's shell with Aero in win4wine's session). */
++    static HRESULT (WINAPI *is_enabled)(BOOL *);
++    HMODULE dwmapi;
++    BOOL enabled = FALSE;
+ 
++    if (!is_enabled && (dwmapi = LoadLibraryW( L"dwmapi.dll" )))
++        is_enabled = (void *)GetProcAddress( dwmapi, "DwmIsCompositionEnabled" );
++    if (is_enabled && SUCCEEDED(is_enabled( &enabled ))) return enabled;
+     return FALSE;
+ }
+ 
+--- a/dlls/winex11.drv/bitblt.c
++++ b/dlls/winex11.drv/bitblt.c
+@@ -1641,6 +1641,10 @@
+     GC                    gc;
+     struct x11drv_image  *image;
+     BOOL                  byteswap;
++    BOOL                  glass;     /* win4wine: Aero glass, the pixels' own alpha goes to X */
++    DWORD                 tint;      /* win4wine: the colorization color (ARGB) under the glass */
++    DWORD                *reflection; /* win4wine: the glass's reflection (premultiplied, top-down), or NULL */
++    int                   reflection_width, reflection_height;
+ };
+ 
+ static struct x11drv_window_surface *get_x11_surface( struct window_surface *surface )
+@@ -1837,6 +1841,17 @@
+     }
+ }
+ 
++/* win4wine: premultiplied TOP over BOTTOM */
++static inline DWORD premultiplied_over( DWORD top, DWORD bottom )
++{
++    UINT inv = 255 - (top >> 24);
++
++    return (min( 255, (top >> 24) + (bottom >> 24) * inv / 255 ) << 24) |
++           (min( 255, ((top >> 16) & 0xff) + ((bottom >> 16) & 0xff) * inv / 255 ) << 16) |
++           (min( 255, ((top >> 8) & 0xff) + ((bottom >> 8) & 0xff) * inv / 255 ) << 8) |
++           min( 255, (top & 0xff) + (bottom & 0xff) * inv / 255 );
++}
++
+ /***********************************************************************
+  *           x11drv_surface_flush
+  */
+@@ -1850,7 +1865,8 @@
+     const unsigned char *src = color_bits;
+     unsigned char *dst = (unsigned char *)ximage->data;
+ 
+-    if (alpha_bits == -1)
++    if (surface->glass) alpha_bits = 0;
++    else if (alpha_bits == -1)
+     {
+         if (alpha_mask || color_info->bmiHeader.biBitCount != 32) alpha_bits = 0;
+         else if (color_info->bmiHeader.biCompression == BI_RGB) alpha_bits = 0xff000000;
+@@ -1870,6 +1886,34 @@
+         dst += dirty->top * width_bytes;
+         copy_image_byteswap( color_info, src, dst, width_bytes, width_bytes, dirty->bottom - dirty->top,
+                              surface->byteswap, mapping, ~0u, alpha_bits );
++        if (surface->glass && ximage->bits_per_pixel == 32)
++        {
++            /* Aero glass: as the DWM does, the colorization color and then
++             * the glass's reflection go under the window's (premultiplied)
++             * pixels; the X compositor puts the result over the blurred
++             * desktop. The reflection starts at the window's top left. */
++            UINT ta = surface->tint >> 24, x, y;
++            int surface_width = window_surface->rect.right - window_surface->rect.left;
++            DWORD tint = (ta << 24) | ((((surface->tint >> 16) & 0xff) * ta / 255) << 16) |
++                         ((((surface->tint >> 8) & 0xff) * ta / 255) << 8) | ((surface->tint & 0xff) * ta / 255);
++
++            for (y = 0; y < dirty->bottom - dirty->top; y++)
++            {
++                int ry = dirty->top + y;
++                DWORD *row = (DWORD *)(dst + y * width_bytes);
++                const DWORD *refl = surface->reflection && ry >= 0 && ry < surface->reflection_height ?
++                                    surface->reflection + ry * surface->reflection_width : NULL;
++                for (x = dirty->left; x < dirty->right; x++)
++                {
++                    DWORD under = tint;
++                    /* stretched across a window wider than it (the taskbar) */
++                    int rx = surface_width > surface->reflection_width ?
++                             x * surface->reflection_width / surface_width : x;
++                    if (refl && rx < surface->reflection_width) under = premultiplied_over( refl[rx], tint );
++                    row[x] = premultiplied_over( row[x], under );
++                }
++            }
++        }
+     }
+     else if (alpha_bits)
+     {
+@@ -1920,6 +1964,7 @@
+     TRACE( "freeing %p\n", surface );
+     if (surface->gc) XFreeGC( gdi_display, surface->gc );
+     if (surface->image) x11drv_image_destroy( surface->image );
++    free( surface->reflection );
+ }
+ 
+ static const struct window_surface_funcs x11drv_surface_funcs =
+@@ -1929,11 +1974,44 @@
+     x11drv_surface_destroy
+ };
+ 
++/* win4wine: the reflection dwmapi made for a glass window (a DIB section in
++ * the "__win4wine_glass_reflection" property), copied for the flush. */
++static void load_glass_reflection( HWND hwnd, struct x11drv_window_surface *surface )
++{
++    static const WCHAR reflection_prop[] = {'_','_','w','i','n','4','w','i','n','e','_','g','l','a','s','s','_',
++                                            'r','e','f','l','e','c','t','i','o','n',0};
++    HBITMAP bitmap = NtUserGetProp( hwnd, reflection_prop );
++    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
++    BITMAPINFO *info = (BITMAPINFO *)buffer;
++    DWORD *bits;
++    BITMAP bm;
++    HDC hdc;
++
++    if (!bitmap || NtGdiExtGetObjectW( bitmap, sizeof(bm), &bm ) != sizeof(bm) || bm.bmWidth <= 0 || bm.bmHeight <= 0) return;
++    if (!(bits = malloc( bm.bmWidth * bm.bmHeight * sizeof(DWORD) ))) return;
++    memset( info, 0, sizeof(info->bmiHeader) );
++    info->bmiHeader.biSize = sizeof(info->bmiHeader);
++    info->bmiHeader.biWidth = bm.bmWidth;
++    info->bmiHeader.biHeight = -bm.bmHeight;
++    info->bmiHeader.biPlanes = 1;
++    info->bmiHeader.biBitCount = 32;
++    info->bmiHeader.biCompression = BI_RGB;
++    hdc = NtGdiCreateCompatibleDC( 0 );
++    if (NtGdiGetDIBitsInternal( hdc, bitmap, 0, bm.bmHeight, bits, info, DIB_RGB_COLORS, 0, 0 ) == bm.bmHeight)
++    {
++        surface->reflection = bits;
++        surface->reflection_width = bm.bmWidth;
++        surface->reflection_height = bm.bmHeight;
++    }
++    else free( bits );
++    NtGdiDeleteObjectApp( hdc );
++}
++
+ /***********************************************************************
+  *           create_surface
+  */
+ static struct window_surface *create_surface( HWND hwnd, Window window, const XVisualInfo *vis, const RECT *rect,
+-                                              BOOL use_alpha )
++                                              BOOL use_alpha, DWORD glass )
+ {
+     const XPixmapFormatValues *format = pixmap_formats[vis->depth];
+     char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+@@ -1991,8 +2069,9 @@
+     }
+ 
+     /* wrap the XImage data in a HBITMAP if we can write to the surface pixels directly */
++    /* (Aero glass: the flush puts the tint under a copy of the pixels) */
+     if ((byteswap = image_needs_byteswap( image->ximage, is_r8g8b8( vis ), info->bmiHeader.biBitCount )) ||
+-        info->bmiHeader.biBitCount <= 8 || !(d3d_format = get_dib_d3dddifmt( info )))
++        info->bmiHeader.biBitCount <= 8 || !(d3d_format = get_dib_d3dddifmt( info )) || glass)
+         WARN( "Cannot use direct rendering, falling back to copies\n" );
+     else
+     {
+@@ -2026,6 +2105,9 @@
+         surface = get_x11_surface( window_surface );
+         surface->image = image;
+         surface->byteswap = byteswap;
++        surface->glass = !!glass;
++        surface->tint = glass;
++        if (glass) load_glass_reflection( hwnd, surface );
+         surface->window = window;
+         surface->gc = XCreateGC( gdi_display, window, 0, NULL );
+         XSetSubwindowMode( gdi_display, surface->gc, IncludeInferiors );
+@@ -2035,9 +2117,32 @@
+ }
+ 
+ 
++/* win4wine: a window that dwmapi gave Aero glass (DwmEnableBlurBehindWindow,
++ * DwmExtendFrameIntoClientArea): as under Windows' desktop composition, its
++ * pixels' alpha is kept and an X compositor blends and blurs it. */
++static DWORD is_glass_window( HWND hwnd )
++{
++    static const WCHAR glass_prop[] = {'_','_','w','i','n','4','w','i','n','e','_','g','l','a','s','s',0};
++
++    /* the property is the colorization color (ARGB), or 1 */
++    return argb_visual.visualid ? (DWORD)(UINT_PTR)NtUserGetProp( hwnd, glass_prop ) : 0;
++}
++
++static void set_glass_property( struct x11drv_win_data *data, BOOL glass )
++{
++    Atom atom = XInternAtom( data->display, "_WIN4WINE_GLASS", False );
++    unsigned long value = 1;
++
++    if (!data->whole_window) return;
++    if (glass) XChangeProperty( data->display, data->whole_window, atom, XA_CARDINAL, 32, PropModeReplace,
++                                (unsigned char *)&value, 1 );
++    else XDeleteProperty( data->display, data->whole_window, atom );
++}
++
+ static BOOL enable_direct_drawing( struct x11drv_win_data *data, BOOL layered )
+ {
+     if (layered) return FALSE;
++    if (is_glass_window( data->hwnd )) return FALSE;
+     if (data->embedded) return TRUE; /* draw directly to the window */
+     if (data->whole_window == root_window) return TRUE; /* draw directly to the window */
+     if (data->client_window) return TRUE; /* draw directly to the window */
+@@ -2052,10 +2157,16 @@
+ {
+     struct window_surface *previous;
+     struct x11drv_win_data *data;
++    DWORD glass;
+ 
+     TRACE( "hwnd %p, layered %u, surface_rect %s, surface %p\n", hwnd, layered, wine_dbgstr_rect( surface_rect ), surface );
+ 
+     if (!(data = get_win_data( hwnd ))) return TRUE; /* use default surface */
++    glass = !layered && !data->embedded ? is_glass_window( hwnd ) : 0;
++    if (glass) set_window_visual( data, &argb_visual, TRUE );
++    else if (!layered && data->glass) set_window_visual( data, &default_visual, FALSE );
++    if (glass || data->glass) set_glass_property( data, !!glass );
++    data->glass = !!glass;
+     if ((previous = *surface) && previous->funcs == &x11drv_surface_funcs)
+     {
+         Window window = get_x11_surface(previous)->window;
+@@ -2077,7 +2188,7 @@
+     }
+ 
+     *surface = create_surface( data->hwnd, data->whole_window, &data->vis, surface_rect,
+-                               layered ? data->use_alpha : FALSE );
++                               layered || glass ? data->use_alpha : FALSE, glass );
+ 
+ done:
+     release_win_data( data );
+--- a/dlls/winex11.drv/x11drv.h
++++ b/dlls/winex11.drv/x11drv.h
+@@ -671,6 +671,7 @@
+     UINT        embedded : 1;   /* is window an XEMBED client? */
+     UINT        shaped : 1;     /* is window using a custom region shape? */
+     UINT        layered : 1;    /* is window layered and with valid attributes? */
++    UINT        glass : 1;      /* win4wine: Aero glass (dwmapi), see is_glass_window */
+     UINT        use_alpha : 1;  /* does window use an alpha channel? */
+     UINT        skip_taskbar : 1; /* does window should be deleted from taskbar */
+     UINT        add_taskbar : 1; /* does window should be added to taskbar regardless of style */

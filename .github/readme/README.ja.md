@@ -121,9 +121,10 @@ sudo rm -f /usr/share/wayland-sessions/windows7-shell-wayland.desktop /usr/local
 
 ## 制限
 
-- **Aero のガラスはまだありません。** 見た目は「Windows 7 ベーシック」（Aero のテーマを、デスクトップの合成なしで描いたもの）です。
-  ガラス、ライブ サムネイル、Aero Peek にはデスクトップ ウィンドウ マネージャー（DWM）の合成が要り、Wine にはありません。
-  このブランチの次の目標です。
+- **Aero のガラスは試作です。** 既定の見た目は「Windows 7 ベーシック」（Aero のテーマを、デスクトップの合成なしで描いたもの）です。
+  `win7-session.json` に `"aero": true`（または `W7_AERO=1 windows7/7.sh run`）で、タスクバーとスタートメニューがガラスになり、
+  配色の色とガラスの反射が付きます（Wine のパッチ 0152）。混ぜてぼかすのは X のコンポジター（picom と
+  [windows7/picom.conf](../../windows7/picom.conf)）です。窓の枠のガラス、ライブ サムネイル、Aero Peek はまだです。
 - ネットワーク、ヘルプとサポート、コントロール パネルの中身の多くは、Wine にその部品が無いので使えません。
 - スタートメニューの「ロック」「スリープ」「休止状態」は何もしません。
 
@@ -138,6 +139,9 @@ LightDM ─ Windows 7 のログオン画面 (greeter/win7-greeter.py)
         │    （Wayland のセッションでは、パッチを当てた labwc。wayland/）
         └─ fcitx5 + Mozc, トレイの仲介 (bridge-wm/tray.py)
 ```
+
+今のデスクトップの窓の中で、入れずに試すには `windows7/7.sh setup ISO`、次に `windows7/7.sh run` です
+（Arch / CachyOS。引数なしの `windows7/7.sh` でコマンドと切り替えを出します）。
 
 仕組みや設計の説明は [docs/](../../docs/README.md) にあります。Wine、bridge、セッションは XP のシェルと共通なので、
 XP のシェルを例に書いた文書もあります。

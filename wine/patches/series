@@ -149,3 +149,4 @@
 0149-ntdll-external-xp-comctl32-beside-exe.patch
 0150-user32-external-xp-plain-comctl32-classes.patch
 0151-user32-two-size-icons-own-images.patch
+0152-dlls-external-win7-aero-glass.patch

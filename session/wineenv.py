@@ -52,4 +52,8 @@ def environment(base, config, shell):
     # when the Linux session itself runs in another locale.
     if config.get('locale'):
         env.update(LANG=config['locale'], LC_ALL=config['locale'])
+    if config.get('aero'):
+        # Desktop composition in Windows 7's shell: Aero glass (Wine patch
+        # 0152), blended and blurred by the session's X compositor.
+        env['WIN4WINE_AERO'] = '1'
     return env
