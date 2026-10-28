@@ -4,10 +4,16 @@ Subject: [PATCH] dwmapi, uxtheme, winex11: Aero glass frames, live thumbnails an
 Purpose: with Aero (0152), Windows 7's window frames, the taskbar's window
 thumbnails and Aero Peek as under the desktop window manager.
 Windows 7 behavior: the DWM draws every framed window's borders and caption
-as glass, with the DWMWindow atlas's caption buttons (one group against the
-top of the frame, as high as SM_CYSIZE less one, each as wide as its image
-without its glow) and a black title with a white glow; the menu bar and the
-window's scroll bars stay opaque. DwmExtendFrameIntoClientArea takes the
+as glass with the theme's DWMWindow atlas (its parts' names as msstyleEditor
+lists them): TOPFRAME, LEFTFRAME, RIGHTFRAME and BOTTOMFRAME, active or
+inactive, whose transparent corners round the window; the caption buttons
+in one group against the top of the frame (BUTTONACTIVECAPTIONEND for the
+first, minimize, BUTTONACTIVECAPTION, BUTTONACTIVECLOSE; BUTTONGLOW and
+BUTTONCLOSEGLOW behind a hot one; the white glyphs per DPI), as high as
+SM_CYSIZE less one and each as wide as its image without its glow; a black
+title over TEXTGLOW, the title its content area. The menu bar and the
+window's scroll bars stay opaque. Pixels that GDI draws over glass (alpha 0
+with a colour) show opaque. DwmExtendFrameIntoClientArea takes the
 glass into the client area (all of it with negative margins). Pointing at a
 taskbar button, explorer calls DwmpRegisterThumbnail (ordinal 124:
 destination, source, NULL, 1, &thumbnail, as logged from it), sizes it with
@@ -23,14 +29,17 @@ and DwmpActivateLivePreview did nothing. DwmIsCompositionEnabled was
 Windows 10's answer (TRUE) in the Windows 7 session's other programs.
 Change: in a Windows 7 session, DwmIsCompositionEnabled gives
 WIN4WINE_AERO in every program. uxtheme draws a frame with Aero as glass:
-in a buffered paint (alpha 0) with dark and light edges, the atlas's
-buttons and glyphs (decoded with WIC from the theme file's stream), and the
-title composited with a glow; it copies only the borders and the caption,
+in a buffered paint (alpha 0) with the atlas's frame images (TOPFRAME and
+BOTTOMFRAME, which give no side margins, stretched by their middle column),
+buttons and glyphs (decoded with WIC from the theme file's stream) and the
+title over TEXTGLOW; the window's region follows the frame images' corners;
+it copies only the borders and the caption,
 says how far the glass goes ("__win4wine_glass_frame") and calls
 DwmExtendFrameIntoClientArea, which makes the window glass and keeps its
 margins. winex11 keeps the alpha of a glass frame's window outside the
 part that stays opaque (client area and menu bar, less the margins), which
-it updates when the surface is kept. Thumbnails are a table in dwmapi, which
+it updates when the surface is kept, and shows opaque the pixels that are not
+premultiplied (GDI's over glass: the Start menu's separators). Thumbnails are a table in dwmapi, which
 winex11 (same process) reads from the destination's property and draws at
 each flush of a glass destination: each source's X window (its pixmap,
 kept by the session's Composite redirection) scaled with a box filter; a
@@ -507,7 +516,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
  }
 --- a/dlls/uxtheme/window.c
 +++ b/dlls/uxtheme/window.c
-@@ -26,10 +26,13 @@
+@@ -26,10 +26,14 @@
  #include "winuser.h"
  #include "uxthemedll.h"
  #include "vssym32.h"
@@ -518,10 +527,35 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
  
  static void themed_caption_geometry(HWND hwnd, HTHEME theme, RECT *caption, RECT buttons[3]);
 +static BOOL aero_frames(void);
++static HRGN aero_frame_region(int width, int height, BOOL maximized);
  BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target);
  static BOOL draw_non_client(HWND hwnd, HDC target, BOOL paint);
  
-@@ -365,6 +368,40 @@
+@@ -163,10 +167,19 @@
+     }
+ 
+     GetWindowRect(hwnd, &window);
+-    if (FAILED(GetThemeBackgroundRegion(theme, NULL, maximized ? WP_MAXCAPTION : WP_CAPTION,
+-                                        CS_ACTIVE, caption, &shape))) goto done;
+-    body = CreateRectRgn(0, caption->bottom, window.right - window.left, window.bottom - window.top);
+-    if (!body || CombineRgn(shape, shape, body, RGN_OR) == ERROR) goto done;
++    if (aero_frames())
++    {
++        /* Aero's frame is rounded at its four corners */
++        if (!(shape = aero_frame_region(window.right - window.left, window.bottom - window.top, maximized)))
++            shape = CreateRectRgn(0, 0, window.right - window.left, window.bottom - window.top);
++    }
++    else
++    {
++        if (FAILED(GetThemeBackgroundRegion(theme, NULL, maximized ? WP_MAXCAPTION : WP_CAPTION,
++                                            CS_ACTIVE, caption, &shape))) goto done;
++        body = CreateRectRgn(0, caption->bottom, window.right - window.left, window.bottom - window.top);
++        if (!body || CombineRgn(shape, shape, body, RGN_OR) == ERROR) goto done;
++    }
+     if (region && region->managed && EqualRgn(current, shape)) goto done;
+     copy = CreateRectRgn(0, 0, 0, 0);
+     if (!copy || CombineRgn(copy, shape, NULL, RGN_COPY) == ERROR) goto done;
+@@ -365,6 +378,40 @@
          width = height = GetSystemMetrics(SM_CYSIZE) - 4;
          if (MSSTYLES_ActiveThemeFormat4()) width = GetSystemMetrics(SM_CXSIZE) - 4;
      }
@@ -562,7 +596,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
      buttons[0].right = window.right - border_x - 2;
      buttons[0].left = buttons[0].right - width;
      buttons[0].bottom = caption->bottom - padding;
-@@ -456,6 +493,224 @@
+@@ -456,6 +503,302 @@
  }
  
  /* Without PAINT, only the window's region follows its caption (TARGET NULL). */
@@ -634,6 +668,9 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +
 +/* The theme file's DWMWindow atlas (its PNG stream), premultiplied, selected
 + * in a memory DC: the images the DWM draws Aero's frames with. */
++static const DWORD *atlas_bits;
++static int atlas_width, atlas_height;
++
 +static HDC aero_atlas(void)
 +{
 +    static HDC atlas;
@@ -675,7 +712,12 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +        {
 +            if (SUCCEEDED(IWICBitmapSource_CopyPixels(converted, NULL, width * 4, width * 4 * height, bits)) &&
 +                (atlas = CreateCompatibleDC(NULL)))
++            {
 +                SelectObject(atlas, bitmap);
++                atlas_bits = bits;
++                atlas_width = width;
++                atlas_height = height;
++            }
 +            else DeleteObject(bitmap);
 +        }
 +    }
@@ -710,6 +752,10 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +        return GdiAlphaBlend(dc, left, top, w, h, atlas, src.left, src.top, w, h, blend);
 +    }
 +    GetThemeMargins(dwm, NULL, part, 0, TMT_SIZINGMARGINS, NULL, &m);
++    /* TOPFRAME and BOTTOMFRAME give no side margins: their image is both
++     * rounded corners, of which only the middle column stretches */
++    if ((part == 56 || part == 1) && !m.cxLeftWidth && !m.cxRightWidth)
++        m.cxLeftWidth = m.cxRightWidth = (w - 1) / 2;
 +    m.cxLeftWidth = min(m.cxLeftWidth, w / 2);
 +    m.cxRightWidth = min(m.cxRightWidth, w / 2);
 +    m.cyTopHeight = min(m.cyTopHeight, h / 2);
@@ -726,11 +772,14 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +    return TRUE;
 +}
 +
-+/* An Aero caption button: the DWMWindow atlas's background for the button
-+ * (minimize, maximize: 3 and 5, close: 7, close alone: 9; one more when
-+ * inactive) and its white glyph at the window's DPI (close 12, help 17,
-+ * maximize 21, minimize 25, restore 29, then 120, 144 and 192 DPI). Rows:
-+ * normal, hot, pressed, disabled. */
++/* An Aero caption button, from the DWMWindow atlas (its parts' names are
++ * Windows 7's, as msstyleEditor lists them): BUTTONACTIVECAPTION (3) for
++ * maximize and help, BUTTONACTIVECAPTIONEND (5) for minimize, the group's
++ * first button, BUTTONACTIVECLOSE (7) or BUTTONACTIVECLOSEALONE (9), one more
++ * when inactive; behind a hot button BUTTONGLOW (16) or BUTTONCLOSEGLOW (11);
++ * over it its white glyph at the window's DPI (BUTTONCLOSEGLYPH96 12, help
++ * 17, maximize 21, minimize 25, restore 29, then 120, 144 and 192 DPI).
++ * Rows: normal, hot, pressed, disabled. */
 +static BOOL draw_aero_button(HDC dc, HWND hwnd, int part, int state, const RECT *rect, BOOL active, BOOL alone)
 +{
 +    HTHEME dwm = OpenThemeData(NULL, L"DWMWindow");
@@ -742,13 +791,27 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +    switch (part)
 +    {
 +    case WP_CLOSEBUTTON: background = alone ? 9 : 7; glyph = 12; break;
-+    case WP_HELPBUTTON: background = 5; glyph = 17; break;
-+    case WP_MAXBUTTON: background = 5; glyph = 21; break;
-+    case WP_RESTOREBUTTON: background = 5; glyph = 29; break;
-+    case WP_MINBUTTON: background = 3; glyph = 25; break;
++    case WP_HELPBUTTON: background = 3; glyph = 17; break;
++    case WP_MAXBUTTON: background = 3; glyph = 21; break;
++    case WP_RESTOREBUTTON: background = 3; glyph = 29; break;
++    /* BUTTONACTIVECAPTIONEND: the group's first button, rounded outside */
++    case WP_MINBUTTON: background = 5; glyph = 25; break;
 +    default: CloseThemeData(dwm); return FALSE;
 +    }
 +    if (!active && row == 0) background++;
++    if (row == 1)
++    {
++        /* the hot glow, centred on the button at its own size */
++        HDC atlas_dc = aero_atlas();
++        RECT image;
++        if (atlas_dc && SUCCEEDED(GetThemeRect(dwm, part == WP_CLOSEBUTTON ? 11 : 16, 0, TMT_ATLASRECT, &image)))
++        {
++            static const BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
++            int w = MulDiv(image.right - image.left, dpi, 96), h = MulDiv(image.bottom - image.top, dpi, 96);
++            GdiAlphaBlend(dc, (rect->left + rect->right - w) / 2, (rect->top + rect->bottom - h) / 2, w, h, atlas_dc,
++                          image.left, image.top, image.right - image.left, image.bottom - image.top, blend);
++        }
++    }
 +    /* the images' glow goes 2 pixels out of the button (1 above and below) */
 +    glow = *rect;
 +    InflateRect(&glow, MulDiv(2, dpi, 96), MulDiv(1, dpi, 96));
@@ -756,6 +819,55 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +    if (ret) draw_atlas_part(dc, dwm, glyph + size, row == 3 ? 3 : 0, 4, rect, TRUE);
 +    CloseThemeData(dwm);
 +    return ret;
++}
++
++static BYTE atlas_alpha(int x, int y)
++{
++    if (!atlas_bits || x < 0 || y < 0 || x >= atlas_width || y >= atlas_height) return 255;
++    return atlas_bits[y * atlas_width + x] >> 24;
++}
++
++/* Aero's window shape: the rounded corners of the DWMWindow atlas's
++ * TOPFRAME (56) and BOTTOMFRAME (1), as their transparent corner pixels
++ * show them. NULL when maximized or without the atlas. */
++static HRGN aero_frame_region(int width, int height, BOOL maximized)
++{
++    HTHEME dwm;
++    RECT top, bottom;
++    MARGINS mt = {0}, mb = {0};
++    HRGN shape, cut;
++    int x, y, row;
++
++    if (maximized || !aero_atlas() || !(dwm = OpenThemeData(NULL, L"DWMWindow"))) return NULL;
++    if (FAILED(GetThemeRect(dwm, 56, 0, TMT_ATLASRECT, &top)) || FAILED(GetThemeRect(dwm, 1, 0, TMT_ATLASRECT, &bottom)))
++    {
++        CloseThemeData(dwm);
++        return NULL;
++    }
++    GetThemeMargins(dwm, NULL, 56, 0, TMT_SIZINGMARGINS, NULL, &mt);
++    GetThemeMargins(dwm, NULL, 1, 0, TMT_SIZINGMARGINS, NULL, &mb);
++    CloseThemeData(dwm);
++    shape = CreateRectRgn(0, 0, width, height);
++    cut = CreateRectRgn(0, 0, 0, 0);
++    /* the active row of each: the first of two */
++    for (y = 0; y < mt.cyTopHeight && y < height / 2; y++)
++    {
++        for (x = 0; x < mt.cxLeftWidth && !atlas_alpha(top.left + x, top.top + y); x++) ;
++        SetRectRgn(cut, 0, y, x, y + 1); CombineRgn(shape, shape, cut, RGN_DIFF);
++        for (x = 0; x < mt.cxRightWidth && !atlas_alpha(top.right - 1 - x, top.top + y); x++) ;
++        SetRectRgn(cut, width - x, y, width, y + 1); CombineRgn(shape, shape, cut, RGN_DIFF);
++    }
++    row = (bottom.bottom - bottom.top) / 2;
++    for (y = 0; y < mb.cyBottomHeight && y < height / 2; y++)
++    {
++        int sy = bottom.top + row - 1 - y;
++        for (x = 0; x < mb.cxLeftWidth && !atlas_alpha(bottom.left + x, sy); x++) ;
++        SetRectRgn(cut, 0, height - 1 - y, x, height - y); CombineRgn(shape, shape, cut, RGN_DIFF);
++        for (x = 0; x < mb.cxRightWidth && !atlas_alpha(bottom.right - 1 - x, sy); x++) ;
++        SetRectRgn(cut, width - x, height - 1 - y, width, height - y); CombineRgn(shape, shape, cut, RGN_DIFF);
++    }
++    DeleteObject(cut);
++    return shape;
 +}
 +
 +/* dwmapi makes the frame glass (and the window's surface keep its alpha).
@@ -787,7 +899,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
  static BOOL draw_non_client(HWND hwnd, HDC target, BOOL paint)
  {
      HTHEME theme;
-@@ -470,6 +725,8 @@
+@@ -470,6 +813,8 @@
      WCHAR title[512];
      HICON icon;
      DWORD options;
@@ -796,7 +908,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
  
      if (!win4wine_external_shell()
          || (style & WS_CAPTION) != WS_CAPTION || (style & WS_CHILD)
-@@ -536,16 +793,34 @@
+@@ -536,16 +881,53 @@
      caption.bottom = max(caption.bottom, min(border_y + GetSystemMetrics(SM_CYCAPTION), client.top));
      if (!target) caption_region_update(hwnd, theme, &caption, maximized);
      if (!paint) goto done;
@@ -821,8 +933,27 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 +        if (!target) make_frame_glass(hwnd, border_x, caption.bottom, border_x, border_y);
 +        if ((glass = BeginBufferedPaint(dc, &window, BPBF_TOPDOWNDIB, &params, &buffer_dc)))
 +        {
++            /* the DWM's frame: TOPFRAME (56), LEFTFRAME (33), RIGHTFRAME
++             * (41) and BOTTOMFRAME (1), active or inactive */
++            HTHEME dwm = OpenThemeData(NULL, L"DWMWindow");
++            int row = active ? 0 : 1;
++            RECT band;
++
 +            dc = buffer_dc;
-+            draw_glass_edges(dc, &window, &client, active);
++            if (!dwm || !aero_atlas()) draw_glass_edges(dc, &window, &client, active);
++            else
++            {
++                SetRect(&band, window.left, window.top, window.right, caption.bottom);
++                draw_atlas_part(dc, dwm, 56, row, 2, &band, FALSE);
++                SetRect(&band, window.left, caption.bottom, window.left + border_x, window.bottom - border_y);
++                draw_atlas_part(dc, dwm, 33, row, 2, &band, FALSE);
++                SetRect(&band, window.right - border_x, caption.bottom, window.right, window.bottom - border_y);
++                draw_atlas_part(dc, dwm, 41, row, 2, &band, FALSE);
++                SetRect(&band, window.left, window.bottom - border_y, window.right, window.bottom);
++                draw_atlas_part(dc, dwm, 1, row, 2, &band, FALSE);
++
++            }
++            if (dwm) CloseThemeData(dwm);
 +        }
 +    }
 +    if (!glass)
@@ -839,7 +970,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
      if (!caption_visible) goto done;
  
      text = caption;
-@@ -590,7 +865,8 @@
+@@ -590,7 +972,8 @@
          button_state = (close_state == (UINT)-1 || (close_state & (MF_DISABLED | MF_GRAYED)))
              ? CBS_DISABLED : hit == HTCLOSE ? (GetKeyState(VK_LBUTTON) < 0 ? CBS_PUSHED : CBS_HOT) : CBS_NORMAL;
          button_state = caption_button_state(hwnd, theme, WP_CLOSEBUTTON, button_state);
@@ -849,7 +980,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
          text.right = part.left - 2;
          if (style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX))
          {
-@@ -598,12 +874,14 @@
+@@ -598,12 +981,14 @@
              button_state = !(style & WS_MAXIMIZEBOX) ? MAXBS_DISABLED
                  : hit == HTMAXBUTTON ? (GetKeyState(VK_LBUTTON) < 0 ? MAXBS_PUSHED : MAXBS_HOT) : MAXBS_NORMAL;
              button_state = caption_button_state(hwnd, theme, maximized ? WP_RESTOREBUTTON : WP_MAXBUTTON, button_state);
@@ -866,7 +997,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
              text.right = part.left - 2;
          }
          else if (exstyle & WS_EX_CONTEXTHELP)
-@@ -612,7 +890,8 @@
+@@ -612,7 +997,8 @@
              part = buttons[1];
              button_state = hit == HTHELP ? (GetKeyState(VK_LBUTTON) < 0 ? HBS_PUSHED : HBS_HOT) : HBS_NORMAL;
              button_state = caption_button_state(hwnd, theme, WP_HELPBUTTON, button_state);
@@ -876,7 +1007,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
              text.right = part.left - 2;
          }
      }
-@@ -632,9 +911,28 @@
+@@ -632,9 +1018,49 @@
      if (!(options & WTNCA_NODRAWCAPTION)) GetWindowTextW(hwnd, title, ARRAY_SIZE(title));
      SetTextColor(dc, GetThemeSysColor(theme, active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT));
      text.bottom = text.top + GetSystemMetrics(SM_CYCAPTION);
@@ -884,10 +1015,31 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
 -                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS, 0, &text);
 +    if (glass)
 +    {
-+        /* Over glass the title is black with a white glow, as the DWM draws it */
-+        DTTOPTS opts = { sizeof(opts), DTT_COMPOSITED | DTT_GLOWSIZE | DTT_TEXTCOLOR };
++        /* Over glass the title is black over the DWMWindow atlas's
++         * TEXTGLOW (55), stretched behind it, as the DWM draws it */
++        DTTOPTS opts = { sizeof(opts), DTT_COMPOSITED | DTT_TEXTCOLOR };
++        HTHEME dwm = OpenThemeData(NULL, L"DWMWindow");
++        RECT extent = text;
++        UINT dpi = GetDpiForWindow(hwnd);
++
 +        opts.crText = active ? RGB(0, 0, 0) : RGB(0x40, 0x40, 0x40);
-+        opts.iGlowSize = 8;
++        if (dwm && title[0] && DrawTextW(dc, title, -1, &extent, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX |
++                                                          DT_END_ELLIPSIS | DT_CALCRECT))
++        {
++            /* the text is the glow's content area (its content margins) */
++            int height = extent.bottom - extent.top;
++            MARGINS content = { 17, 17, 8, 10 };
++            GetThemeMargins(dwm, NULL, 55, 0, TMT_CONTENTMARGINS, NULL, &content);
++            extent.right = min(extent.right, text.right);
++            extent.top = text.top + (GetSystemMetrics(SM_CYCAPTION) - height) / 2;
++            extent.bottom = extent.top + height;
++            extent.left -= MulDiv(content.cxLeftWidth, dpi, 96);
++            extent.right += MulDiv(content.cxRightWidth, dpi, 96);
++            extent.top -= MulDiv(content.cyTopHeight, dpi, 96);
++            extent.bottom += MulDiv(content.cyBottomHeight, dpi, 96);
++            draw_atlas_part(dc, dwm, 55, 0, 1, &extent, FALSE);
++        }
++        if (dwm) CloseThemeData(dwm);
 +        DrawThemeTextEx(theme, dc, maximized ? WP_MAXCAPTION : WP_CAPTION, state, title, -1,
 +                        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS, &text, &opts);
 +    }
@@ -1028,16 +1180,24 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
  /***********************************************************************
   *           x11drv_surface_flush
   */
-@@ -1906,13 +2011,22 @@
+@@ -1906,13 +2011,30 @@
                  for (x = dirty->left; x < dirty->right; x++)
                  {
                      DWORD under = tint;
 +                    int rx;
 +
++                    DWORD p = row[x];
++
 +                    if ((int)(y + dirty->top) >= surface->opaque.top && (int)(y + dirty->top) < surface->opaque.bottom &&
 +                        (int)x >= surface->opaque.left && (int)x < surface->opaque.right)
 +                    {
 +                        row[x] |= 0xff000000; /* the client area, drawn by GDI */
++                        continue;
++                    }
++                    if (((p >> 16) & 0xff) > p >> 24 || ((p >> 8) & 0xff) > p >> 24 || (p & 0xff) > p >> 24)
++                    {
++                        /* not premultiplied: drawn by GDI (alpha 0) over the glass, shown opaque */
++                        row[x] |= 0xff000000;
 +                        continue;
 +                    }
                      /* stretched across a window wider than it (the taskbar) */
@@ -1052,7 +1212,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
          }
      }
      else if (alpha_bits)
-@@ -1974,6 +2088,63 @@
+@@ -1974,6 +2096,63 @@
      x11drv_surface_destroy
  };
  
@@ -1116,7 +1276,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
  /* win4wine: the reflection dwmapi made for a glass window (a DIB section in
   * the "__win4wine_glass_reflection" property), copied for the flush. */
  static void load_glass_reflection( HWND hwnd, struct x11drv_window_surface *surface )
-@@ -2107,7 +2278,11 @@
+@@ -2107,7 +2286,11 @@
          surface->byteswap = byteswap;
          surface->glass = !!glass;
          surface->tint = glass;
@@ -1129,7 +1289,7 @@ Scope: WIN4WINE_AERO with WIN4WINE_SHELL=win7; thumbnails and Peek are
          surface->window = window;
          surface->gc = XCreateGC( gdi_display, window, 0, NULL );
          XSetSubwindowMode( gdi_display, surface->gc, IncludeInferiors );
-@@ -2170,7 +2345,18 @@
+@@ -2170,7 +2353,18 @@
      if ((previous = *surface) && previous->funcs == &x11drv_surface_funcs)
      {
          Window window = get_x11_surface(previous)->window;

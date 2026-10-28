@@ -272,7 +272,7 @@ XP と ReactOS のシェルのための変更のうち、Windows 7 のシェル�
 | 番号 | 内容 | opt-in |
 |---|---|---|
 | 0152 | dwmapi、uxtheme、winex11: Windows 7 のシェルの Aero のガラス。`WIN4WINE_AERO=1`（session.json の `"aero"`）のとき w7-explorer.exe でデスクトップの合成を有効にし（DwmIsCompositionEnabled、IsCompositionActive、DwmGetColorizationColor）、DwmEnableBlurBehindWindow の窓を ARGB の X の窓にして、画素のアルファを保ったまま、配色の色（ColorizationColor）とテーマの DWMWindow のアトラスの反射（パート 40）をその下に重ねる。X のコンポジター（picom、`windows7/picom.conf`）が `_WIN4WINE_GLASS` の窓の後ろをぼかす。テーマの Composited・TextGlow による合成の文字とグロー（タスクバーの時計）、クラス全体を基底クラスより先に探すプロパティの順（ShowDesktop::Button のガラス）は Wine 全体 | 合成は あり（`WIN4WINE_AERO`） |
-| 0153 | dwmapi、uxtheme、winex11: Aero の窓の枠、タスクバーのライブ サムネイル、Aero Peek。Windows 7 のセッションのすべてのプログラムで合成を有効にし（`WIN4WINE_AERO`）、uxtheme が枠をガラス（DWMWindow のアトラスのボタンとグリフ、グローのある黒い題名。ボタンの高さは SM_CYSIZE − 1、幅は画像から）で描き、DwmExtendFrameIntoClientArea の余白まで、メニュー バーとクライアント領域以外をガラスに。DwmpRegisterThumbnail（124）・DwmRegisterThumbnail・DwmUpdateThumbnailProperties・DwmQueryThumbnailSourceSize のサムネイルを winex11 が元の窓の X の pixmap から縮小して描き（毎秒 4 回）、DwmpActivateLivePreview（113）がほかの窓を `_NET_WM_WINDOW_OPACITY` で透明に | あり（`WIN4WINE_AERO`） |
+| 0153 | dwmapi、uxtheme、winex11: Aero の窓の枠、タスクバーのライブ サムネイル、Aero Peek。Windows 7 のセッションのすべてのプログラムで合成を有効にし（`WIN4WINE_AERO`）、uxtheme が枠をガラスで描き（DWMWindow のアトラスの TOPFRAME・LEFTFRAME・RIGHTFRAME・BOTTOMFRAME、その角で丸めた窓の形、ボタンとグリフ、TEXTGLOW の上の黒い題名。ボタンの高さは SM_CYSIZE − 1、幅は画像から。部品の名前は msstyleEditor のもの）、DwmExtendFrameIntoClientArea の余白まで、メニュー バーとクライアント領域以外をガラスに。DwmpRegisterThumbnail（124）・DwmRegisterThumbnail・DwmUpdateThumbnailProperties・DwmQueryThumbnailSourceSize のサムネイルを winex11 が元の窓の X の pixmap から縮小して描き（毎秒 4 回）、DwmpActivateLivePreview（113）がほかの窓を `_NET_WM_WINDOW_OPACITY` で透明に | あり（`WIN4WINE_AERO`） |
 
 ## 並び順の考え方
 
