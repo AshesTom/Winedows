@@ -8,8 +8,6 @@
  *   As win4wine's proxy does (bridge-wm/proxy.c), this follows the top-level
  *   windows and posts SHELLHOOK create, destroy, activate and redraw messages
  *   to the windows that registered for them (Wine patch 0026 marks them).
- * - Before Explorer starts, startmenu.exe removes recent programs pinned by
- *   earlier versions; XP's native list now displays its tracked programs.
  * - XP's startup sound plays when the session opens and its logoff sound when
  *   it ends (the sound scheme's SystemStart and WindowsLogoff events).
  * - When the user logs off or turns off the computer (Explorer calls
@@ -182,20 +180,6 @@ static void fix_desktop_icons(void)
     RegCloseKey(classes);
 }
 
-/* Remove recent programs that an earlier startmenu.exe version pinned.
- * XP's native MFU list now shows them in its own section. */
-static void clear_legacy_recent_pins(void)
-{
-    STARTUPINFOW startup = {.cb = sizeof(startup)};
-    PROCESS_INFORMATION process;
-    WCHAR line[] = L"C:\\xp\\bin\\startmenu.exe forget-recent";
-    if (!CreateProcessW(NULL, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, L"C:\\xp", &startup, &process))
-        return;
-    WaitForSingleObject(process.hProcess, 20000);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-}
-
 static BOOL ending;
 
 /* C:\xp\xpstart.log says why each session ended (Explorer's exit code, a
@@ -274,7 +258,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, WCHAR *command_line,
 
         ResetEvent(ready);
         fix_desktop_icons();
-        clear_legacy_recent_pins();
         if (!CreateProcessW(line, line, NULL, NULL, FALSE, 0, NULL, L"C:\\xp", &startup, &process))
         {
             MessageBoxW(NULL, L"C:\\xp\\xp-explorer.exe could not be started.", L"XP Explorer", MB_ICONERROR);

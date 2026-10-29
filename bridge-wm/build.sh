@@ -93,6 +93,4 @@ done
 DEPENDS=$helpers/unixshell.h compile "$root/.local/bridge/netcon/wzcsapi.dll" -std=gnu11 -shared \
     "$helpers/netshell-wzcsapi.c" "$helpers/unixshell.c" "$helpers/netshell-wzcsapi.def" -lole32 -lshell32 -luuid
 compile "$root/.local/bridge/startmenu.exe" -std=gnu11 "$helpers/startmenu.c" -lshell32 -lole32 -luuid -ladvapi32 -luser32
-compile "$root/.local/bridge/startmenu-view.exe" "$helpers/startmenu-view.c" -mwindows -lshell32 -lole32 -luuid \
-    -luxtheme -lgdi32 -luser32 -ladvapi32
 compile "$root/.local/bridge/iexplore.exe" -std=gnu11 "$helpers/iexplore.c" -mwindows -lshell32

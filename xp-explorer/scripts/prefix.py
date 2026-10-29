@@ -199,10 +199,9 @@ def registry():
     for cpl in CPL:
         name = cpl.rsplit('.', 1)[0] if cpl.endswith('.dll') else cpl
         r.add(r'HKCU\Software\Wine\AppDefaults\xp-explorer.exe\DllOverrides', name, 'native')
-    # Our Start menu helpers use XP's shell interfaces and icons.
-    for program in ('startmenu.exe', 'startmenu-view.exe'):
-        for dll in ('shell32', 'shlwapi', 'comctl32', 'linkinfo', 'shdocvw', 'browseui'):
-            r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll, 'native')
+    # Our Start menu helper uses XP's shell interfaces and icons.
+    for dll in ('shell32', 'shlwapi', 'comctl32', 'linkinfo', 'shdocvw', 'browseui'):
+        r.add(r'HKCU\Software\Wine\AppDefaults\startmenu.exe\DllOverrides', dll, 'native')
     r.add(advanced, 'ListviewShadow', '1', 'REG_DWORD')
     # "Use a background image for each folder type": the folder watermarks.
     r.add(advanced, 'ListviewWatermark', '1', 'REG_DWORD')
@@ -213,6 +212,12 @@ def registry():
     r.add(advanced, 'Start_ShowNetPlaces', '0', 'REG_DWORD')
     # XP displays its most-used programs below the pinned items, in a separate
     # block. Six entries preserve the native separator and regular text style.
+    # Explorer finds each shortcut's program through GetUIObjectOf(IShellLinkW),
+    # which XP's shell32 answers from the handlers its REGINST registers under
+    # .lnk\ShellEx; without them the list stays empty.
+    for iid in ('{00021500-0000-0000-C000-000000000046}', '{000214EE-0000-0000-C000-000000000046}',
+                '{000214F9-0000-0000-C000-000000000046}', '{BB2E617C-0920-11d1-9A0B-00C04FC2D6C1}'):
+        r.add('HKCR\\.lnk\\ShellEx\\' + iid, None, '{00021401-0000-0000-C000-000000000046}')
     r.add(advanced, 'Start_MinMFU', '6', 'REG_DWORD')
     r.add(advanced, 'Start_TrackProgs', '1', 'REG_DWORD')
     # StartMenuInit: XP's first logon would reset the usage data and pins.
@@ -947,7 +952,7 @@ def create(assets, prefix, wine):
         raise SystemExit(f'Refusing existing prefix: {prefix} (./xp.sh reset to start over)')
     if not (assets / 'windows/explorer.exe').is_file():
         raise SystemExit('Incomplete XP assets: run the extraction first')
-    for helper in ('theme-settings.exe', 'startmenu.exe', 'startmenu-view.exe', 'xptray.exe', 'linux-launch.exe',
+    for helper in ('theme-settings.exe', 'startmenu.exe', 'xptray.exe', 'linux-launch.exe',
                    'linux-links.exe'):
         if not (BIN / helper).is_file():
             raise SystemExit(f'Missing {helper}: run helpers/build.sh first')

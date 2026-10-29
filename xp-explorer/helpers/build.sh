@@ -14,8 +14,6 @@ compile() {
 }
 compile theme-settings.exe "$repo/prefix/theme-settings.c" -luxtheme
 compile startmenu.exe "$src/startmenu.c" -lshell32 -lole32 -luuid -ladvapi32 -luser32
-compile startmenu-view.exe "$src/startmenu-view.c" -mwindows -lshell32 -lole32 -luuid -luxtheme -lgdi32 -luser32 \
-    -ladvapi32
 compile xpstart.exe "$src/xpstart.c" -mwindows -luser32 -lwinmm
 "$cc" -std=gnu11 -Wall -Wextra -O2 -shared "$src/xpcompat.c" -o "$out/xpcompat.dll" -Wl,--kill-at -luxtheme -lgdi32 -luser32
 compile iexplore.exe "$src/iexplore.c" -mwindows -lshell32

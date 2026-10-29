@@ -357,8 +357,6 @@ class Session:
         # the helper starts it and the shell joins it, one Wine start less.
         if b'written' in output:
             self.stop_wine()
-        self.update_recent_programs()
-        self.start_startmenu_view()
         self.spawn([*menu, '--watch'], 'linux-apps')
 
     def start_user_picture(self):
@@ -428,25 +426,6 @@ class Session:
         watch = ROOT / '.local/bridge/keyboard-watch.exe'
         if self.xp_shell and watch.is_file():
             self.spawn([self.wine, str(watch), str(ROOT / 'session/keyboard.py')], 'keyboard')
-
-    def update_recent_programs(self):
-        """Build XP's usage-ranked recent program list for the Start menu."""
-        helper = self.prefix / 'drive_c/xp/bin/startmenu.exe'
-        if not self.xp_shell or not helper.is_file():
-            return
-        with (self.state / 'startmenu.log').open('ab') as log:
-            try:
-                subprocess.run([self.wine, r'C:\xp\bin\startmenu.exe', 'recent'], env=self.env, stdout=log,
-                               stderr=subprocess.STDOUT, timeout=60, check=False)
-            except subprocess.TimeoutExpired:
-                print('startmenu.exe recent timed out', file=sys.stderr)
-                self.stop_wine()
-
-    def start_startmenu_view(self):
-        """Render recent programs with XP's regular-weight menu text under Wine."""
-        helper = self.prefix / 'drive_c/xp/bin/startmenu-view.exe'
-        if self.xp_shell and helper.is_file():
-            self.spawn([self.wine, r'C:\xp\bin\startmenu-view.exe'], 'startmenu-view')
 
     def repair_sound_scheme(self):
         """XP's Explorer navigation click, restored and mirrored for the
@@ -761,9 +740,6 @@ class Session:
         self.start_user_picture()
         if self.linux_menu:
             self.start_linux_menu()
-        else:
-            self.update_recent_programs()
-            self.start_startmenu_view()
         if keyboard:
             try:
                 keyboard.wait(timeout=30)

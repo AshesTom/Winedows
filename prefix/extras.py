@@ -39,9 +39,9 @@ import xp_update  # noqa: E402
 
 BRIDGE = ROOT / '.local/bridge'
 # Bumped when apply() changes; setup.sh applies it again on existing prefixes.
-VERSION = '38'
+VERSION = '43'
 MARKER = '.xp-extras'
-HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'startmenu-view.exe', 'iexplore.exe', 'linux-links.exe',
+HELPERS = ('xptray.exe', 'xpmix.dll', 'startmenu.exe', 'iexplore.exe', 'linux-links.exe',
            'xpnetcon.exe', 'linux-launch.exe', 'shortcuts.cpl', 'linuxlook.cpl')
 # XP's Regional and Language Options and what it loads (assets/intl), native
 # in rundll32 and in XP Explorer, whose Control Panel lists it.
@@ -186,17 +186,22 @@ def registry(xpx):
             r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll, 'native,builtin')
     for clsid in NETCON_CLASSES:
         r.add('HKCR\\CLSID\\' + clsid + '\\LocalServer32', None, r'C:\xp\bin\xpnetcon.exe')
-    # The Start menu helpers use XP's own shell interfaces and icons.
-    for program in ('startmenu.exe', 'startmenu-view.exe'):
-        for dll in ('shell32', 'shlwapi', 'comctl32', 'linkinfo', 'shdocvw', 'browseui'):
-            r.add(rf'HKCU\Software\Wine\AppDefaults\{program}\DllOverrides', dll, 'native')
+    # The Start menu helper uses XP's own shell interfaces and icons.
+    for dll in ('shell32', 'shlwapi', 'comctl32', 'linkinfo', 'shdocvw', 'browseui'):
+        r.add(r'HKCU\Software\Wine\AppDefaults\startmenu.exe\DllOverrides', dll, 'native')
     # XP's task pane on the left of folder windows ("Use common tasks in folders").
     r.add(advanced, 'WebView', '1', 'REG_DWORD')
     r.add(advanced, 'Start_ShowRun', '1', 'REG_DWORD')
     # XP's default right column, without My Network Places.
     r.add(advanced, 'Start_ShowNetPlaces', '0', 'REG_DWORD')
-    # XP's native most-used list is empty under Wine; startmenu-view.exe
-    # paints the six usage-ranked entries below the defaults.
+    # XP's native most-used list (Start_MinMFU entries, tracked programs).
+    # Explorer finds a shortcut's program through the Programs folder's
+    # GetUIObjectOf(IShellLinkW), which XP's shell32 answers from the handlers
+    # its REGINST registers under .lnk\ShellEx; without them every shortcut
+    # had no program and the list stayed empty.
+    for iid in ('{00021500-0000-0000-C000-000000000046}', '{000214EE-0000-0000-C000-000000000046}',
+                '{000214F9-0000-0000-C000-000000000046}', '{BB2E617C-0920-11d1-9A0B-00C04FC2D6C1}'):
+        r.add('HKCR\\.lnk\\ShellEx\\' + iid, None, '{00021401-0000-0000-C000-000000000046}')
     r.add(advanced, 'Start_MinMFU', '6', 'REG_DWORD')
     r.add(advanced, 'Start_TrackProgs', '1', 'REG_DWORD')
     # XP's first logon would reset the Start menu's usage data and pins.
@@ -220,6 +225,24 @@ def registry(xpx):
     for clsid, dll in xpx.SERVERS:
         r.add('HKCR\\CLSID\\' + clsid + '\\InprocServer32', None, dll)
         r.add('HKCR\\CLSID\\' + clsid + '\\InprocServer32', 'ThreadingModel', 'Apartment')
+    return r
+
+
+def command_prompt_here(xpx, language):
+    """"Open Command Prompt Here" on folders and drives, as XP's Open Command
+    Window Here PowerToy adds it: the session's Command Prompt (its Start
+    menu shortcut's, session/xp_cmd.py) started in that folder."""
+    r = xpx.Reg()
+    name = 'コマンド プロンプトをここで開く(&P)' if language == 'ja' else 'Open Command &Prompt Here'
+    # XP gives a drive as "C:\"; xp_cmd.py drops the quote that its last
+    # backslash leaves.
+    command = f'"C:\\xp\\bin\\linux-launch.exe" python3 "{ROOT / "session/xp_cmd.py"}" --dir "%1"'
+    for kind in ('Directory', 'Drive'):
+        # No default verb of their own, as XP's shell32 registers them: Open
+        # (Folder's) stays the double-click.
+        r.add(rf'HKCR\{kind}\shell', None, 'none')
+        r.add(rf'HKCR\{kind}\shell\cmd', None, name)
+        r.add(rf'HKCR\{kind}\shell\cmd\command', None, command)
     return r
 
 
@@ -282,6 +305,9 @@ def copy_files(assets, prefix):
     (xp / 'bin').mkdir(parents=True, exist_ok=True)
     for helper in HELPERS:
         shutil.copyfile(BRIDGE / helper, xp / 'bin' / helper)
+    # The overlay view of the recent programs is gone (XP's native list fills
+    # itself, see registry()); drop its stale binary from updated prefixes.
+    (xp / 'bin/startmenu-view.exe').unlink(missing_ok=True)
     if (assets / 'tray').is_dir():
         shutil.copytree(assets / 'tray', xp / 'tray', dirs_exist_ok=True)
     # XP's keyboard icon for Control Panel's Keyboard Shortcuts (bridge-wm/shortcuts.c)
@@ -418,6 +444,11 @@ def file_types(assets, prefix):
             install=('RegAlways', 'RegTakeDefault')))
         texts.append(xpreg.hive_entries(zip_reginst, 'HKLM', ('',), extra={
             '_SYS_MOD_PATH': r'C:\windows\system32\zipfldr.dll'}, install=('RegAlways', 'RegTakeDefault')))
+        # Its DllRegisterServer also puts the folder in CATID_BrowsableShellExt
+        # (ICatRegister, not the REGINST); XP's shell32 opens a .zip as a
+        # folder only for a class of that category.
+        texts.append('[HKEY_CLASSES_ROOT\\CLSID\\{E88DCCE0-B7B3-11d1-A9F0-00AA0060FA31}\\Implemented Categories\\'
+                     '{00021490-0000-0000-C000-000000000046}]\r\n')
     r = xp_explorer().Reg()
     for package, name in (('Msi.Package', 'Windows Installer Package'), ('Msi.Patch', 'Windows Installer Patch')):
         r.add('HKCR\\' + package, None, name)
@@ -1089,7 +1120,8 @@ def apply(prefix, wine):
     # File types before IE6, Windows Media Player and XP's programs, which
     # register their own types over these, as on XP.
     regedit(wine, prefix, registry(xpx).text(), xpx.xp_registrations(assets), *file_types(assets, prefix),
-            *(keyboard_layouts(assets) if (assets / 'intl/input.dll').is_file() else ()))
+            *(keyboard_layouts(assets) if (assets / 'intl/input.dll').is_file() else ()),
+            command_prompt_here(xpx, config.get('language', 'en')).text())
     # The Linux system's layout becomes XP's input language, once.
     subprocess.run([sys.executable, str(ROOT / 'session/keyboard.py'), 'seed', str(prefix), '--wine', wine],
                    check=False)

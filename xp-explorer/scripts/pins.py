@@ -212,8 +212,8 @@ def register_clients(prefix, wine, links):
                    else f'"{LAUNCH}" xdg-open mailto:')
         lines += client_keys(clients + '\\Mail', key, links[mailer], mailer, command,
                              make_default('Mail', mailer, prefix))
-    # The Wine MFU list stays empty; the Start menu viewer draws the usage-ranked
-    # programs in the same lower block. Keep XP's full right column height.
+    # XP's native most-used list fills the same lower block below the pins.
+    # Keep XP's full right column height.
     advanced = r'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
     # XP's first logon would reset the usage data and pins; leave its
     # initialized state alone.
@@ -261,7 +261,7 @@ def main():
                 for i in (next((c for c in choices if c in links), '') for choices in DEFAULTS) if i]
     own = [PROGRAMS + '\\' + links[i]['link'] for i in pinned(links) if i in links]
     # Earlier versions pinned the KDE essentials as defaults. Remove those
-    # generated pins now that the viewer draws recent programs separately.
+    # generated pins (native MFU now fills the lower block itself).
     if not (ROOT / 'pins.txt').is_file():
         old = [p for p in defaults if p.lower() in current and not managed(prefix, args.wine, p)]
         if old:

@@ -57,10 +57,9 @@ into `.local/`, which Git ignores.
 ## What it adds to win4wine
 
 - **A full left column in the Start menu.** Internet and E-mail are your Linux web browser and mail client
-  (`scripts/pins.py`). The session fills XP's usage-ranked recent programs below them; under Wine, a small view
-  (`helpers/startmenu-view.c`) draws this lower section inside explorer's list as XP does: the visual style's
-  separator, regular text, the highlight colour of the colour scheme, one highlight across both lists (Wine patch
-  0164 puts it on the screen at once). Program tracking is enabled and the list shows six entries. Each Linux application
+  (`scripts/pins.py`). XP's own usage-ranked recent programs fill the lower block below them (the prefix
+  gets shell32's `.lnk\ShellEx` handlers, through which Explorer finds the program of each shortcut).
+  Program tracking is enabled and the list shows six entries. Each Linux application
   starts through a launcher of its own (`C:\xp\linux-apps\apps\<desktop file ID>.exe`, a hard link), since XP
   counts the uses of a program by the executable its shortcut runs. To pin programs of your own,
   list desktop file IDs (one per line, such as `org.kde.dolphin.desktop`) in `pins.txt`, then run

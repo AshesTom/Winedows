@@ -13,6 +13,7 @@ of the Linux system.
   --title TITLE           the window's title (default: the shortcut's name)
   --icon PROGRAM          whose icon the window shows (default: cmd.exe)
   --run COMMAND           run COMMAND with bash instead of the prompt
+  --dir FOLDER            start in FOLDER, named the XP way (C:\\windows, H:\\Downloads)
 """
 import argparse
 import json
@@ -143,12 +144,24 @@ def prepare(prefix, program='cmd'):
     return fonts if fonts.is_file() else None, icon if icon.is_file() else None
 
 
+def linux_folder(prefix, folder):
+    """The Linux path of FOLDER, an XP name of a folder, through the prefix's
+    drives (dosdevices); None when it is not a folder there. A drive comes
+    as "C:\\" in quotes, whose last backslash keeps the quote."""
+    folder = folder.rstrip('"').replace('\\', '/')
+    if len(folder) < 2 or folder[1] != ':':
+        return None
+    path = (prefix / 'dosdevices' / folder[:2].lower()) / folder[2:].lstrip('/')
+    return path.resolve() if path.is_dir() else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('prefix', nargs='?', type=Path, default=Path(os.environ.get('WINEPREFIX', ROOT / '.local/prefix')))
     parser.add_argument('--title')
     parser.add_argument('--icon', default='cmd')
     parser.add_argument('--run')
+    parser.add_argument('--dir')
     args = parser.parse_args()
     prefix, program = args.prefix, args.icon.lower().removesuffix('.exe')
     try:
@@ -180,7 +193,8 @@ def main():
     else:
         command += ['-e', 'bash', '--rcfile', str(ROOT / 'session/xp-cmd.bashrc'), '-i']
     env['XP_CMD_TITLE'] = title
-    terminal = subprocess.Popen(command, env=env)
+    folder = linux_folder(prefix, args.dir) if args.dir else None
+    terminal = subprocess.Popen(command, env=env, cwd=folder)
     if icon:
         set_icon(terminal, CACHE / f'{program}.ico')
     sys.exit(terminal.wait())
