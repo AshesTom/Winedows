@@ -1,0 +1,66 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] win32u: no classic caption over an Aero glass frame for a new title or icon
+
+Purpose: a folder window that navigates (a new title and icon) must not
+flash.
+
+Windows behavior: a new title or icon redraws the caption on the DWM's
+frame, without anything else showing.
+
+Wine before: DefWindowProc's WM_SETTEXT and WM_SETICON drew the classic
+caption, then user32 had uxtheme draw the Aero one over it (patch 0069's
+external_shell_defwnd). In between, the window's surface could be sent to
+X: for a frame, a caption with its icon showed, the glass opaque under it,
+at each click in Explorer's navigation pane.
+
+Change: with an external shell, when uxtheme draws the window's frame as
+glass ("__win4wine_glass_frame"), win32u leaves the caption to it.
+
+Evidence: headless Windows 7 session: Computer, then Downloads, in the
+navigation pane; recorded at 30 frames per second, no frame showed the
+classic caption any more.
+
+Scope: the external shell, windows with an Aero glass frame.
+---
+ dlls/win32u/defwnd.c |   15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/win32u/defwnd.c b/dlls/win32u/defwnd.c
+--- a/dlls/win32u/defwnd.c
++++ b/dlls/win32u/defwnd.c
+@@ -1980,6 +1980,17 @@
+     else NtUserReleaseDC( hwnd, hdc );
+ }
+ 
++/* win4wine: whether uxtheme draws the window's frame as Aero glass
++ * ("__win4wine_glass_frame"). user32 has it draw the caption after a new
++ * title or icon: drawing the classic one first showed it for a frame, the
++ * glass opaque under it. */
++static BOOL glass_frame( HWND hwnd )
++{
++    static const WCHAR glass_frame_prop[] =
++        {'_','_','w','i','n','4','w','i','n','e','_','g','l','a','s','s','_','f','r','a','m','e',0};
++    return win4wine_external_shell() && NtUserGetProp( hwnd, glass_frame_prop );
++}
++
+ static LRESULT handle_nc_paint( HWND hwnd , HRGN clip )
+ {
+     HWND parent = NtUserGetAncestor( hwnd, GA_PARENT );
+@@ -2889,7 +2900,7 @@
+         result = set_window_text( hwnd, (void *)lparam, ansi );
+         if (result)
+             NtUserNotifyWinEvent( EVENT_OBJECT_NAMECHANGE, hwnd, OBJID_WINDOW, CHILDID_SELF );
+-        if (result && (get_window_long( hwnd, GWL_STYLE ) & WS_CAPTION) == WS_CAPTION)
++        if (result && (get_window_long( hwnd, GWL_STYLE ) & WS_CAPTION) == WS_CAPTION && !glass_frame( hwnd ))
+             handle_nc_paint( hwnd , (HRGN)1 );  /* repaint caption */
+         break;
+ 
+@@ -2943,7 +2954,7 @@
+ 
+     case WM_SETICON:
+         result = (LRESULT)set_window_icon( hwnd, wparam, (HICON)lparam );
+-        if ((get_window_long( hwnd, GWL_STYLE ) & WS_CAPTION) == WS_CAPTION)
++        if ((get_window_long( hwnd, GWL_STYLE ) & WS_CAPTION) == WS_CAPTION && !glass_frame( hwnd ))
+             handle_nc_paint( hwnd , (HRGN)1 );  /* repaint caption */
+         break;
+ 

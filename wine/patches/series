@@ -152,3 +152,4 @@
 0152-dlls-external-win7-aero-glass.patch
 0153-dlls-external-win7-aero-frames-thumbnails-peek.patch
 0158-dlls-external-aero-pressed-buttons-disabled-travel.patch
+0160-win32u-external-glass-caption-no-classic-repaint.patch

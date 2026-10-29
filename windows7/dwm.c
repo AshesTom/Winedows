@@ -82,14 +82,12 @@ typedef struct win
     float button[4];        /* its taskbar button (_NET_WM_ICON_GEOMETRY), left top right bottom */
     int has_button;
     int destroyed;          /* destroyed while it animated: freed at its end */
-    /* its contents when it last stayed unchanged a moment: Wine shapes and
-     * draws a window for its new size before the window manager resizes it,
-     * and it shows as it was until then */
-    GLuint old_texture;
-    int settled;            /* the snapshot has its contents since its last damage */
     int animates;           /* animatable(), as of its mapping */
-    long long last_damage;
-    long long frozen;       /* shown as its snapshot from then until it is resized */
+    /* the shape before the last change: Wine shapes a window it minimizes
+     * as its small iconic caption just before it is unmapped */
+    XRectangle *old_rects;
+    int old_nrects;
+    long long shape_time;
 } win;
 
 enum
@@ -466,13 +464,6 @@ static void init_gl(void)
 
 /* ---- window contents ---- */
 
-static void release_old(win *w)
-{
-    if (w->old_texture) glDeleteTextures(1, &w->old_texture);
-    w->old_texture = 0;
-    w->settled = 0;
-}
-
 static void release(win *w)
 {
     if (w->image) destroy_image(egl, w->image);
@@ -583,7 +574,10 @@ static void read_shape(win *w)
     int left = -w->border, top = -w->border;
     int right = w->width + w->border, bottom = w->height + w->border;
     XRectangle *rects;
-    XFree(w->rects);
+    XFree(w->old_rects);
+    w->old_rects = w->rects;
+    w->old_nrects = w->nrects;
+    w->shape_time = now_ns();
     w->rects = NULL;
     w->nrects = 0;
     rects = XShapeGetRectangles(dpy, w->id, ShapeBounding, &count, &ordering);
@@ -771,9 +765,9 @@ static void remove_at(int i, int destroyed)
 {
     win *w = wins[i];
     release(w);
-    release_old(w);
     if (!destroyed) XDamageDestroy(dpy, w->damage);
     XFree(w->rects);
+    XFree(w->old_rects);
     free(w);
     memmove(wins + i, wins + i + 1, (nwins - i - 1) * sizeof(*wins));
     nwins--;
@@ -860,29 +854,6 @@ static void flush(void)
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vertex), &vertices[0].u);
     glDrawArrays(GL_TRIANGLES, 0, nvertices);
     nvertices = 0;
-}
-
-/* Copies W's contents into its snapshot (old_texture), as they are now. */
-static void snapshot(win *w)
-{
-    GLuint fbo = 0;
-    release_old(w);
-    if (!w->texture) return;
-    target(&fbo, &w->old_texture, w->texture_width, w->texture_height);
-    glViewport(0, 0, w->texture_width, w->texture_height);
-    glDisable(GL_BLEND);
-    glUseProgram(draw_program);
-    glUniform2f(draw_screen, w->texture_width, w->texture_height);
-    glUniform1f(draw_flip, 1.0f);
-    glUniform1f(draw_alpha, 1.0f);
-    glUniform1f(draw_opaque, 0.0f);
-    glUniform1f(draw_swap, !w->image);
-    glBindTexture(GL_TEXTURE_2D, w->texture);
-    quad(0, 0, w->texture_width, w->texture_height, 0, 0, 1, 1);
-    flush();
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
-    w->settled = 1;
 }
 
 /* The window's shape as quads; with TEXTURE the window's own texture
@@ -1220,13 +1191,6 @@ static void finish_animations(void)
     for (i = nwins - 1; i >= 0; i--)
     {
         win *w = wins[i];
-        if (w->frozen && now_ns() - w->frozen > 200 * 1000000LL)
-        {
-            /* not resized after all */
-            w->frozen = 0;
-            read_shape(w);
-            dirty = 1;
-        }
         if (!w->anim) continue;
         if (now_ns() - w->anim_start < w->anim_length)
         {
@@ -1236,11 +1200,7 @@ static void finish_animations(void)
         w->anim = 0;
         dirty = 1;
         if (w->destroyed) remove_at(i, 1);
-        else if (!w->mapped)
-        {
-            release(w);
-            release_old(w);
-        }
+        else if (!w->mapped) release(w);
     }
 }
 
@@ -1253,8 +1213,7 @@ static void draw_window(win *w)
     glUniform1f(draw_flip, 1.0f);
     glUniform1f(draw_alpha, alpha);
     glUniform1f(draw_opaque, w->depth != 32);
-    /* a snapshot has its colours in GL's order already */
-    glUniform1f(draw_swap, !w->image && w->texture != w->old_texture);
+    glUniform1f(draw_swap, !w->image);
     glBindTexture(GL_TEXTURE_2D, w->texture);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -1340,15 +1299,6 @@ static void paint(void)
     for (i = 0; i < nwins; i++)
         if (wins[i]->mapped) refresh(wins[i]);
     if (root_pixmap) refresh(&background);
-    for (i = 0; i < nwins; i++)
-    {
-        win *w = wins[i];
-        if (!w->mapped || !w->animates || w->settled || w->anim || w->frozen) continue;
-        if (w->texture && !w->stale && now_ns() - w->last_damage > 80 * 1000000LL)
-            snapshot(w);
-        else
-            dirty = 1;  /* to take it once it settles */
-    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo);
     glViewport(0, 0, screen_width, screen_height);
@@ -1367,17 +1317,6 @@ static void paint(void)
         {
             /* no shadow or blur while it moves, briefly */
             draw_animated(w);
-            continue;
-        }
-        if (w->frozen && w->old_texture)
-        {
-            /* its snapshot, with the shape it had */
-            GLuint live = w->texture;
-            w->texture = w->old_texture;
-            draw_shadow(w);
-            if (w->glass && w->depth == 32) blur_behind(w);
-            draw_window(w);
-            w->texture = live;
             continue;
         }
         if (w->x >= screen_width || w->y >= screen_height
@@ -1467,12 +1406,22 @@ static void handle(XEvent *event)
              * (WM_STATE may follow: see PropertyNotify) */
             w->minimized = wm_state(w->id) == 3;
             animate(w, w->minimized ? ANIM_MINIMIZE : ANIM_CLOSE, w->minimized ? MINIMIZE_NS : CLOSE_NS);
+            if (now_ns() - w->shape_time < 150 * 1000000LL)
+            {
+                /* shaped as an iconic caption just before: it animates
+                 * with the shape it had */
+                XRectangle *rects = w->rects;
+                int nrects = w->nrects;
+                w->rects = w->old_rects;
+                w->nrects = w->old_nrects;
+                w->old_rects = rects;
+                w->old_nrects = nrects;
+            }
         }
         else
         {
             w->anim = 0;
             release(w);
-            release_old(w);
         }
         w->mapped = 0;
         dirty = 1;
@@ -1499,9 +1448,7 @@ static void handle(XEvent *event)
         w->width = event->xconfigure.width;
         w->height = event->xconfigure.height;
         w->border = event->xconfigure.border_width;
-        if (w->stale || w->frozen) read_shape(w);
-        /* resized: what Wine drew for its new size shows */
-        if (w->stale) w->frozen = 0;
+        if (w->stale) read_shape(w);
         restack(i, event->xconfigure.above);
         dirty = 1;
         break;
@@ -1539,32 +1486,18 @@ static void handle(XEvent *event)
         if (event->type == damage_event + XDamageNotify)
         {
             XDamageNotifyEvent *damage = (XDamageNotifyEvent *)event;
-            if ((i = find(damage->drawable)) >= 0)
-            {
-                wins[i]->damaged = 1;
-                wins[i]->last_damage = now_ns();
-                wins[i]->settled = 0;
-            }
+            if ((i = find(damage->drawable)) >= 0) wins[i]->damaged = 1;
             else XDamageSubtract(dpy, damage->damage, None, None);
             dirty = 1;
         }
         else if (event->type == shape_event + ShapeNotify)
         {
             XShapeEvent *shape = (XShapeEvent *)event;
-            if (shape->kind == ShapeBounding && (i = find(shape->window)) >= 0)
+            /* an unmapped one's shape is read when it is mapped again: a
+             * minimized one keeps the shape it closes with */
+            if (shape->kind == ShapeBounding && (i = find(shape->window)) >= 0 && wins[i]->mapped)
             {
-                w = wins[i];
-                if (w->mapped && !w->anim && !w->frozen && w->old_texture && animatable(w) && shape->shaped
-                    && (abs((int)shape->width - (w->width + 2 * w->border)) > 64
-                        || abs((int)shape->height - (w->height + 2 * w->border)) > 64))
-                {
-                    /* Wine shapes and paints its window for its new size
-                     * (maximized, restored) before it is resized: until then
-                     * it shows as it was */
-                    w->frozen = now_ns();
-                }
-                else if (!w->frozen)
-                    read_shape(w);
+                read_shape(wins[i]);
                 dirty = 1;
             }
         }
