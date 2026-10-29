@@ -1,0 +1,209 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] dlls: Aero pressed caption buttons, Explorer's disabled Back and Forward
+
+Purpose: draw an Aero caption button pressed as the DWM does, and keep
+Explorer's disabled Back and Forward grey on the glass.
+
+Windows behavior: a caption button pressed is the DWMWindow atlas's third
+row (darker), with the hot glow (BUTTONGLOW 16, BUTTONCLOSEGLOW 11) still
+behind it while the cursor is over it; only the button pressed shows
+pressed, its neighbours stay normal, and it goes back to normal when the
+cursor leaves it with the button held. Explorer's disabled Back and Forward
+are ExplorerFrame's bitmap 579, translucent grey over the glass.
+
+Wine before: while user32 tracked a pressed button, uxtheme's
+UXTHEME_NonClientButtonDraw drew it from the Window class's images (Windows
+7 Basic's buttons, their outline and size) over the Aero frame. The frame
+painted in between took the pressed state from the cursor, so dragging from
+maximize onto close showed close pressed, and win32u's tracking loop hit
+tested with the classic metrics (the button widths of SM_CXSIZE), so the
+pressed state followed the wrong button under Aero's 29, 27 and 47 pixel
+wide buttons. Native comctl32 draws a disabled
+toolbar image and then embosses it with a blank monochrome mask (BitBlt with
+PSDPxax, 0xB8074A, which keeps the destination where the mask is set): the
+mask's white converted to 0x00FFFFFF, so the result took the brush's alpha
+(0) and the premultiplied image's colour stayed without its alpha, which the
+glass flush adds to the glass (whitish blue).
+
+Change: uxtheme draws the tracked button by drawing the Aero frame again,
+with the button user32 tracks and its pressed state (as user32 says, while
+the window has the capture and the left button is down); the glow is drawn
+for the pressed row too. win32u: the tracking loop asks the window's
+WM_NCHITTEST, as Windows does, with an external shell; and for PSDPxax from a monochrome source onto a
+32-bpp BI_RGB destination, the converted mask's alpha bits are all set, so
+the destination's alpha is kept where the destination is.
+
+Evidence: headless Windows 7 session (prefix-claude): Explorer's disabled
+Back and Forward grey and translucent; maximize pressed with its glow,
+close not pressed when the cursor is dragged over it, normal again when the
+cursor leaves maximize with the button held.
+
+Scope: the external shell (win4wine_external_shell()); the caption with
+Aero frames; caption button tracking; PSDPxax from a monochrome source onto 32-bpp DIBs.
+---
+ dlls/uxtheme/window.c |   42 +++++++++++++++++++++++++++++++++++-------
+ dlls/win32u/bitblt.c  |   13 +++++++++++++
+ dlls/win32u/defwnd.c  |   15 +++++++++++++--
+ 3 files changed, 61 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
+--- a/dlls/uxtheme/window.c
++++ b/dlls/uxtheme/window.c
+@@ -260,6 +260,26 @@
+     return DefWindowProcW(hwnd, WM_ISACTIVEICON, 0, 0) != 0;
+ }
+ 
++/* The caption button that user32 tracks (from its press to its release, the
++ * window having the capture) and whether it is pressed, as it last said */
++static struct
++{
++    HWND hwnd;
++    int hit;
++    BOOL down;
++} caption_tracked;
++
++/* The state of the caption button BUTTON (its hit test code) under HIT:
++ * CBS_NORMAL, CBS_HOT or CBS_PUSHED, which are the same for every button.
++ * While user32 tracks a button, only that one shows pressed, when the cursor
++ * is over it, and the others stay normal, as on Windows 7. */
++static int caption_button_hit_state(HWND hwnd, int hit, int button)
++{
++    if (caption_tracked.hwnd == hwnd && GetCapture() == hwnd && GetKeyState(VK_LBUTTON) < 0)
++        return button == caption_tracked.hit && caption_tracked.down ? CBS_PUSHED : CBS_NORMAL;
++    return hit == button ? (GetKeyState(VK_LBUTTON) < 0 ? CBS_PUSHED : CBS_HOT) : CBS_NORMAL;
++}
++
+ static int caption_button_state(HWND hwnd, HTHEME theme, int part, int state)
+ {
+     int count;
+@@ -344,6 +364,13 @@
+                 ? WP_RESTOREBUTTON : WP_MAXBUTTON;
+             expected = HTMAXBUTTON; index = 1;
+         }
++        /* Aero: the button that user32 tracks is the DWM's, from the
++         * DWMWindow atlas, over the glass behind it, its neighbours beside
++         * it: the whole frame is drawn again */
++        caption_tracked.hwnd = hwnd;
++        caption_tracked.hit = expected;
++        caption_tracked.down = down;
++        if (aero_frames() && draw_non_client(hwnd, hdc, TRUE)) break;
+         GetCursorPos(&cursor);
+         hit = SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(cursor.x, cursor.y));
+         state = grayed ? CBS_DISABLED : down ? CBS_PUSHED : hit == expected ? CBS_HOT : CBS_NORMAL;
+@@ -757,7 +784,7 @@
+  * minimize, the group's first button, rounded at its lower left corner,
+  * BUTTONACTIVECAPTION (3) for maximize, restore and help, BUTTONACTIVECLOSE
+  * (7) or BUTTONACTIVECLOSEALONE (9), one more
+- * when inactive; behind a hot button BUTTONGLOW (16) or BUTTONCLOSEGLOW (11);
++ * when inactive; behind a hot or pressed button BUTTONGLOW (16) or BUTTONCLOSEGLOW (11);
+  * over it its white glyph at the window's DPI (BUTTONCLOSEGLYPH96 12, help
+  * 17, maximize 21, minimize 25, restore 29, then 120, 144 and 192 DPI).
+  * Rows: normal, hot, pressed, disabled. */
+@@ -780,9 +807,10 @@
+     default: CloseThemeData(dwm); return FALSE;
+     }
+     if (!active && row == 0) background++;
+-    if (row == 1)
++    if (row == 1 || row == 2)
+     {
+-        /* the hot glow, centred on the button at its own size */
++        /* the glow, centred on the button at its own size, while the
++         * cursor is over it: hot or pressed */
+         HDC atlas_dc = aero_atlas();
+         RECT image;
+         if (atlas_dc && SUCCEEDED(GetThemeRect(dwm, part == WP_CLOSEBUTTON ? 11 : 16, 0, TMT_ATLASRECT, &image)))
+@@ -1059,7 +1087,7 @@
+         drawn[count].rect = buttons[0];
+         drawn[count].state = caption_button_state(hwnd, theme, WP_CLOSEBUTTON,
+             (close_state == (UINT)-1 || (close_state & (MF_DISABLED | MF_GRAYED)))
+-            ? CBS_DISABLED : hit == HTCLOSE ? (GetKeyState(VK_LBUTTON) < 0 ? CBS_PUSHED : CBS_HOT) : CBS_NORMAL);
++            ? CBS_DISABLED : caption_button_hit_state(hwnd, hit, HTCLOSE));
+         drawn[count++].alone = !(style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) && !(exstyle & WS_EX_CONTEXTHELP);
+         text.right = buttons[0].left - 2;
+         if (style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX))
+@@ -1067,12 +1095,12 @@
+             drawn[count].part = maximized ? WP_RESTOREBUTTON : WP_MAXBUTTON;
+             drawn[count].rect = buttons[1];
+             drawn[count].state = caption_button_state(hwnd, theme, drawn[count].part, !(style & WS_MAXIMIZEBOX) ? MAXBS_DISABLED
+-                : hit == HTMAXBUTTON ? (GetKeyState(VK_LBUTTON) < 0 ? MAXBS_PUSHED : MAXBS_HOT) : MAXBS_NORMAL);
++                : caption_button_hit_state(hwnd, hit, HTMAXBUTTON));
+             drawn[count++].alone = FALSE;
+             drawn[count].part = WP_MINBUTTON;
+             drawn[count].rect = buttons[2];
+             drawn[count].state = caption_button_state(hwnd, theme, WP_MINBUTTON, !(style & WS_MINIMIZEBOX) ? MINBS_DISABLED
+-                : hit == HTMINBUTTON ? (GetKeyState(VK_LBUTTON) < 0 ? MINBS_PUSHED : MINBS_HOT) : MINBS_NORMAL);
++                : caption_button_hit_state(hwnd, hit, HTMINBUTTON));
+             drawn[count++].alone = FALSE;
+             text.right = buttons[2].left - 2;
+         }
+@@ -1087,7 +1115,7 @@
+         {
+             /* XP puts the help button in the maximize button's place. */
+             part = buttons[1];
+-            button_state = hit == HTHELP ? (GetKeyState(VK_LBUTTON) < 0 ? HBS_PUSHED : HBS_HOT) : HBS_NORMAL;
++            button_state = caption_button_hit_state(hwnd, hit, HTHELP);
+             button_state = caption_button_state(hwnd, theme, WP_HELPBUTTON, button_state);
+             if (!glass || !draw_aero_button(dc, hwnd, WP_HELPBUTTON, button_state, &part, active, FALSE))
+                 DrawThemeBackground(theme, dc, WP_HELPBUTTON, button_state, &part, NULL);
+diff --git a/dlls/win32u/bitblt.c b/dlls/win32u/bitblt.c
+--- a/dlls/win32u/bitblt.c
++++ b/dlls/win32u/bitblt.c
+@@ -311,6 +311,19 @@
+ 
+         if (!(err = convert_bits( src_info, src, dst_info, &bits )))
+         {
++            /* win4wine: a monochrome mask that keeps the destination where
++             * its bits are set and the brush elsewhere (PSDPxax, the embossing
++             * of DrawState and comctl32) keeps the destination's alpha: native
++             * comctl32 embosses Explorer's disabled Back and Forward with a
++             * blank mask over their premultiplied images, whose alpha became
++             * the brush's (0), the glass then showing them whitish blue. The
++             * converted mask's alpha bits all set select the destination's. */
++            if (src_info->bmiHeader.biBitCount == 1 && dst_info->bmiHeader.biBitCount == 32 &&
++                dst_info->bmiHeader.biCompression == BI_RGB && rop == 0xb8074a && win4wine_external_shell())
++            {
++                DWORD *pixel = bits.ptr, count = dst_info->bmiHeader.biSizeImage / 4;
++                while (count--) *pixel++ |= 0xff000000;
++            }
+             /* get rid of the fake destination table */
+             dst_info->bmiHeader.biClrUsed = dst_colors;
+             err = dst_dev->funcs->pPutImage( dst_dev, 0, dst_info, &bits, src, dst, rop );
+diff --git a/dlls/win32u/defwnd.c b/dlls/win32u/defwnd.c
+--- a/dlls/win32u/defwnd.c
++++ b/dlls/win32u/defwnd.c
+@@ -2228,6 +2228,17 @@
+     return HTNOWHERE;
+ }
+ 
++/* win4wine: the caption button under PT while one is tracked. With an
++ * external shell the window's own WM_NCHITTEST answers, as Windows asks it:
++ * a themed frame's buttons (Aero's are 29, 27 and 47 pixels wide) are not
++ * where the classic metrics put them. */
++static LRESULT track_hit_test( HWND hwnd, POINT pt )
++{
++    if (win4wine_external_shell())
++        return send_message( hwnd, WM_NCHITTEST, 0, MAKELONG( pt.x, pt.y ) );
++    return handle_nc_hit_test( hwnd, pt );
++}
++
+ static void track_min_max_box( HWND hwnd, WORD wparam )
+ {
+     HDC hdc = NtUserGetWindowDC( hwnd );
+@@ -2269,7 +2280,7 @@
+         if(msg.message == WM_LBUTTONUP) break;
+         if(msg.message != WM_MOUSEMOVE) continue;
+ 
+-        pressed = handle_nc_hit_test( hwnd, msg.pt ) == wparam;
++        pressed = track_hit_test( hwnd, msg.pt ) == wparam;
+         if (pressed != oldstate) paint_button( hwnd, hdc, pressed, FALSE);
+     }
+ 
+@@ -2317,7 +2328,7 @@
+         if (msg.message == WM_LBUTTONUP) break;
+         if (msg.message != WM_MOUSEMOVE) continue;
+ 
+-        pressed = handle_nc_hit_test( hwnd, msg.pt ) == wparam;
++        pressed = track_hit_test( hwnd, msg.pt ) == wparam;
+         if (pressed != oldstate) draw_close_button( hwnd, hdc, pressed, FALSE );
+     }
+ 
