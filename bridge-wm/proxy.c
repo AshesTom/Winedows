@@ -6,7 +6,9 @@
 #endif
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
 #include <windows.h>
+#include <oleacc.h>
 #include <shellapi.h>
 #include <uxtheme.h>
 #include <vssym32.h>
@@ -36,7 +38,7 @@ static WCHAR directory[MAX_PATH];
 static UINT shell_message;
 static HICON default_icon;
 static int syncing;
-static unsigned sequence;
+static LONG sequence;
 static BOOL dirty = TRUE;
 static char frames_text[MAX_CLIENTS * 96];
 static BOOL frames_written;
@@ -45,11 +47,13 @@ static BOOL frames_written;
 static void write_file_command(const char *data, const WCHAR *suffix)
 {
     WCHAR temp[MAX_PATH + 64], target[MAX_PATH + 64];
+    /* the taskbar thread writes commands too */
+    unsigned n = (unsigned)InterlockedIncrement(&sequence) - 1;
     fprintf(stderr, "bridge command: %s", data);
     DWORD written;
     HANDLE file;
-    swprintf(temp, MAX_PATH + 64, L"%ls\\%lu-%u.tmp", directory, GetCurrentProcessId(), sequence);
-    swprintf(target, MAX_PATH + 64, L"%ls\\%lu-%u.%ls", directory, GetCurrentProcessId(), sequence++, suffix);
+    swprintf(temp, MAX_PATH + 64, L"%ls\\%lu-%u.tmp", directory, GetCurrentProcessId(), n);
+    swprintf(target, MAX_PATH + 64, L"%ls\\%lu-%u.%ls", directory, GetCurrentProcessId(), n, suffix);
     file = CreateFileW(temp, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return;
     WriteFile(file, data, (DWORD)strlen(data), &written, NULL);
@@ -1977,6 +1981,93 @@ static void CALLBACK win_event(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG 
     else if (GetAncestor(hwnd, GA_PARENT) == GetDesktopWindow()) dirty = TRUE;
 }
 
+/* Where each window minimizes to: its taskbar button. Windows 7's DWM asks
+ * the taskbar for it (HSHELL_GETMINRECT), which Wine does not do; the
+ * taskbar's task list tells it through accessibility, as for screen
+ * readers: its buttons, with a window's title as name, and their places.
+ * The WM sets them as the windows' _NET_WM_ICON_GEOMETRY, which w7-dwm
+ * shrinks them into. A thread asks twice a second (explorer may be busy). */
+#define MAX_BUTTONS 128
+static struct { WCHAR name[256]; RECT rect; } buttons[MAX_BUTTONS];
+static int button_count;
+static struct { unsigned long xid; RECT rect; } published[MAX_CLIENTS];
+static int published_count;
+
+static void read_buttons(void)
+{
+    HWND tray = FindWindowW(L"Shell_TrayWnd", NULL), list;
+    IAccessible *acc = NULL;
+    VARIANT kids[MAX_BUTTONS];
+    long count = 0, got = 0, i;
+    button_count = 0;
+    list = FindWindowExW(FindWindowExW(FindWindowExW(tray, NULL, L"ReBarWindow32", NULL), NULL,
+                                       L"MSTaskSwWClass", NULL), NULL, L"MSTaskListWClass", NULL);
+    if (!list || FAILED(AccessibleObjectFromWindow(list, OBJID_CLIENT, &IID_IAccessible, (void **)&acc))) return;
+    if (SUCCEEDED(IAccessible_get_accChildCount(acc, &count)) && count > 0 &&
+        SUCCEEDED(AccessibleChildren(acc, 0, min(count, MAX_BUTTONS), kids, &got)))
+    {
+        for (i = 0; i < got; i++)
+        {
+            BSTR name = NULL;
+            long x, y, w, h;
+            if (V_VT(&kids[i]) == VT_I4 && SUCCEEDED(IAccessible_get_accName(acc, kids[i], &name)) && name &&
+                SUCCEEDED(IAccessible_accLocation(acc, &x, &y, &w, &h, kids[i])) && w > 0 && h > 0)
+            {
+                lstrcpynW(buttons[button_count].name, name, 256);
+                SetRect(&buttons[button_count].rect, x, y, x + w, y + h);
+                button_count++;
+            }
+            SysFreeString(name);
+            VariantClear(&kids[i]);
+        }
+    }
+    IAccessible_Release(acc);
+}
+
+static BOOL CALLBACK publish_window(HWND hwnd, LPARAM param)
+{
+    WCHAR title[256];
+    unsigned long xid = (unsigned long)(ULONG_PTR)GetPropW(hwnd, L"__wine_x11_whole_window");
+    int i, j;
+    (void)param;
+    if (!xid || GetWindow(hwnd, GW_OWNER) || (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) ||
+        !GetWindowTextW(hwnd, title, ARRAYSIZE(title)))
+        return TRUE;
+    for (i = 0; i < button_count; i++)
+        if (!wcscmp(buttons[i].name, title)) break;
+    if (i == button_count) return TRUE;
+    for (j = 0; j < published_count; j++)
+        if (published[j].xid == xid) break;
+    if (j < published_count && EqualRect(&published[j].rect, &buttons[i].rect)) return TRUE;
+    if (j == published_count)
+    {
+        if (published_count == MAX_CLIENTS) return TRUE;
+        published[published_count++].xid = xid;
+    }
+    published[j].rect = buttons[i].rect;
+    {
+        char data[96];
+        RECT *r = &buttons[i].rect;
+        snprintf(data, sizeof(data), "icongeom %lx %ld %ld %ld %ld\n", xid, r->left, r->top,
+                 r->right - r->left, r->bottom - r->top);
+        write_command(data);
+    }
+    return TRUE;
+}
+
+static DWORD WINAPI taskbar_buttons(void *arg)
+{
+    (void)arg;
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    for (;;)
+    {
+        read_buttons();
+        if (button_count) EnumWindows(publish_window, 0);
+        Sleep(500);
+    }
+    return 0;
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     WNDCLASSW cls = {0};
@@ -2022,6 +2113,7 @@ int wmain(int argc, WCHAR **argv)
     SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, NULL, win_event, 0, 0, WINEVENT_OUTOFCONTEXT);
     SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, NULL, win_event, 0, 0, WINEVENT_OUTOFCONTEXT);
     snap_start();
+    if (switcher.win7) CloseHandle(CreateThread(NULL, 0, taskbar_buttons, NULL, 0, NULL));
     if (snap_enabled)
         SetWinEventHook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, NULL, win_event, 0, 0, WINEVENT_OUTOFCONTEXT);
     shell_key_events(TRUE);

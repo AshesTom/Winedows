@@ -904,7 +904,10 @@ class Manager:
                 op, value, *args = command.read_text().split()
                 i = int(value, 16)
                 c = self.clients.get(i)
-                if op == 'switch' and c and c['kind'] == 'normal':
+                if op == 'icongeom' and c and len(args) == 4:
+                    # Its taskbar button, where w7-dwm minimizes it to (EWMH).
+                    self.setprop(c['w'], '_NET_WM_ICON_GEOMETRY', Xatom.CARDINAL, [int(v) for v in args])
+                elif op == 'switch' and c and c['kind'] == 'normal':
                     # Alt+Tab chose this window, which may also be a Wine one.
                     self.focus(c['w'])
                 elif c and c['kind'] == 'normal' and not c['hwnd']:

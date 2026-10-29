@@ -523,6 +523,7 @@ class Session:
             time.sleep(.5)
             if wm.poll() is not None:
                 raise RuntimeError('WM failed; see wm.log')
+        dwm = None
         if not self.compositor and aero(self.config, self.env):
             # Aero glass: w7-dwm blends the glass windows and blurs behind them
             dwm = self.spawn([str(COMPOSITOR)], 'dwm')
@@ -531,6 +532,7 @@ class Session:
                 # No GL or Composite on this display: the glass would be black.
                 print('w7-dwm failed (see dwm.log): Windows 7 Basic instead', file=sys.stderr)
                 self.env.pop('WIN4WINE_AERO', None)
+                dwm = None
         elif self.config.get('aero', True) and not self.compositor:
             print('Aero needs w7-dwm (bridge-wm/build.sh): Windows 7 Basic instead', file=sys.stderr)
         if self.cursor_theme and shutil.which('xsetroot') and not self.compositor:
@@ -549,6 +551,7 @@ class Session:
             self.pin_recent()
             self.stop_wine()
         crashes = deque()
+        dwm_restarts = deque()
         attempt = 0
         while not self.stopping:
             if wm and wm.poll() is not None:
@@ -566,6 +569,8 @@ class Session:
                     raise RuntimeError('WM exited during session')
                 if im and im.poll() is not None:
                     im = self.restart_input_method(im_restarts)
+                if dwm and dwm.poll() is not None:
+                    dwm = self.restart_compositor(dwm_restarts)
                 has_tray = self.tray()
                 if has_tray and not ready:
                     ready = True
@@ -581,7 +586,7 @@ class Session:
                     break
                 # While the shell starts, its taskbar may get its class or
                 # size without an event this client sees; check every second.
-                self.wait((wm, im, proxy, shell), None if ready else 1)
+                self.wait((wm, im, proxy, shell, dwm), None if ready else 1)
             if self.stopping:
                 break
             if self.end_requested(shell):
@@ -599,6 +604,34 @@ class Session:
                 self.fallback(wm)
                 return
             time.sleep(1)
+
+    def composition(self, on):
+        """Desktop composition on (Aero) or off (Windows 7 Basic) in every
+        running program (windows7/composition.c)."""
+        helper = ROOT / '.local/bridge/w7-composition.exe'
+        if helper.is_file():
+            subprocess.run([self.wine, str(helper), 'on' if on else 'off'], env=self.env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=60)
+
+    def restart_compositor(self, restarts):
+        """w7-dwm exited: Windows 7 Basic, as when Windows 7's DWM stops, then
+        Aero again once it runs again (at most three restarts in two minutes,
+        as Windows 7's DWM service restarts it)."""
+        print('w7-dwm exited (see dwm.log): Windows 7 Basic', file=sys.stderr)
+        self.composition(False)
+        now = time.monotonic()
+        restarts.append(now)
+        while restarts and now-restarts[0] > 120:
+            restarts.popleft()
+        if len(restarts) > 3:
+            print('w7-dwm keeps exiting: Windows 7 Basic for the rest of the session', file=sys.stderr)
+            return None
+        dwm = self.spawn([str(COMPOSITOR)], 'dwm')
+        time.sleep(.5)
+        if dwm.poll() is not None:
+            return None
+        self.composition(True)
+        return dwm
 
     def restart_input_method(self, restarts):
         """Restart an input method that exited, at most three times in two minutes."""

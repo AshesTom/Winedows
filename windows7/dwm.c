@@ -10,8 +10,8 @@
  * (Aero Peek) and the windows' bounding shape (rounded corners), and casts the
  * soft shadow Windows 7 gives the windows with an Aero frame, and animates
  * the application windows as Windows 7's DWM does: they open and close with a
- * slight 3D tilt and fade, minimize into the taskbar and come back from it,
- * and morph between their restored and maximized rectangles.
+ * slight 3D tilt and fade, and minimize into the taskbar and come back from
+ * it. Maximized or restored, a window changes at once, as on Windows 7.
  *
  * A window's pixmap becomes a texture without copying when EGL can import X
  * pixmaps (a GPU X server: Xorg, rootful or rootless Xwayland); otherwise
@@ -78,15 +78,13 @@ typedef struct win
     int anim;               /* ANIM_*, or 0 */
     long long anim_start;
     long long anim_length;
-    int from_x, from_y, from_width, from_height;    /* a morph's first rectangle */
     int minimized;          /* unmapped by the window manager's minimize */
-    int maximized;          /* _NET_WM_STATE has a maximized state */
+    float button[4];        /* its taskbar button (_NET_WM_ICON_GEOMETRY), left top right bottom */
+    int has_button;
     int destroyed;          /* destroyed while it animated: freed at its end */
-    int prev_x, prev_y, prev_width, prev_height;    /* the rectangle before the last resize */
-    long long prev_time;
-    long long morph_wait;   /* when the maximized state changed before the resize */
-    /* its contents when it last stayed unchanged a moment, what a morph
-     * stretches: Wine draws a window for its new size before resizing it */
+    /* its contents when it last stayed unchanged a moment: Wine shapes and
+     * draws a window for its new size before the window manager resizes it,
+     * and it shows as it was until then */
     GLuint old_texture;
     int settled;            /* the snapshot has its contents since its last damage */
     int animates;           /* animatable(), as of its mapping */
@@ -100,7 +98,6 @@ enum
     ANIM_CLOSE,
     ANIM_MINIMIZE,
     ANIM_RESTORE,   /* from minimized */
-    ANIM_MORPH,     /* maximize or restore from maximized */
 };
 
 /* Windows 7's durations, about: the window opens in a quarter of a second
@@ -108,7 +105,6 @@ enum
 #define OPEN_NS (250 * 1000000LL)
 #define CLOSE_NS (200 * 1000000LL)
 #define MINIMIZE_NS (250 * 1000000LL)
-#define MORPH_NS (200 * 1000000LL)
 
 static Display *dpy;
 static Window root, overlay;
@@ -125,7 +121,7 @@ static float offset = 1.5f;
 static volatile sig_atomic_t quit;
 
 static Atom atom_glass, atom_opacity, atom_rootpmap, atom_esetroot, atom_class;
-static Atom atom_wm_state, atom_net_state, atom_maximized_vert, atom_maximized_horz;
+static Atom atom_wm_state, atom_icon_geometry;
 static Atom atom_type, atom_type_normal, atom_type_dialog;
 
 static EGLDisplay egl;
@@ -136,7 +132,7 @@ static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target_texture;
 static int import_pixmaps;  /* EGL_KHR_image_pixmap works on this server */
 
 static GLuint draw_program, down_program, up_program;
-static GLint draw_screen, draw_flip, draw_alpha, draw_opaque, draw_swap;
+static GLint draw_screen, draw_flip, draw_alpha, draw_opaque, draw_swap, draw_clamp;
 static GLint down_screen, down_half, up_screen, up_half;
 static GLuint mask_program;
 static GLint mask_screen, mask_half, mask_size;
@@ -195,11 +191,13 @@ static const char *draw_source =
     "uniform float alpha;\n"
     "uniform float opaque;\n"
     "uniform float swap;\n"
+    "uniform float clamp_alpha;\n"
     "varying vec2 v;\n"
     "void main() {\n"
     "    vec4 c = texture2D(tex, v);\n"
     "    if (swap > 0.5) c = c.bgra;\n"
     "    if (opaque > 0.5) c.a = 1.0;\n"
+    "    if (clamp_alpha > 0.5) c.rgb = min(c.rgb, vec3(c.a));\n"
     "    gl_FragColor = c * alpha;\n"
     "}\n";
 
@@ -437,6 +435,7 @@ static void init_gl(void)
     draw_alpha = glGetUniformLocation(draw_program, "alpha");
     draw_opaque = glGetUniformLocation(draw_program, "opaque");
     draw_swap = glGetUniformLocation(draw_program, "swap");
+    draw_clamp = glGetUniformLocation(draw_program, "clamp_alpha");
     down_program = program(down_source);
     down_screen = glGetUniformLocation(down_program, "screen");
     down_half = glGetUniformLocation(down_program, "spread");
@@ -684,11 +683,6 @@ static int wm_state(Window id)
     return state;
 }
 
-static int read_maximized(win *w)
-{
-    return has_atom(w->id, atom_net_state, atom_maximized_vert) || has_atom(w->id, atom_net_state, atom_maximized_horz);
-}
-
 /* Windows 7 animates the application windows and their dialogs: not menus,
  * tooltips, the taskbar, the Start menu or the desktop. */
 static int animatable(win *w)
@@ -701,9 +695,34 @@ static int animatable(win *w)
         || has_atom(w->id, atom_type, atom_type_dialog);
 }
 
+/* Its taskbar button, from _NET_WM_ICON_GEOMETRY, which the WM sets */
+static void read_button(win *w)
+{
+    Atom type;
+    int format;
+    unsigned long count, after;
+    unsigned char *data = NULL;
+    w->has_button = 0;
+    if (XGetWindowProperty(dpy, w->id, atom_icon_geometry, 0, 4, False, XA_CARDINAL, &type, &format, &count, &after,
+                           &data) == Success && data && format == 32 && count == 4)
+    {
+        unsigned long *v = (unsigned long *)data;
+        if (v[2] && v[3])
+        {
+            w->button[0] = (int)v[0];
+            w->button[1] = (int)v[1];
+            w->button[2] = (int)v[0] + (int)v[2];
+            w->button[3] = (int)v[1] + (int)v[3];
+            w->has_button = 1;
+        }
+    }
+    if (data) XFree(data);
+}
+
 static void animate(win *w, int kind, long long length)
 {
     trace("0x%lx: animation %d\n", w->id, kind);
+    if (kind == ANIM_MINIMIZE || kind == ANIM_RESTORE) read_button(w);
     w->anim = kind;
     w->anim_start = now_ns();
     w->anim_length = length;
@@ -734,7 +753,6 @@ static void add(Window id, Window above)
     XShapeSelectInput(dpy, id, ShapeNotifyMask);
     read_properties(w);
     read_shape(w);
-    w->maximized = read_maximized(w);
     w->animates = w->mapped && animatable(w);
     if (nwins == capacity)
     {
@@ -1059,12 +1077,17 @@ static mat4 perspective(float depth)
     return r;
 }
 
-/* Where W goes into the taskbar: the DWM gets its button's rectangle from
- * the shell; without it, the taskbar's height under the window's middle. */
+/* Where W goes into the taskbar: its button (the DWM gets it from the
+ * shell); without one, the taskbar's height under the window's middle. */
 static void minimize_rect(win *w, float rect[4])
 {
     float bar = screen_height - 40, height = 40, middle = w->x + (w->width + 2 * w->border) / 2.0f;
     int i;
+    if (w->has_button)
+    {
+        memcpy(rect, w->button, sizeof(w->button));
+        return;
+    }
     for (i = 0; i < nwins; i++)
         if (wins[i]->mapped && wins[i]->shell_kind == 2 && wins[i]->width >= screen_width / 2)
         {
@@ -1084,7 +1107,7 @@ static void minimize_rect(win *w, float rect[4])
  * restores them on later Windows): opening, it tilts back up from 5 degrees
  * and comes forward while it fades in; closing, it tilts away and fades; it
  * shrinks with a slight turn into its taskbar button and grows back out of
- * it; maximized or restored, it morphs between its two rectangles. */
+ * it. */
 static mat4 transform(win *w, float t, float *opacity)
 {
     float left = w->x, top = w->y;
@@ -1125,14 +1148,6 @@ static mat4 transform(win *w, float t, float *opacity)
                         translation(0, 1, 0)), scaling(cw, ch, depth));
         camera = mul(mul(mul(translation(-width / 2, -height / 2, 0), scaling(1, 1, -1)), perspective(depth)),
                      translation(width / 2, height / 2, 0));
-        offset = translation(x - left, y - top, 0);
-    }
-    else if (w->anim == ANIM_MORPH)
-    {
-        float e = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
-        float x = w->from_x + (left - w->from_x) * e, y = w->from_y + (top - w->from_y) * e;
-        float cw = w->from_width + (width - w->from_width) * e, ch = w->from_height + (height - w->from_height) * e;
-        model = scaling(cw / width, ch / height, 1);
         offset = translation(x - left, y - top, 0);
     }
     return mul(mul(mul(mul(translation(-left, -top, 0), model), camera), offset), translation(left, top, 0));
@@ -1186,36 +1201,6 @@ static void draw_animated(win *w)
     }
     glUseProgram(anim_program);
     glUniform2f(anim_screen, screen_width, screen_height);
-    if (w->anim == ANIM_MORPH && w->old_texture)
-    {
-        /* the old contents stretched over the whole morph, Wine's new ones
-         * showing through them at its end */
-        float t = progress(w), x0 = w->x, y0 = w->y;
-        float x1 = x0 + w->width + 2 * w->border, y1 = y0 + w->height + 2 * w->border;
-        float corners[6][4] = { { x0, y0, 0, 0 }, { x1, y0, 1, 0 }, { x0, y1, 0, 1 },
-                                { x1, y0, 1, 0 }, { x1, y1, 1, 1 }, { x0, y1, 0, 1 } };
-        avertex old[6];
-        for (j = 0; j < 6; j++)
-        {
-            float x = corners[j][0], y = corners[j][1];
-            old[j].x = x * m.m[0][0] + y * m.m[1][0] + m.m[3][0];
-            old[j].y = x * m.m[0][1] + y * m.m[1][1] + m.m[3][1];
-            old[j].w = 1;
-            old[j].u = corners[j][2];
-            old[j].v = corners[j][3];
-        }
-        glUniform1f(anim_alpha, w->opacity);
-        glUniform1f(anim_opaque, w->depth != 32);
-        glUniform1f(anim_swap, 0.0f);
-        glBindTexture(GL_TEXTURE_2D, w->old_texture);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(avertex), &old[0].x);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(avertex), &old[0].u);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        opacity = t < 0.7f ? 0.0f : (t - 0.7f) / 0.3f;
-        if (opacity <= 0.0f) return;
-    }
     glUniform1f(anim_alpha, opacity * w->opacity);
     glUniform1f(anim_opaque, w->depth != 32);
     glUniform1f(anim_swap, !w->image);
@@ -1279,25 +1264,9 @@ static void draw_window(win *w)
         glEnable(GL_SCISSOR_TEST);
         glScissor(0, 0, screen_width, w->y + w->height - 1);
     }
-    if (w->shell_kind == 2)
-    {
-        int i;
-        win *button = NULL;
-        for (i = 0; i < nwins; i++)
-            if (wins[i]->mapped && wins[i]->shell_kind == 3) { button = wins[i]; break; }
-        if (button && button->y == w->y)
-        {
-            /* Continue the taskbar's top edge on either side of the orb,
-             * leaving its transparent top corners free of a white line. */
-            glEnable(GL_SCISSOR_TEST);
-            glScissor(0, w->y + 1, screen_width, screen_height - w->y - 1);
-            shape_quads(w, 1); flush();
-            glScissor(0, w->y, button->x, 1);
-            shape_quads(w, 1); flush();
-            glScissor(button->x + button->width, w->y,
-                      screen_width - button->x - button->width, 1);
-        }
-    }
+    /* The orb's top row is not premultiplied: over the taskbar's light
+     * edge, which runs behind it, its colour would add up to white */
+    glUniform1f(draw_clamp, w->shell_kind == 3);
     shape_quads(w, 1);
     flush();
     glDisable(GL_SCISSOR_TEST);
@@ -1480,7 +1449,6 @@ static void handle(XEvent *event)
         w->damaged = 1;
         read_properties(w);
         read_shape(w);
-        w->maximized = read_maximized(w);
         w->animates = animatable(w);
         if (w->minimized) animate(w, ANIM_RESTORE, MINIMIZE_NS);
         else if (w->animates) animate(w, ANIM_OPEN, OPEN_NS);
@@ -1525,53 +1493,15 @@ static void handle(XEvent *event)
         w = wins[i];
         if (w->width != event->xconfigure.width || w->height != event->xconfigure.height
             || w->border != event->xconfigure.border_width)
-        {
             w->stale = 1;
-            w->prev_x = w->x;
-            w->prev_y = w->y;
-            w->prev_width = w->width + 2 * w->border;
-            w->prev_height = w->height + 2 * w->border;
-            w->prev_time = now_ns();
-        }
         w->x = event->xconfigure.x;
         w->y = event->xconfigure.y;
         w->width = event->xconfigure.width;
         w->height = event->xconfigure.height;
         w->border = event->xconfigure.border_width;
         if (w->stale || w->frozen) read_shape(w);
-        if (w->frozen && w->stale && w->mapped && !w->anim)
-        {
-            w->frozen = 0;
-            w->from_x = w->prev_x;
-            w->from_y = w->prev_y;
-            w->from_width = w->prev_width;
-            w->from_height = w->prev_height;
-            w->morph_wait = 0;
-            animate(w, ANIM_MORPH, MORPH_NS);
-        }
-        else if (w->stale && w->mapped && !w->anim && animatable(w)
-            && (abs(w->width + 2 * w->border - w->prev_width) > 64 || abs(w->height + 2 * w->border - w->prev_height) > 64))
-        {
-            /* a jump in size (maximized, restored, snapped): it morphs from
-             * the rectangle it had, without waiting for _NET_WM_STATE */
-            w->from_x = w->prev_x;
-            w->from_y = w->prev_y;
-            w->from_width = w->prev_width;
-            w->from_height = w->prev_height;
-            w->morph_wait = 0;
-            animate(w, ANIM_MORPH, MORPH_NS);
-        }
-        else if (w->stale && w->morph_wait && now_ns() - w->morph_wait < 500 * 1000000LL)
-        {
-            /* maximized or restored before the resize: it morphs from the
-             * rectangle it had */
-            w->from_x = w->prev_x;
-            w->from_y = w->prev_y;
-            w->from_width = w->prev_width;
-            w->from_height = w->prev_height;
-            w->morph_wait = 0;
-            if (w->mapped && !w->anim) animate(w, ANIM_MORPH, MORPH_NS);
-        }
+        /* resized: what Wine drew for its new size shows */
+        if (w->stale) w->frozen = 0;
         restack(i, event->xconfigure.above);
         dirty = 1;
         break;
@@ -1602,25 +1532,7 @@ static void handle(XEvent *event)
             w->minimized = 1;
             w->anim = ANIM_MINIMIZE;
             w->anim_length = MINIMIZE_NS;
-        }
-        else if (event->xproperty.atom == atom_net_state && w->mapped)
-        {
-            int maximized = read_maximized(w);
-            if (maximized != w->maximized && animatable(w))
-            {
-                if (now_ns() - w->prev_time < 300 * 1000000LL)
-                {
-                    /* resized just before: it morphs from the rectangle it had */
-                    w->from_x = w->prev_x;
-                    w->from_y = w->prev_y;
-                    w->from_width = w->prev_width;
-                    w->from_height = w->prev_height;
-                    if (!w->anim) animate(w, ANIM_MORPH, MORPH_NS);
-                }
-                else
-                    w->morph_wait = now_ns();
-            }
-            w->maximized = maximized;
+            read_button(w);
         }
         break;
     default:
@@ -1647,8 +1559,8 @@ static void handle(XEvent *event)
                         || abs((int)shape->height - (w->height + 2 * w->border)) > 64))
                 {
                     /* Wine shapes and paints its window for its new size
-                     * (maximized, restored) before it resizes it: until then
-                     * it shows as it was, and morphs from that */
+                     * (maximized, restored) before it is resized: until then
+                     * it shows as it was */
                     w->frozen = now_ns();
                 }
                 else if (!w->frozen)
@@ -1729,9 +1641,7 @@ int main(int argc, char **argv)
     atom_rootpmap = XInternAtom(dpy, "_XROOTPMAP_ID", False);
     atom_esetroot = XInternAtom(dpy, "ESETROOT_PMAP_ID", False);
     atom_wm_state = XInternAtom(dpy, "WM_STATE", False);
-    atom_net_state = XInternAtom(dpy, "_NET_WM_STATE", False);
-    atom_maximized_vert = XInternAtom(dpy, "_NET_WM_STATE_MAXIMIZED_VERT", False);
-    atom_maximized_horz = XInternAtom(dpy, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+    atom_icon_geometry = XInternAtom(dpy, "_NET_WM_ICON_GEOMETRY", False);
     atom_type = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
     atom_type_normal = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_NORMAL", False);
     atom_type_dialog = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
