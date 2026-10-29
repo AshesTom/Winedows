@@ -41,7 +41,7 @@ if pkg-config --exists $dwm_libs; then
     temporary=$(mktemp "$root/.local/bridge/w7-dwm.XXXXXX")
     # shellcheck disable=SC2046
     if "${CC:-cc}" -std=gnu11 -Wall -Wextra -Werror -O2 "$root/windows7/dwm.c" -o "$temporary" \
-        $(pkg-config --cflags --libs $dwm_libs); then
+        $(pkg-config --cflags --libs $dwm_libs) -lm; then
         chmod 755 "$temporary"
         mv -f -- "$temporary" "$root/.local/bridge/w7-dwm"
     else

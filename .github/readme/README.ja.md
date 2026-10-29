@@ -123,7 +123,7 @@ sudo rm -f /usr/share/wayland-sessions/windows7-shell-wayland.desktop /usr/local
 
 - **Aero のガラス（試作、既定）**: タスクバー、スタートメニュー、窓の枠がガラスになり、Aero のボタン、配色の色（スカイ）、
   ガラスの反射、タスクバーのライブ サムネイルと Aero Peek があります（Wine のパッチ 0152・0153）。セッションの
-  コンポジター w7-dwm（[windows7/dwm.c](../../windows7/dwm.c)。EGL の OpenGL ES）がガラスを混ぜて後ろをぼかし、Windows 7 の窓の影を付けます。w7-dwm が
+  コンポジター w7-dwm（[windows7/dwm.c](../../windows7/dwm.c)。EGL の OpenGL ES）がガラスを混ぜて後ろをぼかし、Windows 7 の窓の影を付け、Windows 7 と同じように窓を動かします（開くときと閉じるときの少しの 3D の傾きとフェード、タスクバーへの最小化、最大化と元のサイズに戻すときの変形）。w7-dwm が
   無いとき（ビルドの時に EGL の開発用ファイルが無かった）、または `win7-session.json` の `"aero": false`（`W7_AERO=0 windows7/7.sh run`）では Windows 7 ベーシックです。Peek で隠れた窓の輪郭はまだ出ません。
   Wayland のデスクトップでは、`windows7/7.sh run` は Xephyr ではなく、GPU で描く rootful の Xwayland でセッションを開きます。
 - 通知領域は Windows 7 のもの（SysTray（stobject）、ネットワーク（pnidui）と音量（SndVolSSO）のアイコン。利用者の Windows 7 の
