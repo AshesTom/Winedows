@@ -1,0 +1,63 @@
+From: Codex <codex@localhost>
+Subject: [PATCH] uxtheme: align Aero caption and side frame outlines
+
+The DWMWindow atlas has duplicated pixels in a one-pixel sampling gutter.
+Exclude the gutter on all four frame parts and subtract it from frame sizing
+margins. Keep the two-pixel outline pairs at their original width and stretch
+only the transparent middle of side/bottom frames. This prevents fixed-dialog
+side highlights from being rescaled and keeps the side outlines aligned with
+the caption for fixed, resizable and titleless Explorer frames.
+
+Validation: tests/aero-frame.c compares both outer outline pixels between
+caption and left/right sides, for fixed and resizable frames, titleless frames
+and inactive dialogs, in addition to pixel/layout/resize checks.
+---
+diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
+--- a/dlls/uxtheme/window.c
++++ b/dlls/uxtheme/window.c
+@@ -708,10 +708,27 @@
+         return GdiAlphaBlend(dc, left, top, w, h, atlas, src.left, src.top, w, h, blend);
+     }
+     GetThemeMargins(dwm, NULL, part, 0, TMT_SIZINGMARGINS, NULL, &m);
++    /* The atlas duplicates its edge pixels in a one-pixel sampling gutter.
++     * Remove that gutter from the margins too, so the actual frame outlines
++     * keep the same thickness on the caption, sides and bottom. */
++    if (part == 1 || part == 33 || part == 41 || part == 56)
++    {
++        m.cxLeftWidth = max(0, m.cxLeftWidth - gutter);
++        m.cxRightWidth = max(0, m.cxRightWidth - gutter);
++        m.cyTopHeight = max(0, m.cyTopHeight - gutter);
++        m.cyBottomHeight = max(0, m.cyBottomHeight - gutter);
++    }
+     /* TOPFRAME and BOTTOMFRAME give no side margins: their image is both
+      * rounded corners, of which only the middle column stretches */
+     if ((part == 56 || part == 1) && !m.cxLeftWidth && !m.cxRightWidth)
+         m.cxLeftWidth = m.cxRightWidth = (w - 1) / 2;
++    /* The frame's two-pixel outline pairs stay at their own size. Its
++     * transparent glass middle absorbs the width difference between fixed
++     * (7px) and resizable (8px) frames, rather than scaling a highlight away. */
++    if ((part == 33 || part == 41) && gutter)
++        m.cxLeftWidth = m.cxRightWidth = min(2, w / 2);
++    if (part == 1 && gutter)
++        m.cyTopHeight = m.cyBottomHeight = min(2, h / 2);
+     m.cxLeftWidth = min(m.cxLeftWidth, w / 2);
+     m.cxRightWidth = min(m.cxRightWidth, w / 2);
+     m.cyTopHeight = min(m.cyTopHeight, h / 2);
+@@ -950,13 +967,13 @@
+             else
+             {
+                 SetRect(&band, window.left, window.top, window.right, caption.bottom);
+-                draw_atlas_part(dc, dwm, 56, row, 2, &band, FALSE, 0);
++                draw_atlas_part(dc, dwm, 56, row, 2, &band, FALSE, 1);
+                 SetRect(&band, window.left, caption.bottom, window.left + border_x, window.bottom - border_y);
+-                draw_atlas_part(dc, dwm, 33, row, 2, &band, FALSE, 0);
++                draw_atlas_part(dc, dwm, 33, row, 2, &band, FALSE, 1);
+                 SetRect(&band, window.right - border_x, caption.bottom, window.right, window.bottom - border_y);
+-                draw_atlas_part(dc, dwm, 41, row, 2, &band, FALSE, 0);
++                draw_atlas_part(dc, dwm, 41, row, 2, &band, FALSE, 1);
+                 SetRect(&band, window.left, window.bottom - border_y, window.right, window.bottom);
+-                draw_atlas_part(dc, dwm, 1, row, 2, &band, FALSE, 0);
++                draw_atlas_part(dc, dwm, 1, row, 2, &band, FALSE, 1);
+ 
+             }
+             options = (DWORD)(DWORD_PTR)GetPropW(hwnd, L"Win4WineNonClientOptions");

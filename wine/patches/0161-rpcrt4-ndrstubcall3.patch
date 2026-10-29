@@ -1,0 +1,172 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] rpcrt4: NdrStubCall3 runs the NDR 2.0 syntax of a stub
+
+Purpose: let Windows 7's 64-bit interface proxies (actxprxy) serve calls
+across apartments: opening a folder or a drive in Explorer.
+
+Windows behavior: 64-bit MIDL stubs built for both transfer syntaxes
+(/protocol all) dispatch through NdrStubCall3, which runs the syntax the
+client sent; NdrClientCall3 sends NDR 2.0 when both sides have it.
+
+Wine before: NdrStubCall3 was a stub. Explorer opens a folder on a worker
+thread that calls IShellBrowser::BrowseObject on the window's thread; with
+Windows 7's proxy the call ended the shell ("unimplemented function
+rpcrt4.dll.NdrStubCall3").
+
+Change: NdrStubCall3 finds the NDR 2.0 entry of the server info's syntax
+list (as ndr64_client_call does) and runs NdrStubCall2's interpreter on its
+format strings; NdrStubCall2 itself is unchanged.
+
+Evidence: headless Windows 7 session: double-clicking Local Disk (C:) and a
+folder in it navigates (before: "This file does not have a program
+associated with it" and "Call failed.").
+
+Scope: every program; only stubs that use NdrStubCall3.
+---
+ dlls/rpcrt4/ndr_stubless.c |   99 +++++++++++++++++++++++++++++++++-----------
+ dlls/rpcrt4/rpcrt4.spec    |    2 -
+ 2 files changed, 75 insertions(+), 26 deletions(-)
+
+diff --git a/dlls/rpcrt4/ndr_stubless.c b/dlls/rpcrt4/ndr_stubless.c
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ -1213,22 +1213,9 @@
+     return retval_ptr;
+ }
+ 
+-/***********************************************************************
+- *            NdrStubCall2 [RPCRT4.@]
+- *
+- * Unmarshals [in] parameters, calls either a method in an object or a server
+- * function, marshals any [out] parameters and frees any allocated data.
+- *
+- * NOTES
+- *  Used by stubless MIDL-generated code.
+- */
+-LONG WINAPI NdrStubCall2(
+-    struct IRpcStubBuffer * pThis,
+-    struct IRpcChannelBuffer * pChannel,
+-    PRPC_MESSAGE pRpcMsg,
+-    DWORD * pdwStubPhase)
++static LONG stub_call( struct IRpcStubBuffer *pThis, struct IRpcChannelBuffer *pChannel,
++                       PRPC_MESSAGE pRpcMsg, DWORD *pdwStubPhase, const MIDL_SERVER_INFO *pServerInfo )
+ {
+-    const MIDL_SERVER_INFO *pServerInfo;
+     const MIDL_STUB_DESC *pStubDesc;
+     PFORMAT_STRING pFormat;
+     MIDL_STUB_MESSAGE stubMsg;
+@@ -1252,13 +1239,6 @@
+     /* correlation cache */
+     ULONG_PTR NdrCorrCache[256];
+ 
+-    TRACE("pThis %p, pChannel %p, pRpcMsg %p, pdwStubPhase %p\n", pThis, pChannel, pRpcMsg, pdwStubPhase);
+-
+-    if (pThis)
+-        pServerInfo = CStdStubBuffer_GetServerInfo(pThis);
+-    else
+-        pServerInfo = ((RPC_SERVER_INTERFACE *)pRpcMsg->RpcInterfaceInformation)->InterpreterInfo;
+-
+     pStubDesc = pServerInfo->pStubDesc;
+     pFormat = pServerInfo->ProcString + pServerInfo->FmtStringOffset[pRpcMsg->ProcNum];
+     pProcHeader = (const NDR_PROC_HEADER *)&pFormat[0];
+@@ -1477,6 +1457,78 @@
+ }
+ 
+ /***********************************************************************
++ *            NdrStubCall2 [RPCRT4.@]
++ *
++ * Unmarshals [in] parameters, calls either a method in an object or a server
++ * function, marshals any [out] parameters and frees any allocated data.
++ *
++ * NOTES
++ *  Used by stubless MIDL-generated code.
++ */
++LONG WINAPI NdrStubCall2(
++    struct IRpcStubBuffer * pThis,
++    struct IRpcChannelBuffer * pChannel,
++    PRPC_MESSAGE pRpcMsg,
++    DWORD * pdwStubPhase)
++{
++    const MIDL_SERVER_INFO *pServerInfo;
++
++    TRACE("pThis %p, pChannel %p, pRpcMsg %p, pdwStubPhase %p\n", pThis, pChannel, pRpcMsg, pdwStubPhase);
++
++    if (pThis)
++        pServerInfo = CStdStubBuffer_GetServerInfo(pThis);
++    else
++        pServerInfo = ((RPC_SERVER_INTERFACE *)pRpcMsg->RpcInterfaceInformation)->InterpreterInfo;
++
++    return stub_call( pThis, pChannel, pRpcMsg, pdwStubPhase, pServerInfo );
++}
++
++static const RPC_SYNTAX_IDENTIFIER ndr_syntax_id =
++    {{0x8a885d04, 0x1ceb, 0x11c9, {0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60}}, {2, 0}};
++
++/***********************************************************************
++ *            NdrStubCall3 [RPCRT4.@]
++ *
++ * The stub of a proxy DLL built for both NDR 2.0 and NDR64 (MIDL's
++ * /protocol all, Windows' 64-bit proxies). The proxies (NdrClientCall3)
++ * send NDR 2.0, so the stub runs its NDR 2.0 syntax.
++ */
++LONG WINAPI NdrStubCall3( struct IRpcStubBuffer *This, struct IRpcChannelBuffer *channel,
++                          PRPC_MESSAGE msg, DWORD *phase )
++{
++    const MIDL_SERVER_INFO *info;
++    MIDL_SERVER_INFO ndr20;
++    ULONG_PTR i;
++
++    TRACE("This %p, channel %p, msg %p, phase %p\n", This, channel, msg, phase);
++
++    if (This)
++        info = CStdStubBuffer_GetServerInfo( This );
++    else
++        info = ((RPC_SERVER_INTERFACE *)msg->RpcInterfaceInformation)->InterpreterInfo;
++
++    for (i = 0; i < info->nCount; ++i)
++    {
++        const MIDL_SYNTAX_INFO *syntax_info = &info->pSyntaxInfo[i];
++
++        if (!memcmp( &syntax_info->TransferSyntax, &ndr_syntax_id, sizeof(RPC_SYNTAX_IDENTIFIER) ))
++        {
++            ndr20 = *info;
++            ndr20.ProcString = syntax_info->ProcString;
++            ndr20.FmtStringOffset = syntax_info->FmtStringOffset;
++            return stub_call( This, channel, msg, phase, &ndr20 );
++        }
++    }
++
++    if (!info->ProcString)
++    {
++        FIXME("NDR64 syntax is not supported.\n");
++        RpcRaiseException( RPC_X_BAD_STUB_DATA );
++    }
++    return stub_call( This, channel, msg, phase, info );
++}
++
++/***********************************************************************
+  *            NdrServerCall2 [RPCRT4.@]
+  */
+ void WINAPI NdrServerCall2(PRPC_MESSAGE pRpcMsg)
+@@ -2166,9 +2218,6 @@
+     return S_OK;
+ }
+ 
+-static const RPC_SYNTAX_IDENTIFIER ndr_syntax_id =
+-    {{0x8a885d04, 0x1ceb, 0x11c9, {0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60}}, {2, 0}};
+-
+ LONG_PTR CDECL ndr64_client_call( MIDL_STUBLESS_PROXY_INFO *info,
+         ULONG proc, void *retval, void **stack_top )
+ {
+diff --git a/dlls/rpcrt4/rpcrt4.spec b/dlls/rpcrt4/rpcrt4.spec
+--- a/dlls/rpcrt4/rpcrt4.spec
++++ b/dlls/rpcrt4/rpcrt4.spec
+@@ -295,7 +295,7 @@
+ @ stdcall NdrSimpleTypeMarshall(ptr ptr long)
+ @ stdcall NdrSimpleTypeUnmarshall(ptr ptr long)
+ @ stdcall NdrStubCall2(ptr ptr ptr ptr)
+-@ stub NdrStubCall3
++@ stdcall NdrStubCall3(ptr ptr ptr ptr)
+ @ stdcall NdrStubCall(ptr ptr ptr ptr)
+ @ stdcall NdrStubForwardingFunction(ptr ptr ptr ptr)
+ @ stdcall NdrStubGetBuffer(ptr ptr ptr)

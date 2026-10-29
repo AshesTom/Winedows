@@ -1,0 +1,143 @@
+From: Codex <codex@localhost>
+Subject: [PATCH] uxtheme: keep Aero regions current and omit Explorer inner outlines
+
+Rounded GDI regions and the server's canonical regions may describe the same
+pixels with different bands. Compare their symmetric difference before treating
+an application as having replaced the managed shape; otherwise a resized Aero
+window remains clipped to its original size. Acquire the window DC after region
+and glass-surface changes so it sees the complete updated frame.
+
+Titleless, iconless captions (Explorer's WTA_NONCLIENT options) also omit the
+inner outline on all four sides while retaining the outer Aero frame.
+
+Validation: tests/aero-frame.c checks first paint, growing/shrinking, activation,
+maximize/restore, the four inner edges and preservation of application-owned regions.
+---
+diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
+--- a/dlls/uxtheme/window.c
++++ b/dlls/uxtheme/window.c
+@@ -125,6 +125,20 @@
+     return result;
+ }
+ 
++/* Regions returned by the server are canonicalized. A rounded region made
++ * by GDI can use different rectangle bands for the same pixels, for which
++ * EqualRgn alone reports FALSE. Do not mistake that for an app-owned shape. */
++static BOOL caption_regions_equal(HRGN a, HRGN b)
++{
++    HRGN difference;
++    BOOL equal;
++    if (EqualRgn(a, b)) return TRUE;
++    if (!(difference = CreateRectRgn(0, 0, 0, 0))) return FALSE;
++    equal = CombineRgn(difference, a, b, RGN_XOR) == NULLREGION;
++    DeleteObject(difference);
++    return equal;
++}
++
+ static void caption_region_update(HWND hwnd, HTHEME theme, const RECT *caption, BOOL maximized)
+ {
+     struct caption_region *region;
+@@ -143,7 +157,7 @@
+     kind = GetWindowRgn(hwnd, current);
+ 
+     /* An application region always wins, including one installed after ours. */
+-    if (region && region->managed && (kind == ERROR || !EqualRgn(current, region->managed)))
++    if (region && region->managed && (kind == ERROR || !caption_regions_equal(current, region->managed)))
+     {
+         DeleteObject(region->managed);
+         region->managed = NULL;
+@@ -180,7 +194,7 @@
+         body = CreateRectRgn(0, caption->bottom, window.right - window.left, window.bottom - window.top);
+         if (!body || CombineRgn(shape, shape, body, RGN_OR) == ERROR) goto done;
+     }
+-    if (region && region->managed && EqualRgn(current, shape)) goto done;
++    if (region && region->managed && caption_regions_equal(current, shape)) goto done;
+     copy = CreateRectRgn(0, 0, 0, 0);
+     if (!copy || CombineRgn(copy, shape, NULL, RGN_COPY) == ERROR) goto done;
+ 
+@@ -850,22 +864,12 @@
+     }
+     theme = OpenThemeDataForDpi(NULL, L"Window", GetDpiForWindow(hwnd));
+     if (!theme) return FALSE;
+-    dc = target ? target : GetWindowDC(hwnd);
+-    if (!dc) { CloseThemeData(theme); return FALSE; }
+-    saved = SaveDC(dc);
+-    if (!saved)
+-    {
+-        if (!target) ReleaseDC(hwnd, dc);
+-        CloseThemeData(theme);
+-        return FALSE;
+-    }
+     GetWindowRect(hwnd, &window);
+     GetClientRect(hwnd, &client);
+     origin.x = origin.y = 0;
+     ClientToScreen(hwnd, &origin);
+     OffsetRect(&client, origin.x - window.left, origin.y - window.top);
+     OffsetRect(&window, -window.left, -window.top);
+-    ExcludeClipRect(dc, client.left, client.top, client.right, client.bottom);
+     active = caption_active(hwnd);
+     maximized = IsZoomed(hwnd) || !!GetPropW(hwnd, L"Win4WineMaximized");
+     state = active ? CS_ACTIVE : CS_INACTIVE;
+@@ -878,7 +882,25 @@
+      * row that would otherwise stay in the window colour above the client. */
+     caption.bottom = max(caption.bottom, min(border_y + GetSystemMetrics(SM_CYCAPTION), client.top));
+     if (!target) caption_region_update(hwnd, theme, &caption, maximized);
+-    if (!paint) goto done;
++    /* Region/visual changes can recreate the X window and its surface. Finish
++     * them before acquiring a DC: its visible region must describe the new
++     * surface, including the newly exposed caption and borders. */
++    if (!target && aero_frames()) make_frame_glass(hwnd, border_x, caption.bottom, border_x, border_y);
++    if (!paint)
++    {
++        CloseThemeData(theme);
++        return TRUE;
++    }
++    dc = target ? target : GetWindowDC(hwnd);
++    if (!dc) { CloseThemeData(theme); return FALSE; }
++    saved = SaveDC(dc);
++    if (!saved)
++    {
++        if (!target) ReleaseDC(hwnd, dc);
++        CloseThemeData(theme);
++        return FALSE;
++    }
++    ExcludeClipRect(dc, client.left, client.top, client.right, client.bottom);
+     window_dc = dc;
+     /* A target clipped to the borders skips the caption, the costly part. */
+     caption_visible = RectVisible(dc, &caption);
+@@ -889,7 +911,6 @@
+         BP_PAINTPARAMS params = { sizeof(params), BPPF_ERASE };
+         HDC buffer_dc;
+ 
+-        if (!target) make_frame_glass(hwnd, border_x, caption.bottom, border_x, border_y);
+         if ((glass = BeginBufferedPaint(dc, &window, BPBF_TOPDOWNDIB, &params, &buffer_dc)))
+         {
+             /* the DWM's frame: TOPFRAME (56), LEFTFRAME (33), RIGHTFRAME
+@@ -911,6 +932,27 @@
+                 SetRect(&band, window.left, window.bottom - border_y, window.right, window.bottom);
+                 draw_atlas_part(dc, dwm, 1, row, 2, &band, FALSE, 0);
+ 
++            }
++            options = (DWORD)(DWORD_PTR)GetPropW(hwnd, L"Win4WineNonClientOptions");
++            if ((options & (WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON)) ==
++                (WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON))
++            {
++                /* Explorer's titleless frame joins its navigation/content
++                 * area without the atlas's three-pixel inner outline. Keep
++                 * the outer edge and clear only the inner lip to glass. */
++                int lip = MulDiv(3, GetDpiForWindow(hwnd), 96);
++                SetRect(&band, border_x - lip, caption.bottom - lip,
++                        window.right - border_x + lip, caption.bottom);
++                BufferedPaintClear(glass, &band);
++                SetRect(&band, border_x - lip, caption.bottom, border_x,
++                        window.bottom - border_y + lip);
++                BufferedPaintClear(glass, &band);
++                SetRect(&band, window.right - border_x, caption.bottom,
++                        window.right - border_x + lip, window.bottom - border_y + lip);
++                BufferedPaintClear(glass, &band);
++                SetRect(&band, border_x, window.bottom - border_y,
++                        window.right - border_x, window.bottom - border_y + lip);
++                BufferedPaintClear(glass, &band);
+             }
+             if (dwm) CloseThemeData(dwm);
+         }

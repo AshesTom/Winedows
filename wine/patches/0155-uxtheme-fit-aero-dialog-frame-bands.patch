@@ -1,0 +1,56 @@
+From: Codex <codex@localhost>
+Subject: [PATCH] uxtheme: keep narrow Aero dialog frames continuous
+
+Property sheets use a three-pixel fixed frame, narrower than DWMWindow's
+rounded corner assets. Use continuous glass outlines for these frames instead
+of squeezing the atlas's transparent corner padding into them. Fit destination
+sizing bands inside small rectangles as well, preserving source margins.
+
+Validation: tests/aero-frame.c covers fixed modal dialog frames, active and
+inactive, alongside resize and Explorer-outline checks. Both architectures pass.
+---
+diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
+--- a/dlls/uxtheme/window.c
++++ b/dlls/uxtheme/window.c
+@@ -675,7 +675,7 @@
+     HDC atlas = aero_atlas();
+     MARGINS m = {0};
+     RECT src;
+-    int w, h, x[4], y[4], sx[4], sy[4], i, j;
++    int w, h, dw, dh, x[4], y[4], sx[4], sy[4], i, j;
+ 
+     if (!atlas || !dwm || FAILED(GetThemeRect(dwm, part, 0, TMT_ATLASRECT, &src)) || IsRectEmpty(&src))
+         return FALSE;
+@@ -703,8 +703,15 @@
+     m.cxRightWidth = min(m.cxRightWidth, w / 2);
+     m.cyTopHeight = min(m.cyTopHeight, h / 2);
+     m.cyBottomHeight = min(m.cyBottomHeight, h / 2);
+-    x[0] = dest->left; x[1] = dest->left + m.cxLeftWidth; x[2] = dest->right - m.cxRightWidth; x[3] = dest->right;
+-    y[0] = dest->top; y[1] = dest->top + m.cyTopHeight; y[2] = dest->bottom - m.cyBottomHeight; y[3] = dest->bottom;
++    /* Fixed-size dialogs have only a three-pixel frame. Keep the source
++     * corners intact, but fit their destination bands inside that frame;
++     * overlapping bands otherwise overwrite each other and break its edges. */
++    dw = max(0, dest->right - dest->left);
++    dh = max(0, dest->bottom - dest->top);
++    x[0] = dest->left; x[1] = dest->left + min(m.cxLeftWidth, dw / 2);
++    x[2] = dest->right - min(m.cxRightWidth, dw / 2); x[3] = dest->right;
++    y[0] = dest->top; y[1] = dest->top + min(m.cyTopHeight, dh / 2);
++    y[2] = dest->bottom - min(m.cyBottomHeight, dh / 2); y[3] = dest->bottom;
+     sx[0] = src.left; sx[1] = src.left + m.cxLeftWidth; sx[2] = src.right - m.cxRightWidth; sx[3] = src.right;
+     sy[0] = src.top; sy[1] = src.top + m.cyTopHeight; sy[2] = src.bottom - m.cyBottomHeight; sy[3] = src.bottom;
+     for (j = 0; j < 3; j++)
+@@ -920,7 +927,13 @@
+             RECT band;
+ 
+             dc = buffer_dc;
+-            if (!dwm || !aero_atlas()) draw_glass_edges(dc, &window, &client, active);
++            /* DWMWindow's frame images contain six-pixel rounded corners.
++             * Fixed dialog frames can be narrower than those assets: use
++             * continuous glass outlines instead of squeezing their corners
++             * into three pixels and exposing their transparent padding. */
++            if (!dwm || !aero_atlas() || border_x < MulDiv(6, GetDpiForWindow(hwnd), 96) ||
++                border_y < MulDiv(6, GetDpiForWindow(hwnd), 96))
++                draw_glass_edges(dc, &window, &client, active);
+             else
+             {
+                 SetRect(&band, window.left, window.top, window.right, caption.bottom);

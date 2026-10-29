@@ -1,0 +1,126 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] combase: a surrogate of the bitness CLSCTX_ACTIVATE_32/64_BIT_SERVER asks for
+
+Purpose: let Windows 7's Control Panel list the 32-bit Control Panel items.
+
+Windows behavior: CLSCTX_ACTIVATE_32_BIT_SERVER (and _64_BIT_) activate the
+local or surrogate server of that bitness. Windows 7's 64-bit Control Panel
+asks COpenControlPanel for CLSCTX_LOCAL_SERVER |
+CLSCTX_ACTIVATE_32_BIT_SERVER, and the object, in a 32-bit dllhost,
+enumerates the 32-bit applets (it fails in a 64-bit one).
+
+Wine before: the flag was ignored; a 64-bit dllhost started, and the call
+returned E_FAIL: "All Control Panel Items" stayed empty.
+
+Change: CoGetClassObject passes the context to the local activation; for a
+surrogate asked with the other bitness's flag, the class and its AppID are
+read from that registry view and the surrogate of that bitness is started.
+
+Evidence: a 64-bit program enumerating ::{21EC2020-3AEA-1069-A2DD-08002B30309D}
+gets the items (before: EnumObjects 0x80004005).
+
+Scope: every program; only activations with those flags.
+---
+ dlls/combase/combase.c         |    2 +-
+ dlls/combase/combase_private.h |    2 +-
+ dlls/combase/rpc.c             |   38 +++++++++++++++++++++++++++-----------
+ 3 files changed, 29 insertions(+), 13 deletions(-)
+
+diff --git a/dlls/combase/combase.c b/dlls/combase/combase.c
+--- a/dlls/combase/combase.c
++++ b/dlls/combase/combase.c
+@@ -1899,7 +1899,7 @@
+     /* Next try out of process */
+     if (clscontext & CLSCTX_LOCAL_SERVER)
+     {
+-        hr = rpc_get_local_class_object(rclsid, riid, obj);
++        hr = rpc_get_local_class_object(rclsid, clscontext, riid, obj);
+         if (SUCCEEDED(hr))
+             return hr;
+     }
+diff --git a/dlls/combase/combase_private.h b/dlls/combase/combase_private.h
+--- a/dlls/combase/combase_private.h
++++ b/dlls/combase/combase_private.h
+@@ -120,7 +120,7 @@
+ 
+ /* RpcSs interface */
+ HRESULT rpcss_get_next_seqid(DWORD *id);
+-HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj);
++HRESULT rpc_get_local_class_object(REFCLSID rclsid, DWORD clsctx, REFIID riid, void **obj);
+ HRESULT rpc_register_local_server(REFCLSID clsid, IStream *stream, DWORD flags, unsigned int *cookie);
+ HRESULT rpc_revoke_local_server(unsigned int cookie);
+ HRESULT rpc_create_clientchannel(const OXID *oxid, const IPID *ipid, const OXID_INFO *oxid_info, const IID *iid,
+diff --git a/dlls/combase/rpc.c b/dlls/combase/rpc.c
+--- a/dlls/combase/rpc.c
++++ b/dlls/combase/rpc.c
+@@ -551,7 +551,7 @@
+     return S_OK;
+ }
+ 
+-static HRESULT create_surrogate_server(REFCLSID rclsid, HANDLE *process)
++static HRESULT create_surrogate_server(REFCLSID rclsid, DWORD clsctx, HANDLE *process)
+ {
+     static const WCHAR processidW[] = L" /PROCESSID:";
+     HKEY key;
+@@ -567,19 +567,35 @@
+ 
+     TRACE("Attempting to start surrogate server for %s\n", debugstr_guid(rclsid));
+ 
+-    hr = open_key_for_clsid(rclsid, NULL, KEY_READ, &key);
+-    if (FAILED(hr) && (arch == 64 || (IsWow64Process(GetCurrentProcess(), &is_wow64) && is_wow64)))
+-        hr = open_key_for_clsid(rclsid, NULL, opposite | KEY_READ, &key);
+-    if (FAILED(hr)) return hr;
+-    RegCloseKey(key);
+-
+-    hr = open_appidkey_from_clsid(rclsid, KEY_READ, &key);
+-    if (FAILED(hr) && (arch == 64 || (IsWow64Process(GetCurrentProcess(), &is_wow64) && is_wow64)))
++    if (arch == 32) IsWow64Process(GetCurrentProcess(), &is_wow64);
++    /* CLSCTX_ACTIVATE_32_BIT_SERVER and CLSCTX_ACTIVATE_64_BIT_SERVER ask for a
++     * surrogate of that bitness: the class is read from that view. */
++    if ((arch == 64 && (clsctx & CLSCTX_ACTIVATE_32_BIT_SERVER)) ||
++        (is_wow64 && (clsctx & CLSCTX_ACTIVATE_64_BIT_SERVER)))
+     {
++        hr = open_key_for_clsid(rclsid, NULL, opposite | KEY_READ, &key);
++        if (FAILED(hr)) return hr;
++        RegCloseKey(key);
+         hr = open_appidkey_from_clsid(rclsid, opposite | KEY_READ, &key);
+         if (FAILED(hr)) return hr;
+         is_opposite = TRUE;
+     }
++    else
++    {
++        hr = open_key_for_clsid(rclsid, NULL, KEY_READ, &key);
++        if (FAILED(hr) && (arch == 64 || is_wow64))
++            hr = open_key_for_clsid(rclsid, NULL, opposite | KEY_READ, &key);
++        if (FAILED(hr)) return hr;
++        RegCloseKey(key);
++
++        hr = open_appidkey_from_clsid(rclsid, KEY_READ, &key);
++        if (FAILED(hr) && (arch == 64 || is_wow64))
++        {
++            hr = open_appidkey_from_clsid(rclsid, opposite | KEY_READ, &key);
++            if (FAILED(hr)) return hr;
++            is_opposite = TRUE;
++        }
++    }
+ 
+     size = (MAX_PATH + 1) * sizeof(WCHAR);
+     ret = RegQueryValueExW(key, L"DllSurrogate", NULL, NULL, (LPBYTE)command, &size);
+@@ -631,7 +647,7 @@
+     return S_OK;
+ }
+ 
+-HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
++HRESULT rpc_get_local_class_object(REFCLSID rclsid, DWORD clsctx, REFIID riid, void **obj)
+ {
+     PMInterfacePointer objref = NULL;
+     IServiceProvider *local_server;
+@@ -656,7 +672,7 @@
+         if (tries == 1)
+         {
+             if ((hr = create_local_service(rclsid)) && (hr = create_server(rclsid, &process)) &&
+-                (hr = create_surrogate_server(rclsid, &process)) )
++                (hr = create_surrogate_server(rclsid, clsctx, &process)) )
+                 return hr;
+         }
+ 

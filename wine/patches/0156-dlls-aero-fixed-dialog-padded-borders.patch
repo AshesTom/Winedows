@@ -1,0 +1,182 @@
+From: Codex <codex@localhost>
+Subject: [PATCH] win32u, uxtheme: reserve padded Aero borders on fixed dialogs
+
+Fixed captioned top-level Aero dialogs need their padded border in the client
+geometry as well as in painting. Add the theme's padded border to fixed dialog
+layout and AdjustWindowRectEx; use the same width for nonclient hit testing,
+system menu geometry, captions, buttons and glass frame rendering. Implement
+SM_CXPADDEDBORDER (including its DPI variant), previously returning zero even
+when NONCLIENTMETRICS reported four pixels. Fixed borders retain HTBORDER and
+do not become resize handles. Basic and ordinary Wine keep their geometry.
+
+Validation: tests/aero-frame.c asserts the 7px side and bottom insets,
+AdjustWindowRectEx and HTBORDER, and compares pixels on all four frame sides.
+32-bit and 64-bit runs pass; the fixed frame was also verified on screen.
+---
+diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
+--- a/dlls/uxtheme/window.c
++++ b/dlls/uxtheme/window.c
+@@ -33,6 +33,7 @@
+ 
+ static void themed_caption_geometry(HWND hwnd, HTHEME theme, RECT *caption, RECT buttons[3]);
+ static BOOL aero_frames(void);
++static int themed_frame_border(HWND hwnd, DWORD style, BOOL vertical);
+ static HRGN aero_frame_region(int width, int height, BOOL maximized);
+ BOOL WINAPI Win4WineDrawNonClient(HWND hwnd, HDC target);
+ static BOOL draw_non_client(HWND hwnd, HDC target, BOOL paint);
+@@ -370,7 +371,7 @@
+     SIZE image;
+     UINT dpi = GetDpiForWindow(hwnd);
+     DWORD style = GetWindowLongW(hwnd, GWL_STYLE);
+-    int border_x = GetSystemMetrics(style & WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME);
++    int border_x = themed_frame_border(hwnd, style, FALSE);
+     /* XP keeps 2px between the buttons and to the frame at every DPI. */
+     int gap = 2, padding = 2;
+     int width = GetSystemMetrics(SM_CXSIZE), height = GetSystemMetrics(SM_CYSIZE) - 2;
+@@ -378,7 +379,7 @@
+     GetWindowRect(hwnd, &window);
+     OffsetRect(&window, -window.left, -window.top);
+     *caption = window;
+-    caption->bottom = GetSystemMetrics(style & WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME)
++    caption->bottom = themed_frame_border(hwnd, style, TRUE)
+         + GetSystemMetrics(SM_CYCAPTION) - 1;
+     if (SUCCEEDED(GetThemePartSize(theme, NULL, WP_CAPTION, CS_ACTIVE, NULL, TS_TRUE, &image)))
+         caption->bottom = min(caption->bottom, MulDiv(image.cy, dpi, 96));
+@@ -459,8 +460,8 @@
+     CloseThemeData(theme);
+     GetWindowRect(hwnd, &window);
+     point.x -= window.left; point.y -= window.top;
+-    border_x = GetSystemMetrics(style & WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME);
+-    border_y = GetSystemMetrics(style & WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME);
++    border_x = themed_frame_border(hwnd, style, FALSE);
++    border_y = themed_frame_border(hwnd, style, TRUE);
+     if (original == HTSYSMENU && point.x >= border_x + GetSystemMetrics(SM_CXSMICON)
+         + MulDiv(3, GetDpiForWindow(hwnd), 96)) return HTCAPTION;
+     /* XP's public NC hit regions include caption padding around the images.
+@@ -514,7 +515,7 @@
+     GetClientRect(hwnd, &client);
+     ClientToScreen(hwnd, &origin);
+     OffsetRect(&client, origin.x - window.left, origin.y - window.top);
+-    border_y = GetSystemMetrics(style & WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME);
++    border_y = themed_frame_border(hwnd, style, TRUE);
+     themed_caption_geometry(hwnd, theme, band, buttons);
+     /* As draw_non_client stretches the caption image. */
+     band->bottom = max(band->bottom, min(border_y + GetSystemMetrics(SM_CYCAPTION), client.top));
+@@ -536,6 +537,18 @@
+                GetEnvironmentVariableW(L"WIN4WINE_AERO", value, ARRAY_SIZE(value)) == 1 && value[0] == '1';
+     }
+     return aero;
++}
++
++/* Fixed Aero dialogs reserve the padded border just like their nonclient
++ * geometry in win32u, without acquiring resize hit targets. */
++static int themed_frame_border(HWND hwnd, DWORD style, BOOL vertical)
++{
++    int border = GetSystemMetrics(style & WS_THICKFRAME ? (vertical ? SM_CYFRAME : SM_CXFRAME) :
++                                                         (vertical ? SM_CYDLGFRAME : SM_CXDLGFRAME));
++    if (aero_frames() && !(style & (WS_THICKFRAME | WS_CHILD)) &&
++        (style & WS_CAPTION) == WS_CAPTION && !(GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW))
++        border += GetSystemMetrics(SM_CXPADDEDBORDER);
++    return border;
+ }
+ 
+ /* A premultiplied ARGB color over RECT, keeping the alpha of a 32-bit DIB */
+@@ -854,8 +867,8 @@
+         saved = SaveDC(dc);
+         GetWindowRect(hwnd, &part);
+         OffsetRect(&part, -part.left, -part.top);
+-        border_x = GetSystemMetrics(style & WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME);
+-        border_y = GetSystemMetrics(style & WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME);
++        border_x = themed_frame_border(hwnd, style, FALSE);
++        border_y = themed_frame_border(hwnd, style, TRUE);
+         part.right -= border_x + GetSystemMetrics(SM_CXSIZE);
+         part.left = part.right - GetSystemMetrics(SM_CXSIZE);
+         part.top = border_y + 2;
+@@ -880,8 +893,8 @@
+     active = caption_active(hwnd);
+     maximized = IsZoomed(hwnd) || !!GetPropW(hwnd, L"Win4WineMaximized");
+     state = active ? CS_ACTIVE : CS_INACTIVE;
+-    border_x = GetSystemMetrics(style & WS_THICKFRAME ? SM_CXFRAME : SM_CXDLGFRAME);
+-    border_y = GetSystemMetrics(style & WS_THICKFRAME ? SM_CYFRAME : SM_CYDLGFRAME);
++    border_x = themed_frame_border(hwnd, style, FALSE);
++    border_y = themed_frame_border(hwnd, style, TRUE);
+     caption_height = GetSystemMetrics(SM_CYCAPTION) - 1;
+     themed_caption_geometry(hwnd, theme, &caption, buttons);
+     /* The buttons and title are placed against the raw caption height, but XP
+diff --git a/dlls/win32u/defwnd.c b/dlls/win32u/defwnd.c
+--- a/dlls/win32u/defwnd.c
++++ b/dlls/win32u/defwnd.c
+@@ -251,6 +251,16 @@
+     return retval;
+ }
+ 
++/* Aero's fixed top-level dialogs have a padded glass border too. Reserve
++ * it in client geometry, rather than painting a frame over their controls. */
++static BOOL aero_dialog_frame(DWORD style, DWORD ex_style)
++{
++    const char *aero = getenv("WIN4WINE_AERO");
++    return win4wine_shell() == WIN4WINE_SHELL_WIN7 && aero && !strcmp(aero, "1") &&
++           (style & WS_CAPTION) == WS_CAPTION && !(style & (WS_THICKFRAME | WS_CHILD)) &&
++           !(ex_style & WS_EX_TOOLWINDOW);
++}
++
+ /* see AdjustWindowRectExForDpi */
+ BOOL adjust_window_rect( RECT *rect, DWORD style, BOOL menu, DWORD ex_style, UINT dpi )
+ {
+@@ -266,6 +276,8 @@
+ 
+     if (style & WS_THICKFRAME)
+         adjust += ncm.iBorderWidth + ncm.iPaddedBorderWidth; /* The resize border */
++    else if (aero_dialog_frame(style, ex_style))
++        adjust += ncm.iPaddedBorderWidth; /* Fixed Aero glass frame */
+ 
+     if ((style & (WS_BORDER|WS_DLGFRAME)) || (ex_style & WS_EX_DLGMODALFRAME))
+         adjust++; /* The other border */
+@@ -1146,7 +1158,9 @@
+     }
+     else if (has_dialog_frame( style, ex_style ))
+     {
+-        InflateRect( rect, -get_system_metrics( SM_CXDLGFRAME ), -get_system_metrics( SM_CYDLGFRAME ));
++        int padding = aero_dialog_frame(style, ex_style) ? get_system_metrics(SM_CXPADDEDBORDER) : 0;
++        InflateRect( rect, -get_system_metrics( SM_CXDLGFRAME ) - padding,
++                     -get_system_metrics( SM_CYDLGFRAME ) - padding );
+     }
+     else if (has_thin_frame( style ))
+     {
+@@ -2096,8 +2110,11 @@
+     else  /* No thick frame */
+     {
+         if (has_dialog_frame( style, ex_style ))
+-            InflateRect( &rects.window, -get_system_metrics( SM_CXDLGFRAME ),
+-                         -get_system_metrics( SM_CYDLGFRAME ));
++        {
++            int padding = aero_dialog_frame(style, ex_style) ? get_system_metrics(SM_CXPADDEDBORDER) : 0;
++            InflateRect( &rects.window, -get_system_metrics( SM_CXDLGFRAME ) - padding,
++                         -get_system_metrics( SM_CYDLGFRAME ) - padding );
++        }
+         else if (has_thin_frame( style ))
+             InflateRect(&rects.window, -get_system_metrics( SM_CXBORDER ),
+                         -get_system_metrics( SM_CYBORDER ));
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -7031,6 +7031,9 @@
+         ncm.cbSize = sizeof(ncm);
+         NtUserSystemParametersInfo( SPI_GETNONCLIENTMETRICS, 0, &ncm, 0 );
+         return ncm.iCaptionHeight;
++    case SM_CXPADDEDBORDER:
++        get_entry( &entry_PADDEDBORDERWIDTH, 0, &ret );
++        return max( ret, 0 );
+     case SM_CXFRAME:
+     case SM_CYFRAME:
+     {
+@@ -7242,6 +7245,9 @@
+         ncm.cbSize = sizeof(ncm);
+         NtUserSystemParametersInfoForDpi( SPI_GETNONCLIENTMETRICS, 0, &ncm, 0, dpi );
+         return ncm.iCaptionHeight;
++    case SM_CXPADDEDBORDER:
++        get_entry_dpi( &entry_PADDEDBORDERWIDTH, 0, &ret, dpi );
++        return max( ret, 0 );
+     case SM_CXFRAME:
+     case SM_CYFRAME:
+     {

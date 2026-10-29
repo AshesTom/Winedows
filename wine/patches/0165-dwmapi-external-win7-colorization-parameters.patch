@@ -1,0 +1,201 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] dwmapi: Windows 7's colorization parameters, for Personalization's Window Color
+
+Purpose: let Windows 7's Personalization open and change the Aero color
+(Window Color and Appearance: the swatches, transparency, intensity and the
+color mixer).
+
+Windows behavior: Personalization asks DwmpIsCompositionCapable (106) and
+DwmpGetGlobalState (107, three states, mask 7) whether Aero is available,
+reads the current color with DwmpGetColorizationParameters (127) and applies
+a swatch or a change with DwmpSetColorizationParameters (131: the color,
+afterglow, color balance, afterglow balance, blur balance, glass reflection
+intensity and opaque blend). The DWM shows the new color at once on the
+window frames, the taskbar and the Start menu, and keeps it in
+HKCU\Software\Microsoft\Windows\DWM; Cancel sets the old values back.
+
+Wine before: 106, 107 and 131 were stubs (the shell ended at the first
+call), 127 returned E_NOTIMPL.
+
+Change: 106 and 107 answer whether the Windows 7 session composes (Aero);
+127 reads the seven values from HKCU\Software\Microsoft\Windows\DWM, with
+Aero's "Sky" as the default; 131 writes them, sets the new color on the
+windows that have Aero glass (their "__win4wine_glass" property, which
+winex11 reads again on a frame change), sends WM_DWMCOLORIZATIONCOLORCHANGED
+and redraws the top-level windows.
+
+Evidence: headless Windows 7 session: Personalization > Window Color, Ruby:
+the window frame, the taskbar and the Start menu turn red at once; Save
+changes keeps it (ColorizationColor 0xa8ce0f0f).
+
+Scope: 106 and 107 answer TRUE only in the Windows 7 session with Aero;
+127 and 131 in every program.
+---
+ dlls/dwmapi/dwmapi.spec   |    6 +-
+ dlls/dwmapi/dwmapi_main.c |  128 ++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 127 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/dwmapi/dwmapi.spec b/dlls/dwmapi/dwmapi.spec
+--- a/dlls/dwmapi/dwmapi.spec
++++ b/dlls/dwmapi/dwmapi.spec
+@@ -4,8 +4,8 @@
+ 103 stub -noname DwmpRestartComposition
+ 104 stub -noname DwmpSetColorizationColor
+ 105 stub -noname DwmpStartOrStopFlip3D
+-106 stub -noname DwmpIsCompositionCapable
+-107 stub -noname DwmpGetGlobalState
++106 stdcall -noname DwmpIsCompositionCapable(long ptr)
++107 stdcall -noname DwmpGetGlobalState(ptr)
+ 108 stub -noname DwmpEnableRedirection
+ 109 stub -noname DwmpOpenGraphicsStream
+ 110 stub -noname DwmpCloseGraphicsStream
+@@ -26,7 +26,7 @@
+ 128 stub DwmpDxgiIsThreadDesktopComposited
+ 129 stub -noname DwmpDxgiDisableRedirection
+ 130 stub -noname DwmpDxgiEnableRedirection
+-131 stub -noname DwmpSetColorizationParameters
++131 stdcall -noname DwmpSetColorizationParameters(ptr long)
+ 132 stub -noname DwmpGetCompositionTimingInfoEx
+ 133 stub DwmpDxUpdateWindowRedirectionBltSurface
+ 134 stub -noname DwmpDxSetContentHostingInformation
+diff --git a/dlls/dwmapi/dwmapi_main.c b/dlls/dwmapi/dwmapi_main.c
+--- a/dlls/dwmapi/dwmapi_main.c
++++ b/dlls/dwmapi/dwmapi_main.c
+@@ -762,13 +762,133 @@
+     return S_OK;
+ };
+ 
++/* win4wine: Windows 7's colorization parameters (Personalization's Window
++ * Color), kept as Windows 7's DWM keeps them, in HKCU\Software\Microsoft\
++ * Windows\DWM; the defaults are those of Aero's "Sky". */
++struct colorization_params
++{
++    DWORD color;
++    DWORD afterglow;
++    DWORD color_balance;
++    DWORD afterglow_balance;
++    DWORD blur_balance;
++    DWORD glass_reflection_intensity;
++    DWORD opaque_blend;
++};
++
++static const struct
++{
++    const WCHAR *name;
++    DWORD sky;
++} colorization_values[] =
++{
++    { L"ColorizationColor", 0x6b74b8fc },
++    { L"ColorizationAfterglow", 0x6b74b8fc },
++    { L"ColorizationColorBalance", 8 },
++    { L"ColorizationAfterglowBalance", 43 },
++    { L"ColorizationBlurBalance", 49 },
++    { L"ColorizationGlassReflectionIntensity", 50 },
++    { L"ColorizationOpaqueBlend", 0 },
++};
++
++/**********************************************************************
++ *           DwmpIsCompositionCapable              (DWMAPI.106)
++ */
++HRESULT WINAPI DwmpIsCompositionCapable(BOOL remote, BOOL *capable)
++{
++    TRACE("(%d, %p)\n", remote, capable);
++
++    if (!capable) return E_INVALIDARG;
++    *capable = win4wine_shell() == WIN4WINE_SHELL_WIN7 && aero_session();
++    return S_OK;
++}
++
++/**********************************************************************
++ *           DwmpGetGlobalState                    (DWMAPI.107)
++ */
++/* win4wine: the three states that Windows 7's Personalization asks for
++ * (mask 7): all set while the session composes. */
++HRESULT WINAPI DwmpGetGlobalState(DWORD *state)
++{
++    BOOL enabled = FALSE;
++
++    TRACE("(%p)\n", state);
++
++    if (!state || state[0] < 5 * sizeof(DWORD)) return E_INVALIDARG;
++    DwmIsCompositionEnabled(&enabled);
++    if (state[1] & 1) state[2] = enabled;
++    if (state[1] & 2) state[3] = enabled;
++    if (state[1] & 4) state[4] = enabled;
++    return S_OK;
++}
++
++/**********************************************************************
++ *           DwmpGetColorizationParameters         (DWMAPI.127)
++ */
++HRESULT WINAPI DwmpGetColorizationParameters(struct colorization_params *params)
++{
++    DWORD *values = (DWORD *)params, value, size;
++    int i;
++
++    TRACE("(%p)\n", params);
++
++    if (!params) return E_INVALIDARG;
++    for (i = 0; i < ARRAY_SIZE(colorization_values); i++)
++    {
++        size = sizeof(value);
++        values[i] = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM",
++                                 colorization_values[i].name, RRF_RT_REG_DWORD, NULL, &value, &size)
++                    ? colorization_values[i].sky : value;
++    }
++    return S_OK;
++}
++
++/* a glass window's tint is its "__win4wine_glass" property (set_glass), which
++ * winex11 reads again when the frame changes */
++static BOOL CALLBACK glass_color_changed(HWND hwnd, LPARAM lparam)
++{
++    if (!GetPropW(hwnd, L"__win4wine_glass")) return TRUE;
++    SetPropW(hwnd, L"__win4wine_glass", (HANDLE)(ULONG_PTR)(lparam | !lparam));
++    SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
++                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS);
++    return TRUE;
++}
++
++static BOOL CALLBACK colorization_changed(HWND hwnd, LPARAM lparam)
++{
++    const struct colorization_params *params = (const struct colorization_params *)lparam;
++
++    glass_color_changed(hwnd, params->color);
++    EnumChildWindows(hwnd, glass_color_changed, params->color);
++    SendNotifyMessageW(hwnd, WM_DWMCOLORIZATIONCOLORCHANGED, params->color, params->opaque_blend);
++    if (IsWindowVisible(hwnd))
++        RedrawWindow(hwnd, NULL, 0, RDW_FRAME | RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
++    return TRUE;
++}
++
+ /**********************************************************************
+- *           DwmpGetColorizationParameters         (DWMAPI.@)
++ *           DwmpSetColorizationParameters         (DWMAPI.131)
+  */
+-HRESULT WINAPI DwmpGetColorizationParameters(void *params)
++/* win4wine: Windows 7's DWM keeps the parameters it is given (Personalization
++ * gives the old ones back on Cancel) and tells the windows; their frames, the
++ * taskbar and the Start menu draw with the new color (colorization_color). */
++HRESULT WINAPI DwmpSetColorizationParameters(const struct colorization_params *params, UINT unknown)
+ {
+-    FIXME("(%p) stub\n", params);
+-    return E_NOTIMPL;
++    const DWORD *values = (const DWORD *)params;
++    HKEY key;
++    int i;
++
++    TRACE("(%p, %u) color %08lx\n", params, unknown, params ? params->color : 0);
++
++    if (!params) return E_INVALIDARG;
++    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM", 0, NULL, 0,
++                        KEY_SET_VALUE, NULL, &key, NULL))
++        return E_FAIL;
++    for (i = 0; i < ARRAY_SIZE(colorization_values); i++)
++        RegSetValueExW(key, colorization_values[i].name, 0, REG_DWORD, (const BYTE *)&values[i], sizeof(DWORD));
++    RegCloseKey(key);
++    EnumWindows(colorization_changed, (LPARAM)params);
++    return S_OK;
+ }
+ 
+ /* win4wine: Aero Peek. While a window is previewed, the other top-level

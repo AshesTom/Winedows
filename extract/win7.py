@@ -19,13 +19,14 @@ import subprocess
 import sys
 import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hives  # noqa: E402
 import manifests  # noqa: E402
 import media  # noqa: E402
 
 RT_GROUP_ICON = 14
 
 # Bump when the extracted files change; setup.sh then extracts again.
-EXTRACT_VERSION = 7
+EXTRACT_VERSION = 9
 # The image's language -> our language (the session's and the prefix's).
 LANGUAGES = {'ja-JP': 'ja', 'en-US': 'en'}
 # Windows 7's shell and the DLLs it uses from Windows 7 (prefix/win7.py says which
@@ -38,12 +39,25 @@ SYSTEM32 = ('explorerframe.dll', 'shell32.dll', 'shlwapi.dll', 'propsys.dll', 's
             # has them: SysTray (stobject, with batmeter for the power), the network
             # (pnidui, with QUtil, and VAN for the list of networks) and the volume
             # (SndVolSSO, and SndVol.exe for its flyout and mixer).
-            'stobject.dll', 'batmeter.dll', 'devobj.dll', 'pnidui.dll', 'qutil.dll', 'van.dll', 'sndvol.exe')
+            'stobject.dll', 'batmeter.dll', 'devobj.dll', 'pnidui.dll', 'qutil.dll', 'van.dll', 'sndvol.exe',
+            # A library's view: Windows 7's search folder, which lists the items
+            # of the library's folders, and its query parser (Wine has neither).
+            'SearchFolder.dll', 'StructuredQuery.dll',
+            # Personalization (its pages, Window Color: themecpl) and the themes (themeui)
+            'themecpl.dll', 'themeui.dll')
 # Their 32-bit copies (SysWOW64): every program of the session uses Windows 7's
 # shell DLLs for its file dialogs (prefix/win7.py).
 SYSWOW64 = ('explorerframe.dll', 'shell32.dll', 'shlwapi.dll', 'propsys.dll', 'shdocvw.dll', 'dui70.dll',
             'duser.dll', 'profapi.dll', 'sndvolsso.dll', 'winbrand.dll', 'shacct.dll', 'thumbcache.dll',
-            'authui.dll', 'linkinfo.dll', 'actxprxy.dll', 'imageres.dll')
+            'authui.dll', 'linkinfo.dll', 'actxprxy.dll', 'imageres.dll', 'SearchFolder.dll', 'StructuredQuery.dll',
+            'themecpl.dll', 'themeui.dll')
+# Components added later: their entries also go to registry-NAME.reg (and
+# registry-NAME-wow64.reg), for prefixes made before them (prefix/win7.py).
+LATER_COMPONENTS = {
+    'search': ('microsoft-windows-searchfolder', 'windowssearchengine-structuredquery'),
+    'personalization': ('microsoft-windows-personalization', 'microsoft-windows-themecpl',
+                        'microsoft-windows-themeui'),
+}
 # The components of these files, whose registry entries the prefix gets.
 COMPONENTS = ('microsoft-windows-explorer', 'microsoft-windows-explorerframe', 'microsoft-windows-shell32',
               'microsoft-windows-shlwapi', 'microsoft-windows-propsys', 'microsoft-windows-shdocvw',
@@ -58,7 +72,7 @@ COMPONENTS = ('microsoft-windows-explorer', 'microsoft-windows-explorerframe', '
               # The shell's settings (Explorer\Advanced) and the Network folder's registration.
               'microsoft-windows-shell-client', 'microsoft-windows-networkexplorer',
               # Text files' type, icon and verbs (Wine's Notepad opens them).
-              'microsoft-windows-notepad')
+              'microsoft-windows-notepad') + sum(LATER_COMPONENTS.values(), ())
 # Fonts: Segoe UI, Tahoma and Microsoft Sans Serif (MS Shell Dlg 2, MS Shell Dlg),
 # and Meiryo and MS UI Gothic (msgothic.ttc) for Japanese.
 FONTS = {'ja': r'(segoeui\w*\.ttf|tahoma\w*\.ttf|micross\.ttf|meiryo\w*\.ttc|msgothic\.ttc)$',
@@ -148,6 +162,14 @@ def select(paths, lang_dir, lang):
             wanted[real] = f'fonts/{PurePosixPath(real).name}'
         elif path.startswith('windows/resources/themes/aero/') and not path.endswith('/'):
             wanted[real] = 'themes/' + real[len('Windows/Resources/Themes/'):]
+        elif re.match(r'windows/resources/themes/[^/]+\.theme$', path):
+            # Personalization's Aero themes, and the Basic and High Contrast ones
+            wanted[real] = 'themes/' + PurePosixPath(real).name
+        elif re.match(r'windows/resources/ease of access themes/[^/]+$', path):
+            wanted[real] = 'easeofaccess/' + PurePosixPath(real).name
+        elif re.match(r'windows/web/wallpaper/[^/]+/[^/]+$', path):
+            # the themes' and Desktop Background's pictures
+            wanted[real] = 'web/wallpaper/' + real[len('Windows/Web/Wallpaper/'):]
         elif re.match(r'windows/cursors/aero_[a-z]+\.(cur|ani)$', path):
             # The Aero cursor scheme (normal size), for the session's X cursor theme
             wanted[real] = 'cursors/' + PurePosixPath(real).name
@@ -163,6 +185,8 @@ def select(paths, lang_dir, lang):
     # Read for the text file's type names only ("Text Document", prefix/win7.py)
     want(f'Windows/System32/{lang_dir}/notepad.exe.mui', f'res/{lang_dir}/notepad.exe.mui', required=False)
     want('Windows/Resources/Themes/aero.theme', 'themes/aero.theme')
+    # Read for the edition's license policy only (registry-license.reg), not kept
+    want('Windows/System32/config/SYSTEM', 'hives/SYSTEM')
     want('Windows/Web/Wallpaper/Windows/img0.jpg', 'web/img0.jpg')
     for folder in START_MENU:
         want(f'ProgramData/Microsoft/Windows/{folder}/desktop.ini', f'startmenu/{folder}/desktop.ini',
@@ -186,6 +210,21 @@ def select(paths, lang_dir, lang):
                 if arch == 'amd64':
                     raise SystemExit(f'Not in this Windows 7 image: the manifest of {component}')
     return wanted
+
+
+def write_license(policy, path):
+    """The edition's license policy as Wine keeps it (HKLM\\Software\\Wine\\LicenseInformation,
+    read by SLGetWindowsInformationDWORD): Personalization and Aero ask for theirs.
+    Wine's own MUI values stay."""
+    lines = ['Windows Registry Editor Version 5.00', '', r'[HKEY_LOCAL_MACHINE\Software\Wine\LicenseInformation]']
+    for name, (kind, data) in sorted(policy.items()):
+        if name.startswith('Kernel-MUI-'):
+            continue
+        if kind == 4 and len(data) == 4:
+            lines.append(f'"{name}"=dword:{int.from_bytes(data, "little"):08x}')
+        elif kind == 1:
+            lines.append('"{}"="{}"'.format(name, data.decode('utf-16le').rstrip('\0').replace('\\', '\\\\')))
+    path.write_text('\r\n'.join(lines) + '\r\n', encoding='utf-16')
 
 
 def extract(iso, output):
@@ -216,12 +255,19 @@ def extract(iso, output):
         output.mkdir(parents=True)
         manifest = []
         manifest_paths = {'amd64': [], 'wow64': []}
+        later_paths = {(name, arch): [] for name in LATER_COMPONENTS for arch in ('amd64', 'wow64')}
         for source, target in sorted(wanted.items(), key=lambda item: item[1]):
             if (files / index / source).is_dir():
                 continue
             data = (files / index / source).read_bytes()
             if target.startswith('manifests/'):
                 manifest_paths[target.split('/')[1]].append(files / index / source)
+                for name, components in LATER_COMPONENTS.items():
+                    if PurePosixPath(target).stem in components:
+                        later_paths[name, target.split('/')[1]].append(files / index / source)
+                continue
+            if target.startswith('hives/'):
+                write_license(hives.product_policy(files / index / source), output / 'registry-license.reg')
                 continue
             dest = output / target
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -235,6 +281,9 @@ def extract(iso, output):
             (output / name).write_text(text, encoding='utf-16')
             for item in missing:
                 print(f'Registry entry left out ({arch}):', item, file=sys.stderr)
+        for (name, arch), paths in later_paths.items():
+            reg = f'registry-{name}.reg' if arch == 'amd64' else f'registry-{name}-wow64.reg'
+            (output / reg).write_text(manifests.convert(paths, icons)[0], encoding='utf-16')
         (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         (output / 'media.json').write_text(json.dumps(
             {'lang': lang, 'ui_language': lang_dir, 'image': int(index), 'edition': edition,

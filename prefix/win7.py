@@ -35,6 +35,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import subprocess
 import tempfile
@@ -42,7 +43,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = 'win7-shell.json'
 # Bump when the registry settings below change; stage then applies them again.
-VERSION = 19
+VERSION = 21
 LOCALES = {'ja': 'ja_JP.UTF-8', 'en': 'en_US.UTF-8'}
 # Wine's own Common Controls 6 (which an earlier version of this prefix replaced).
 SXS = 'amd64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef'
@@ -70,6 +71,17 @@ SHELL_ONLY = ('sndvolsso', 'winbrand', 'shacct', 'authui', 'stobject', 'batmeter
               'van')
 # Programs of the notification area, in system32: the volume's flyout and mixer.
 TRAY_PROGRAMS = ('sndvol',)
+# A library's view (its items, from the library's folders): Windows 7's search
+# folder and its query parser, 64-bit and 32-bit. Wine has neither: no override.
+LIBRARY_VIEW = ('SearchFolder', 'StructuredQuery')
+# Personalization (its pages and Window Color, the Aero color) and the themes,
+# 64-bit and 32-bit: Wine has neither, no override.
+PERSONALIZATION = ('themecpl', 'themeui')
+# Windows 7's theme defaults (its SOFTWARE hive), which themeui's per-user
+# setup starts the user's theme from.
+THEME_DEFAULTS = (('InstallTheme', r'%SystemRoot%\resources\Themes\aero.theme', 'REG_EXPAND_SZ'),
+                  ('InstallVisualStyle', r'%ResourceDir%\themes\Aero\Aero.msstyles', 'REG_EXPAND_SZ'),
+                  ('SetupVersion', '10', 'REG_SZ'))
 # The notification area's COM objects (DLL, threading model): SysTray and its
 # invoker (stobject), the network icon's shell service object and its pages
 # (pnidui; its component, netshell, registers the Network Connections folder
@@ -222,6 +234,25 @@ class Prefix:
             self.run('reg', 'add', rf'HKCR\CLSID\{clsid}\InProcServer32', '/ve', '/t', 'REG_EXPAND_SZ',
                      '/d', rf'%SystemRoot%\{system}\{proxies}.dll', '/f', view)
 
+    def proxy_registrations(self, assets):
+        """Windows 7's interface proxies (PROXIES) for the interfaces its components give
+        them, in both views: wineboot (a Wine update) registers Wine's actxprxy for them,
+        whose proxies do not marshal item ID lists (Explorer opened no folder or drive)."""
+        _, _, clsid = PROXIES
+        for name, regedit in (('registry.reg', 'regedit'), ('registry-wow64.reg', r'C:\windows\syswow64\regedit.exe')):
+            if not (assets / name).is_file():
+                continue
+            keys = re.findall(r'^\[(HKEY_CLASSES_ROOT\\Interface\\\{[^}]+\})\\ProxyStubClsid32\\?\]\r?\n@="'
+                              + re.escape(clsid) + '"', (assets / name).read_text(encoding='utf-16'), re.M | re.I)
+            reg = self.path / 'drive_c/w7/proxies.reg'
+            reg.write_text('Windows Registry Editor Version 5.00\r\n\r\n' + ''.join(
+                f'[{key}\\ProxyStubClsid32]\r\n@="{clsid}"\r\n\r\n' for key in keys), encoding='utf-16')
+            try:
+                self.run(regedit, '/s', windows_path(reg), timeout=600)
+                self.wait()
+            finally:
+                reg.unlink(missing_ok=True)
+
     def tray_registrations(self):
         """The notification area's COM objects (TRAY_CLASSES) and Windows Audio's services."""
         for clsid, (dll, threading) in TRAY_CLASSES.items():
@@ -355,6 +386,9 @@ def create(assets, dest, home, wine):
                         prefix.system / f'{name}.dll')
         wow64_files(prefix, assets, ui)
         shell_only_files(prefix, assets)
+        later_files(prefix, assets, LIBRARY_VIEW)
+        later_files(prefix, assets, PERSONALIZATION)
+        theme_files(prefix, assets)
         prefix.copy(assets / 'sxs/comctl32.dll', assets / f'sxs/{ui}/comctl32.dll.mui', c / 'w7/comctl32.dll')
         system_icons(dest, assets)
         notepad_strings(dest, assets)
@@ -376,6 +410,7 @@ def create(assets, dest, home, wine):
         prefix.run('regedit', '/s', windows_path(assets / 'registry.reg'), timeout=600)
         prefix.wow64_registry(assets)
         prefix.wait()
+        license_registry(prefix, assets)
         settings(prefix, lang)
         prefix.wait()
         appearance(prefix)
@@ -386,6 +421,7 @@ def create(assets, dest, home, wine):
         # Windows 7's shell32 (in system32 from here on) makes the libraries.
         user_profile(prefix, user)
         profile_folders(prefix, user)
+        theme_user_install(prefix)
     finally:
         prefix.stop()
     update = (dest / '.update-timestamp').read_text().strip()
@@ -579,6 +615,69 @@ def shell_only_files(prefix, assets):
     return missing
 
 
+def later_files(prefix, assets, names):
+    """DLLs added after the first prefixes (LIBRARY_VIEW, PERSONALIZATION), 64-bit and
+    32-bit, where they are missing (a library did not open; no Personalization).
+    Whether any was missing."""
+    ui = json.loads((assets / 'media.json').read_text())['ui_language']
+    missing = False
+    for folder, system in (('native', 'system32'), ('wow64', 'syswow64')):
+        for name in names:
+            target = prefix.path / f'drive_c/w7/{folder}/{name}.dll'
+            if not target.exists() and (assets / f'{system}/{name}.dll').is_file():
+                prefix.copy(assets / f'{system}/{name}.dll', assets / f'{system}/{ui}/{name}.dll.mui', target)
+                missing = True
+    return missing
+
+
+def later_registry(prefix, assets, name):
+    """The registrations of components added later (extract/win7.py's registry-NAME.reg),
+    for prefixes whose registry.reg was imported without them."""
+    for reg, regedit in ((f'registry-{name}.reg', 'regedit'),
+                         (f'registry-{name}-wow64.reg', r'C:\windows\syswow64\regedit.exe')):
+        if (assets / reg).is_file():
+            prefix.run(regedit, '/s', windows_path(assets / reg), timeout=600)
+            prefix.wait()
+
+
+def theme_files(prefix, assets):
+    """Windows 7's themes (Aero, Basic and High Contrast) and their wallpapers, where missing."""
+    windows = prefix.path / 'drive_c/windows'
+    for source, target in (('themes', 'Resources/Themes'), ('easeofaccess', 'Resources/Ease of Access Themes'),
+                           ('web/wallpaper', 'Web/Wallpaper')):
+        for path in sorted((assets / source).rglob('*')) if (assets / source).is_dir() else ():
+            dest = windows / target / path.relative_to(assets / source)
+            if path.is_file() and not dest.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, dest)
+
+
+def license_registry(prefix, assets):
+    """The edition's license policy (extract/win7.py's registry-license.reg): Personalization
+    ("This page is not available in this edition of Windows" without it) and Aero ask for theirs."""
+    if (assets / 'registry-license.reg').is_file():
+        prefix.run('regedit', '/s', windows_path(assets / 'registry-license.reg'), timeout=600)
+        prefix.wait()
+
+
+def theme_user_install(prefix):
+    """The user's themes, as Windows 7's Active Setup makes them at the first logon
+    (themeui's "/UserInstall": the current theme, Aero's). In the session's
+    environment: without Aero, themeui would choose Windows 7 Basic."""
+    if not (prefix.system / 'themeui.dll').is_file():
+        return
+    for view in ('/reg:64', '/reg:32'):
+        for name, value, kind in THEME_DEFAULTS:
+            prefix.run('reg', 'add', r'HKLM\Software\Microsoft\Windows\CurrentVersion\Themes', '/v', name,
+                       '/t', kind, '/d', value, '/f', view)
+        prefix.run('reg', 'add', r'HKLM\Software\Microsoft\Windows\CurrentVersion\Themes\VisualStyleDirs', '/v',
+                   '1', '/t', 'REG_EXPAND_SZ', '/d', r'%ResourceDir%\Themes', '/f', view)
+    env = dict(prefix.env, WIN4WINE_EXTERNAL_SHELL='1', WIN4WINE_SHELL='win7', WIN4WINE_AERO='1')
+    prefix.run('regsvr32', '/s', '/n', '/i:/UserInstall', r'C:\windows\system32\themeui.dll', env=env,
+               check=False)
+    prefix.wait()
+
+
 def effects(prefix):
     """Windows 7's visual effects, UserPreferencesMask read on the reference machine: among
     others, access keys underlined only while the keyboard is used, hot tracking and shadows."""
@@ -695,6 +794,21 @@ def stage(dest, wine=None):
                 quick_launch(prefix, Path(config['assets']), pwd.getpwuid(os.getuid()).pw_name)
             finally:
                 prefix.stop()
+        if later_files(prefix, Path(config['assets']), LIBRARY_VIEW):
+            try:
+                later_registry(prefix, Path(config['assets']), 'search')
+            finally:
+                prefix.stop()
+        theme_files(prefix, Path(config['assets']))
+        if later_files(prefix, Path(config['assets']), PERSONALIZATION):
+            # Prefixes made before Personalization (in system32 for the user's setup)
+            prefix.place_files()
+            try:
+                later_registry(prefix, Path(config['assets']), 'personalization')
+                license_registry(prefix, Path(config['assets']))
+                theme_user_install(prefix)
+            finally:
+                prefix.stop()
         if shell_only_files(prefix, Path(config['assets'])):
             # Wine's shell, which the session fell back to, cleared the
             # profile folders' attributes: their localized names were lost.
@@ -718,6 +832,8 @@ def stage(dest, wine=None):
             wow64_files(prefix, assets, json.loads((assets / 'media.json').read_text())['ui_language'])
             prefix.overrides()
         prefix.registrations()
+        if config.get('assets'):
+            prefix.proxy_registrations(Path(config['assets']))
         if applied and applied[0].isdigit() and int(applied[0]) < 9:
             # Prefixes made before Wine kept the style's padded border and caption widths
             appearance(prefix)

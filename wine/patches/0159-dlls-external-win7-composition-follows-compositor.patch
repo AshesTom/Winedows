@@ -1,0 +1,139 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] dlls: Windows 7 Basic while the session's compositor is stopped
+
+Purpose: switch to Windows 7 Basic when the session's compositor (w7-dwm)
+stops, and back to Aero when it runs again, as Windows 7 does when its DWM
+stops and its DWM service restarts it.
+
+Windows behavior: without the DWM, DwmIsCompositionEnabled is FALSE, the
+windows get WM_DWMCOMPOSITIONCHANGED and Windows 7 Basic frames; when the
+DWM runs again they go back to Aero.
+
+Wine before: Aero was decided once per process from WIN4WINE_AERO; a
+compositor that stopped left the glass windows black.
+
+Change: dwmapi (DwmIsCompositionEnabled), uxtheme (Aero frames) and win32u
+(the padded border of Aero's fixed dialogs) also read
+HKCU\Software\Win4Wine Composition (0: stopped), again after a quarter of a
+second at most. The session's supervisor runs windows7/composition.c, which
+sets it, removes the windows' glass properties when it turns composition
+off and sends them WM_DWMCOMPOSITIONCHANGED and a frame change.
+
+Evidence: headless Windows 7 session: w7-dwm killed, the folder window and
+the taskbar turned Windows 7 Basic, then Aero again once it was restarted.
+
+Scope: WIN4WINE_SHELL=win7 with WIN4WINE_AERO=1.
+---
+ dlls/dwmapi/dwmapi_main.c |   20 +++++++++++++++++++-
+ dlls/uxtheme/window.c     |   15 ++++++++++++++-
+ dlls/win32u/defwnd.c      |   25 ++++++++++++++++++++++++-
+ 3 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/dwmapi/dwmapi_main.c b/dlls/dwmapi/dwmapi_main.c
+--- a/dlls/dwmapi/dwmapi_main.c
++++ b/dlls/dwmapi/dwmapi_main.c
+@@ -55,11 +55,29 @@
+     return shell;
+ }
+ 
++/* win4wine: whether the session's compositor runs. It sets
++ * HKCU\Software\Win4Wine Composition to 0 when it stops (Windows 7 Basic,
++ * as when Windows 7's DWM stops) and back to 1 when it runs again; read
++ * again after a quarter of a second at most. */
++static BOOL composition_running(void)
++{
++    static DWORD checked;
++    static BOOL running = TRUE;
++    DWORD now = GetTickCount() | 1, value = 1, size = sizeof(value);
++
++    if (checked && now - checked < 250) return running;
++    checked = now;
++    running = RegGetValueW( HKEY_CURRENT_USER, L"Software\\Win4Wine", L"Composition", RRF_RT_REG_DWORD, NULL,
++                            &value, &size ) || value;
++    return running;
++}
++
+ static BOOL aero_session(void)
+ {
+     WCHAR aero[2];
+ 
+-    return GetEnvironmentVariableW( L"WIN4WINE_AERO", aero, ARRAY_SIZE(aero) ) == 1 && aero[0] == '1';
++    return GetEnvironmentVariableW( L"WIN4WINE_AERO", aero, ARRAY_SIZE(aero) ) == 1 && aero[0] == '1' &&
++           composition_running();
+ }
+ 
+ static void set_glass(HWND hwnd, BOOL glass);
+diff --git a/dlls/uxtheme/window.c b/dlls/uxtheme/window.c
+--- a/dlls/uxtheme/window.c
++++ b/dlls/uxtheme/window.c
+@@ -556,6 +556,9 @@
+ static BOOL aero_frames(void)
+ {
+     static int aero = -1;
++    static DWORD checked;
++    static BOOL running = TRUE;
++    DWORD now, value = 1, size = sizeof(value);
+ 
+     if (aero < 0)
+     {
+@@ -563,7 +566,17 @@
+         aero = win4wine_shell() == WIN4WINE_SHELL_WIN7 &&
+                GetEnvironmentVariableW(L"WIN4WINE_AERO", value, ARRAY_SIZE(value)) == 1 && value[0] == '1';
+     }
+-    return aero;
++    if (!aero) return FALSE;
++    /* Windows 7 Basic while the session's compositor is stopped (dwmapi's
++     * composition_running) */
++    now = GetTickCount() | 1;
++    if (!checked || now - checked >= 250)
++    {
++        checked = now;
++        running = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Win4Wine", L"Composition", RRF_RT_REG_DWORD, NULL,
++                               &value, &size) || value;
++    }
++    return running;
+ }
+ 
+ /* Fixed Aero dialogs reserve the padded border just like their nonclient
+diff --git a/dlls/win32u/defwnd.c b/dlls/win32u/defwnd.c
+--- a/dlls/win32u/defwnd.c
++++ b/dlls/win32u/defwnd.c
+@@ -251,6 +251,29 @@
+     return retval;
+ }
+ 
++/* win4wine: whether the session's compositor runs (HKCU\Software\Win4Wine
++ * Composition, as dwmapi reads it), read again after a quarter of a second */
++static BOOL composition_running(void)
++{
++    static ULONG checked;
++    static BOOL running = TRUE;
++    char buffer[offsetof(KEY_VALUE_PARTIAL_INFORMATION, Data[sizeof(DWORD)])];
++    KEY_VALUE_PARTIAL_INFORMATION *info = (void *)buffer;
++    ULONG now = NtGetTickCount() | 1;
++    HKEY key;
++
++    if (checked && now - checked < 250) return running;
++    checked = now;
++    running = TRUE;
++    if ((key = reg_open_hkcu_key( "Software\\Win4Wine" )))
++    {
++        if (query_reg_ascii_value( key, "Composition", info, sizeof(buffer) ) && info->Type == REG_DWORD)
++            running = *(DWORD *)info->Data != 0;
++        NtClose( key );
++    }
++    return running;
++}
++
+ /* Aero's fixed top-level dialogs have a padded glass border too. Reserve
+  * it in client geometry, rather than painting a frame over their controls. */
+ static BOOL aero_dialog_frame(DWORD style, DWORD ex_style)
+@@ -258,7 +281,7 @@
+     const char *aero = getenv("WIN4WINE_AERO");
+     return win4wine_shell() == WIN4WINE_SHELL_WIN7 && aero && !strcmp(aero, "1") &&
+            (style & WS_CAPTION) == WS_CAPTION && !(style & (WS_THICKFRAME | WS_CHILD)) &&
+-           !(ex_style & WS_EX_TOOLWINDOW);
++           !(ex_style & WS_EX_TOOLWINDOW) && composition_running();
+ }
+ 
+ /* see AdjustWindowRectExForDpi */

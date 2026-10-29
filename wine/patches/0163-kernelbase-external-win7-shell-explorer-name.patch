@@ -1,0 +1,67 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] kernelbase: Windows 7's shell32 sees the shell as explorer.exe
+
+Purpose: fill the Start menu's list of programs used most (its left column
+was empty, except for pinned programs).
+
+Windows behavior: Windows 7's shell32 keeps the Start menu's cache of
+programs (StartPage2's ProgramsCache, from which the list of the programs
+used most is made with UserAssist) only in a process whose file is
+EXPLORER.EXE (GetModuleFileNameW, then a comparison of the name).
+
+Wine before: the Windows 7 shell runs as w7-explorer.exe (patch 0125 and
+the prefix keep its DLLs apart by that name), so the cache was never filled
+and no program used appeared, however often launched.
+
+Change: in the Windows 7 shell session, GetModuleFileNameW(NULL) called from
+shell32 in w7-explorer.exe returns the same path with the name
+explorer.exe. Other callers, and other modules, still get w7-explorer.exe.
+
+Evidence: headless Windows 7 session: after launching KCalc and Gwenview from
+All Programs, the Start menu lists them below the pinned programs (before:
+nothing, also after a restart of the session).
+
+Scope: the external shell, WIN4WINE_SHELL=win7, the process w7-explorer.exe.
+---
+ dlls/kernelbase/loader.c |   22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/dlls/kernelbase/loader.c b/dlls/kernelbase/loader.c
+--- a/dlls/kernelbase/loader.c
++++ b/dlls/kernelbase/loader.c
+@@ -292,6 +292,26 @@
+ }
+ 
+ 
++/* win4wine: Windows 7's shell32 keeps the Start menu's cache of programs
++ * (its list of the programs used most) only in EXPLORER.EXE, and the Windows 7
++ * shell runs as w7-explorer.exe. Asked by shell32, the shell's own file name
++ * is explorer.exe, in the same folder. */
++static void win7_shell_file_name( LPWSTR filename, ULONG *len, void *caller )
++{
++    static const WCHAR shell[] = L"\\w7-explorer.exe";
++    const ULONG shell_len = ARRAY_SIZE(shell) - 1, alias_len = ARRAY_SIZE(L"\\explorer.exe") - 1;
++    HMODULE shell32;
++    void *base;
++
++    if (*len < shell_len || wcsnicmp( filename + *len - shell_len, shell, shell_len )) return;
++    if (win4wine_shell() != WIN4WINE_SHELL_WIN7) return;
++    if (!(shell32 = GetModuleHandleW( L"shell32.dll" )) || !RtlPcToFileHeader( caller, &base ) ||
++        base != (void *)shell32)
++        return;
++    memcpy( filename + *len - shell_len, L"\\explorer.exe", (alias_len + 1) * sizeof(WCHAR) );
++    *len -= shell_len - alias_len;
++}
++
+ /***********************************************************************
+  *	GetModuleFileNameW   (kernelbase.@)
+  */
+@@ -314,6 +334,8 @@
+     name.MaximumLength = min( size, UNICODE_STRING_MAX_CHARS ) * sizeof(WCHAR);
+     status = LdrGetDllFullName( module, &name );
+     if (!status || status == STATUS_BUFFER_TOO_SMALL) len = name.Length / sizeof(WCHAR);
++    if (!module && !status && win4wine_external_shell())
++        win7_shell_file_name( filename, &len, __builtin_return_address(0) );
+     SetLastError( RtlNtStatusToDosError( status ));
+ done:
+     TRACE( "%s\n", debugstr_wn(filename, len) );

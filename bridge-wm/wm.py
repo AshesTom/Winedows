@@ -8,11 +8,15 @@ from pathlib import Path
 import select
 import signal
 import struct
+import time
 from Xlib import X, XK, Xatom, Xutil, display, error, protocol
 from Xlib.ext import composite
 from icons import payload as icon_payload
 
 IN_CLOSE_WRITE, IN_MOVED_TO = 0x8, 0x80
+# How long a new Linux window waits for its frame (the proxy's window) before
+# it is shown without one: the proxy may be busy or not running.
+FRAME_WAIT = 1.5
 # Keys besides letters, digits and F1-F24 that XP's hotkeys use with the Windows key.
 VIRTUAL_KEYS = {XK.XK_Tab: 0x09, XK.XK_Pause: 0x13, XK.XK_Break: 0x13, XK.XK_space: 0x20,
                 XK.XK_Escape: 0x1b, XK.XK_Return: 0x0d,
@@ -227,11 +231,32 @@ class Manager:
             if (x, y, width, height) != client['geometry'][:4]:
                 self.configure(client, x=x, y=y, width=width, height=height)
         self.setprop(w, 'WM_STATE', self.atom('WM_STATE'), [1, 0])
-        w.map()
+        if client.get('waited'):
+            return
+        if (client['kind'] == 'normal' and not client['hwnd'] and not client['owner'] and not client['framed']
+                and not client.get('waited_done') and self.bridge_alive()):
+            # A Linux window that gets a frame is shown with it, as Windows
+            # shows a window with its frame: sync_frames maps the frame, then
+            # the window (it appeared alone, its frame a moment later).
+            client['waited'] = time.monotonic() + FRAME_WAIT
+            return
+        self.show(client)
+
+    def show(self, client):
+        client.pop('waited', None)
+        client['waited_done'] = True
+        client['w'].map()
         if client['kind'] in ('normal', 'popup'):
-            self.focus(w)
+            self.focus(client['w'])
         self.restack()
         self.workarea()
+
+    def show_waiting(self, now=None):
+        """The new Linux windows whose frame has not come in time (FRAME_WAIT)."""
+        now = time.monotonic() if now is None else now
+        for c in list(self.clients.values()):
+            if c.get('waited') and c['waited'] <= now:
+                self.show(c)
 
     def update_redirect(self, c):
         # Frames only while they move (frame_moves)
@@ -767,6 +792,8 @@ class Manager:
                     c['w'].unmap()
                 else:
                     c['w'].map()
+                    if native.get('waited') and native['framed']:
+                        self.show(native)
             else:
                 c['w'].unmap()
         if frames != self.frames:
@@ -1136,7 +1163,12 @@ class Manager:
             self.d.flush()
             if self.d.pending_events():
                 continue  # Replies to this pass queued more events.
-            ready = select.select([self.d.fileno(), changes.fd, wake_read], [], [])[0]
+            waits = [c['waited'] for c in self.clients.values() if c.get('waited')]
+            timeout = max(0, min(waits) - time.monotonic()) if waits else None
+            ready = select.select([self.d.fileno(), changes.fd, wake_read], [], [], timeout)[0]
+            if waits and min(waits) <= time.monotonic():
+                self.show_waiting()
+                dirty = 2
             if wake_read in ready:
                 while True:
                     try:

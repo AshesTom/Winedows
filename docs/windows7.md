@@ -29,6 +29,9 @@ scripts/setup.sh --media /path/to/Windows7SP1x64.iso
 | `imageres`、`sud`、`DeviceCenter` | 文字列とアイコンだけを読む DLL（override なし） |
 | `Cursors\aero_*.cur`、`aero_*.ani`、`user32.dll` | Windows 7 の Aero のカーソル（X のカーソルのテーマ `win4wine-win7` にします。I ビームと十字は user32.dll のもの） |
 | `Branding\Basebrd\basebrd.dll` | ログオン画面のエディションの名前 |
+| `SearchFolder`、`StructuredQuery` | ライブラリの中身（Windows 7 の検索フォルダーとその問い合わせの解析。override なし） |
+| `themecpl`、`themeui`、`Resources\Themes\*.theme`、`Ease of Access Themes`、`Web\Wallpaper` | 個人設定（「ウィンドウの色」の Aero の色、テーマ、デスクトップの背景）。override なし |
+| `config\SYSTEM`（データ） | エディションのライセンスの値（`ProductPolicy`）だけを読み、`registry-license.reg` にする（取り出したファイルには残しません） |
 | 上の DLL と `imageres` の 32bit 版（`SysWOW64`） | 32bit のプログラムのファイルのダイアログ、アイコンと名前 |
 | Common Controls 6（amd64 と x86） | Windows 7 の DLL だけが使う comctl32。`C:\w7\comctl32.dll`（32bit は `C:\w7\wow64\comctl32.dll`） |
 | user32.dll（データ） | システム アイコンだけを読む。`C:\w7\res\user32-w7.dll`（Wine の 0132） |
@@ -171,6 +174,14 @@ session.json（`~/.config/win4wine/win7-session.json`）の `"shell": "win7"` �
   （prefix の `user-profile.exe` が Links フォルダーに作るリンクと日本語の名前）、ライブラリごとのアイコン（Wine の 0100）。
   既定のライブラリ（ドキュメント・ピクチャ・ビデオ・ミュージック）も `user-profile.exe` が Windows 7 の shell32 に作らせます。
   ダウンロードが Linux のフォルダーへのリンクのときは、そこに desktop.ini を置かないため、アイコンは普通のフォルダーです。
+- ドライブ・フォルダーのダブルクリックとライブラリは実機と同じく開きます。フォルダーを開く動詞はワーカーのスレッドから窓の
+  スレッドの IShellBrowser を呼ぶので、Windows 7 のインターフェースの proxy（`w7actxprxy.dll`）が要ります: Wine の更新（`wineboot -u`）が
+  Wine の actxprxy（項目 ID のリストを渡せない）に戻した登録を、`win7.py stage` が Windows 7 の部品の登録どおりに戻します（両方の view）。
+  そのスタブの NdrStubCall3 は Wine の 0161 です。ライブラリの中身は Windows 7 の検索フォルダー（`SearchFolder.dll`、
+  `StructuredQuery.dll`。EXTRACT_VERSION 8）が、ライブラリのフォルダーを索引なしで数えます。
+- スタートメニューの左の列: ピン留めしたプログラムと、よく使うプログラム（UserAssist の記録から）が並びます。Windows 7 の shell32 は
+  その元のキャッシュを EXPLORER.EXE のプロセスでだけ作るので、シェル（w7-explorer.exe）の shell32 には自分の名前を explorer.exe と
+  答えます（Wine の 0163）。
 - 詳細ペインなど、アイコンを元の大きさ以外で出すところは Windows 7 と同じく面積平均で縮めます（Wine の 0110）。
 - リスト ビュー（Explorer テーマ）とメニュー バーは、実機と同じくマウスの下の項目を光らせます。無効な窓のメニュー バーの文字は
   灰色です（Wine の 0131、0117）。
@@ -214,7 +225,9 @@ Windows 7 のシェルのために足した Wine のパッチは 0094〜0136 で
 - ログオン画面（`--greeter`）の「コンピューターの簡単操作」のボタンは何もしません。
   左上の入力言語のボタンはありません。
 - 確かめたのは日本語版の Windows 7 Professional SP1（x64）です。英語版は、取り出したファイルの ja-JP の MUI を、Microsoft の英語の言語パック（KB2483139）の en-US のものに入れ替えて確かめました（ログオン画面、「ようこそ」「ログオフしています」、スタートメニュー、フォルダーウィンドウ、ファイルのダイアログ。X11 と Wayland）。字体は Segoe UI、ロケールは `en_US.UTF-8` です。英語版のメディアそのものはまだ試していません。
-- ネットワーク、ヘルプとサポート、コントロール パネルの中身は、Wine にその部品が無いので使えません。
+- ネットワーク、ヘルプとサポートは、Wine にその部品が無いので使えません。
+- コントロール パネルは実機と同じく、カテゴリー（「コンピューターの設定を調整します」）と「表示方法」、「すべてのコントロール パネル項目」（大きいアイコン・小さいアイコン）を出します。ページは DirectUI で、shell32 のビットマップ（ウォーターマーク）を伸ばしてもアルファが残ること（Wine の 0164）、32bit の項目を 32bit の dllhost で数えること（Wine の 0162）が要ります。項目は Wine にある部品に限られます（「プログラムの追加と削除」など Wine のアプレットは開きます。各カテゴリーのページは確かめていません）。
+- 個人設定（デスクトップの右クリックの「個人設定」、コントロール パネルの「デザインとカスタマイズ」）は実機と同じページで、「ウィンドウの色」で Aero の色（16 色、透明、色の濃さ、カラー ミキサー）を変えると、窓の枠・タスクバー・スタートメニューがすぐその色になり、「変更の保存」で `HKCU\Software\Microsoft\Windows\DWM` に残ります（Wine の 0165）。ページを出すには、エディションのライセンスの値（`Personalization-Enabled` など。Wine はそれを `HKLM\Software\Wine\LicenseInformation` から読みます）、themeui の利用者ごとの準備（実機ではアクティブ セットアップが最初のログオンで動かす `regsvr32 /n /i:/UserInstall themeui.dll`）と、Windows 7 の SOFTWARE のテーマの既定（`InstallTheme` など）が要り、prefix が入れます。テーマの一覧は今のテーマ（Windows 7）だけで、ほかのテーマ（建築・キャラクター・風景・自然・シーン、ベーシックとハイコントラスト）はファイルはあっても一覧に出ません。
 - スタートメニューの「ロック」「スリープ」「休止状態」は何もしません。
 - Wine は利用者を管理者として動かすので、管理者かどうかを題名に出すアプリ（Notepad++ の「[Administrator]」など）はそう表示します
   （Windows Vista 以降として動く prefix の Wine で同じです。Windows 7 の DLL によるものではありません）。

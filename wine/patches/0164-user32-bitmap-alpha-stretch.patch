@@ -1,0 +1,48 @@
+From: AshesTom <258768419+AshesTom@users.noreply.github.com>
+Subject: [PATCH] user32: LoadImage keeps the alpha channel of a bitmap it stretches
+
+Purpose: let Windows 7's Control Panel show its pages (it stayed blank).
+
+Windows behavior: Windows 7's Control Panel is a DirectUI page (its folder
+gives the frame an IFrameLayoutDefinition of type 19). Its markup asks for
+graphic(634,2,...): shell32's bitmap 634, 585x60 pixels at 32 bpp with an
+alpha channel, loaded as a DIB section at 586x60 (586rp); DirectUI takes it
+as an alpha graphic.
+
+Wine before: LoadImage stretched every bitmap with HALFTONE, whose 32 bpp
+interpolation writes no alpha: the stretched watermark had alpha 0
+everywhere, DirectUI failed with "Unable to load graphics ... (80030002)" on
+the CategoryPanelStyle style sheet, and the whole page (category view and
+All Control Panel Items) was not created.
+
+Change: a bitmap with an alpha channel loaded with LR_CREATEDIBSECTION is
+stretched with whole pixels (COLORONCOLOR), so its alpha is kept; other
+bitmaps keep HALFTONE.
+
+Evidence: loading shell32's bitmap 634 at 586x60 gave 0 pixels with alpha,
+now 30505 (30445 at its own size). Headless Windows 7 session: Control
+Panel shows its categories, "View by" and All Control Panel Items, and an
+item opens.
+
+Scope: every program; only 32-bpp bitmaps with alpha, loaded as DIB
+sections at another size.
+---
+ dlls/user32/cursoricon.c |    6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/user32/cursoricon.c b/dlls/user32/cursoricon.c
+--- a/dlls/user32/cursoricon.c
++++ b/dlls/user32/cursoricon.c
+@@ -2168,7 +2168,11 @@
+     }
+ 
+     orig_bm = SelectObject(screen_mem_dc, hbitmap);
+-    if (info->bmiHeader.biBitCount > 1)
++    /* HALFTONE writes no alpha: a DIB section of a bitmap with an alpha
++     * channel keeps it with whole pixels (DirectUI rejects the graphic of
++     * Windows 7's Control Panel without it, loaded at its own width + 1). */
++    if (info->bmiHeader.biBitCount > 1 &&
++        !((loadflags & LR_CREATEDIBSECTION) && bmi_has_alpha( fix_info, bits )))
+         SetStretchBltMode(screen_mem_dc, HALFTONE);
+     StretchDIBits(screen_mem_dc, 0, 0, new_width, new_height, 0, 0, width, height, bits, fix_info, DIB_RGB_COLORS, SRCCOPY);
+     SelectObject(screen_mem_dc, orig_bm);
