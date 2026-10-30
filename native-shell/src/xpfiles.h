@@ -28,6 +28,8 @@ QString string(const w4w::PeResources &pe, int id);
 QImage bitmap(const w4w::PeResources &pe, int id);
 // The image of icon group GROUP closest to SIZE at the most colours; null if there is none.
 QImage icon(const w4w::PeResources &pe, int group, int size);
+// The same for a group by its name, as a number or as some files name them (IDI_APPICON).
+QImage icon(const w4w::PeResources &pe, const QString &group, int size);
 std::optional<w4w::PeResources> resources(const QString &path);
 
 // A "Tahoma, 8, Bold" of a style, its size in points at DPI, hinted as Windows

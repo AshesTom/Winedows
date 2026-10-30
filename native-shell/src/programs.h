@@ -33,6 +33,8 @@ std::optional<Program> defaultBrowser();
 std::optional<Program> defaultMail();
 // Opens a path or URL with its program.
 void open(const QString &target);
+// XP's Command Prompt in FOLDER (session/xp_cmd.py, which needs xterm), else the terminal there is.
+void openCommandPrompt(const QString &folder);
 // The icon theme for programs' icons: the one chosen in linux-look.conf, the
 // Plasma user's, or a common one that is installed.
 void useIconTheme();

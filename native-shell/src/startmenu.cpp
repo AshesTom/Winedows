@@ -615,13 +615,16 @@ QList<MenuEntry> StartPanel::allPrograms() const
     ShellTheme *theme = ShellTheme::instance();
     QList<MenuEntry> out;
     const QIcon folderIcon(QPixmap::fromImage(theme->shellIcon(ICON_PROGRAMS, theme->scaled(CASCADE_ICON))));
-    const auto folders = programs::folders();
+    auto folders = programs::folders();
+    // XP's own in Accessories, which it makes if Linux's programs did not
+    folders[QStringLiteral("Accessories")];
     for (auto it = folders.cbegin(); it != folders.cend(); ++it) {
         MenuEntry folder;
         folder.text = it.key();
         folder.icon = folderIcon;
         const QList<programs::Program> items = it.value();
-        folder.children = [items] {
+        const bool accessories = it.key() == QLatin1String("Accessories");
+        folder.children = [items, accessories] {
             QList<MenuEntry> entries;
             for (const programs::Program &program : items) {
                 MenuEntry entry;
@@ -629,6 +632,16 @@ QList<MenuEntry> StartPanel::allPrograms() const
                 entry.icon = programs::iconOf(program);
                 entry.action = [program] { programs::launch(program); };
                 entries.append(entry);
+            }
+            if (accessories) {
+                MenuEntry prompt;
+                prompt.text = QObject::tr("Command Prompt");
+                if (const auto cmd = xpfiles::resources(xpfiles::find(QStringLiteral("cmd.exe"))))
+                    // Its one group, by the name cmd.exe gives it
+                    prompt.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*cmd, cmd->names(QStringLiteral("14")).value(0), ShellTheme::instance()->scaled(CASCADE_ICON))));
+                prompt.action = [] { programs::openCommandPrompt(QDir::homePath()); };
+                entries.append(prompt);
+                std::sort(entries.begin(), entries.end(), [](const MenuEntry &a, const MenuEntry &b) { return a.text.compare(b.text, Qt::CaseInsensitive) < 0; });
             }
             return entries;
         };

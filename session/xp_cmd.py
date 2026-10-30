@@ -13,7 +13,7 @@ of the Linux system.
   --title TITLE           the window's title (default: the shortcut's name)
   --icon PROGRAM          whose icon the window shows (default: cmd.exe)
   --run COMMAND           run COMMAND with bash instead of the prompt
-  --dir FOLDER            start in FOLDER, named the XP way (C:\\windows, H:\\Downloads)
+  --dir FOLDER            start in FOLDER, named the XP way (C:\\windows, H:\\Downloads) or by its Linux path
 """
 import argparse
 import json
@@ -112,6 +112,9 @@ def prepare(prefix, program='cmd'):
         assets = Path(json.loads((prefix / 'xp-shell.json').read_text())['assets'])
     except (OSError, ValueError, KeyError, TypeError):
         assets = ROOT / '.local/assets'
+        # Without Wine: what native-shell/extract.py took from the media
+        if not (assets / 'fonts/vgaoem.fon').is_file():
+            assets = ROOT / '.local/native-assets'
     fonts, bdf = CACHE / 'fonts.conf', CACHE / 'fonts/xp-terminal.bdf'
     if (assets / 'fonts/vgaoem.fon').is_file() and not bdf.is_file():
         bdf.parent.mkdir(exist_ok=True)
@@ -132,7 +135,8 @@ def prepare(prefix, program='cmd'):
 ''')
     icon = CACHE / f'{program}.xpm'
     if not icon.is_file():
-        for exe in (prefix / f'drive_c/windows/syswow64/{program}.exe', assets / f'apps/system32/{program}.exe'):
+        for exe in (prefix / f'drive_c/windows/syswow64/{program}.exe', assets / f'apps/system32/{program}.exe',
+                    assets / f'system32/{program}.exe'):
             if exe.is_file() and shutil.which('magick'):
                 try:
                     icon_file(exe, CACHE / f'{program}.ico')
@@ -149,6 +153,9 @@ def linux_folder(prefix, folder):
     drives (dosdevices); None when it is not a folder there. A drive comes
     as "C:\\" in quotes, whose last backslash keeps the quote."""
     folder = folder.rstrip('"').replace('\\', '/')
+    # The native shell, which has no drives, gives the Linux path.
+    if folder.startswith('/'):
+        return Path(folder).resolve() if Path(folder).is_dir() else None
     if len(folder) < 2 or folder[1] != ':':
         return None
     path = (prefix / 'dosdevices' / folder[:2].lower()) / folder[2:].lstrip('/')

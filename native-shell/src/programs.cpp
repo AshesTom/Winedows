@@ -4,6 +4,7 @@
 #include "filebrowser.h"
 #include "session.h"
 
+#include <QCoreApplication>
 #include <QXmlStreamReader>
 #include <QDir>
 #include <QFile>
@@ -264,6 +265,21 @@ void useIconTheme()
                 QIcon::setThemeName(name);
                 return;
             }
+}
+
+void openCommandPrompt(const QString &folder)
+{
+    // .local/native-shell/bin/xp-native-shell
+    const QString script = QDir::cleanPath(QCoreApplication::applicationDirPath() + QStringLiteral("/../../../session/xp_cmd.py"));
+    if (!QStandardPaths::findExecutable(QStringLiteral("xterm")).isEmpty() && QFileInfo::exists(script)) {
+        QProcess::startDetached(QStringLiteral("python3"), {script, QStringLiteral("--dir"), folder}, folder);
+        return;
+    }
+    for (const char *terminal : {"konsole", "gnome-terminal", "xfce4-terminal", "lxterminal", "mate-terminal", "alacritty", "kitty", "foot"})
+        if (const QString found = QStandardPaths::findExecutable(QLatin1String(terminal)); !found.isEmpty()) {
+            QProcess::startDetached(found, {}, folder);
+            return;
+        }
 }
 
 void open(const QString &target)

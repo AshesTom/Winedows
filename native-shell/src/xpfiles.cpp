@@ -90,9 +90,14 @@ QImage bitmap(const w4w::PeResources &pe, int id)
 
 QImage icon(const w4w::PeResources &pe, int group, int size)
 {
+    return icon(pe, QString::number(group), size);
+}
+
+QImage icon(const w4w::PeResources &pe, const QString &group, int size)
+{
     // GRPICONDIR: 6 bytes, then 14 for each image; a RT_ICON is what an .ico
     // file holds, only its directory says otherwise: its offset for the ID.
-    const QByteArray directory = pe.find(QStringLiteral("14"), QString::number(group));
+    const QByteArray directory = pe.find(QStringLiteral("14"), group);
     if (directory.size() < 6)
         return {};
     const int count = qFromLittleEndian<quint16>(directory.constData() + 4);

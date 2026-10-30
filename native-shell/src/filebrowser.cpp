@@ -346,7 +346,34 @@ public:
 // How a view draws an item: XP's Tiles and Thumbnails; My Computer's group headers
 class ItemDelegate : public QStyledItemDelegate
 {
-    static constexpr int ICONS_TOP = 8;
+    static constexpr int ICONS_TOP = 8, ICONS_SIDE = 32, ICONS_GAP = 4, ICONS_TEXT_WIDTH = 71, ICONS_LINES = 2;
+
+    // XP's Icons: in a cell of 75 pixels the icon, 8 from the top, then the name, on two lines
+    // unless it is selected. Selected, the icon is tinted and the name stands on the highlight,
+    // only as wide as its words; grey when the window does not have the keyboard.
+    void paintIcon(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
+    {
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool active = option.state & QStyle::State_Active;
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        const QRect place(option.rect.x() + (option.rect.width() - ICONS_SIDE) / 2, option.rect.y() + ICONS_TOP, ICONS_SIDE, ICONS_SIDE);
+        icon.paint(painter, place, Qt::AlignCenter, selected && active ? QIcon::Selected : QIcon::Normal);
+        const QString name = index.data().toString();
+        const QFontMetrics metrics(option.font);
+        const int flags = Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap | Qt::TextWrapAnywhere;
+        const int x = option.rect.x() + (option.rect.width() - ICONS_TEXT_WIDTH) / 2, y = place.bottom() + 1 + ICONS_GAP;
+        QRect words = metrics.boundingRect(QRect(x, y, ICONS_TEXT_WIDTH, 1000), flags, name);
+        if (!selected)
+            words.setHeight(qMin(words.height(), ICONS_LINES * metrics.lineSpacing()));
+        painter->save();
+        painter->setFont(option.font);
+        if (selected)
+            painter->fillRect(words.adjusted(-2, 0, 2, 0), active ? option.palette.color(QPalette::Active, QPalette::Highlight) : option.palette.color(QPalette::Inactive, QPalette::Button));
+        painter->setPen(selected && active ? option.palette.color(QPalette::Active, QPalette::HighlightedText) : option.palette.color(QPalette::Text));
+        painter->setClipRect(words.adjusted(-2, 0, 2, 0));
+        painter->drawText(QRect(x, y, ICONS_TEXT_WIDTH, 1000), flags, name);
+        painter->restore();
+    }
 
 public:
     enum Mode { Plain, IconsMode, TilesMode, ThumbnailMode };
@@ -386,10 +413,7 @@ public:
             return;
         }
         if (m_mode == IconsMode) {
-            // In its cell of 75 pixels, its icon 8 from the top, as XP has it
-            QStyleOptionViewItem moved = option;
-            moved.rect.translate(0, ICONS_TOP);
-            QStyledItemDelegate::paint(painter, moved, index);
+            paintIcon(painter, option, index);
             return;
         }
         const bool selected = option.state & QStyle::State_Selected;
@@ -1807,6 +1831,8 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
         open->setFont(bold);
         if (selected.size() == 1 && QFileInfo(selected.first()).isDir())
             menu->addAction(tr("Open in New &Window"), this, [path = selected.first()] { auto *window = new FileBrowser(path); window->show(); });
+        if (selected.size() == 1 && QFileInfo(selected.first()).isDir())
+            menu->addAction(tr("Open Command &Prompt Here"), this, [path = selected.first()] { programs::openCommandPrompt(path); });
         menu->addSeparator();
         menu->addAction(m_cutAction);
         menu->addAction(m_copyAction);
@@ -1820,6 +1846,8 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
         menu->addAction(tr("R&efresh"), this, [this] { navigate(m_location, false); });
         menu->addSeparator();
         menu->addAction(m_pasteAction);
+        menu->addSeparator();
+        menu->addAction(tr("Open Command &Prompt Here"), this, [folder] { programs::openCommandPrompt(folder); });
         menu->addSeparator();
         QMenu *create = menu->addMenu(tr("Ne&w"));
         create->addAction(fileicons::shell(fileicons::Folder), tr("&Folder"), this, &FileBrowser::newFolder);

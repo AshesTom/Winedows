@@ -50,6 +50,8 @@ ICON_FILES = {
     # XP's Welcome, log off and Turn Off screens (greeter/welcome.py)
     'logonui.exe': 'system32', 'msgina.dll': 'system32', 'winlogon.exe': 'system32', 'msgothic.ttc': 'fonts',
     **dict.fromkeys(('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf', 'micross.ttf'), 'fonts'),
+    # XP's Command Prompt (session/xp_cmd.py): its raster font and its icon
+    'vgaoem.fon': 'fonts', 'cmd.exe': 'system32',
     # System Properties' other pages
     'netid.dll': 'cpl', 'wuaucpl.cpl': 'cpl', 'remotepg.dll': 'cpl',
     # The Search Companion: its icons and words, its steps, and its character
