@@ -93,7 +93,7 @@ int main(int argc, char **argv)
     // (For the web pages of a folder window, set before the application exists.)
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication app(argc, argv);
-    app.setApplicationName(QStringLiteral("xp-native-shell"));
+    app.setApplicationName(QStringLiteral("explorer"));
     app.setQuitOnLastWindowClosed(false);
 
     QCommandLineParser parser;
@@ -108,7 +108,7 @@ int main(int argc, char **argv)
 
     xpfiles::loadFonts();
     if (ShellTheme::lunaPath().isEmpty()) {
-        fprintf(stderr, "xp-native-shell: luna.msstyles not found. Run native-shell/extract.py on the XP ISO first.\n");
+        fprintf(stderr, "explorer: luna.msstyles not found. Run native-shell/extract.py on the XP ISO first.\n");
         return 1;
     }
     ShellTheme::ensureDefaultLook();

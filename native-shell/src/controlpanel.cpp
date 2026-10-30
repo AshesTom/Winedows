@@ -300,12 +300,11 @@ void ControlPanelCategories::paintEvent(QPaintEvent *)
     // The watermark, at the view's lower right corner
     if (!m_watermark.isNull())
         painter.drawImage(width() - m_watermark.width(), height() - m_watermark.height(), m_watermark);
-    // The separator on its left, the white line along its bottom
+    // The separator on its left
     QLinearGradient separator(0, 0, 0, height());
     separator.setColorAt(0, m_separatorTop);
     separator.setColorAt(1, m_separatorBottom);
     painter.fillRect(QRect(0, 0, 1, height()), separator);
-    painter.fillRect(QRect(0, height() - 1, width(), 1), Qt::white);
 
     if (m_category >= 0) {
         // The banner: its header gradient, the category's name, its icon over the edge

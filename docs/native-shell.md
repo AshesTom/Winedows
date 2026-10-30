@@ -14,7 +14,7 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 | Desktop icons | Recycle Bin (empty or full) in XP's lower right corner and the Desktop folder's files in XP's grid. Select, double-click, drag to place (remembered), rename, send to the trash, Arrange Icons |
 | Taskbar | Luna or Classic: a button per window (normal, hot, active in bold, flashing), minimize by clicking the active button, a window menu, its strut |
 | Start menu | XP's two columns from the style's StartPanel parts: the user's picture and name, the default browser and mail, the six recent programs (those started here, then those the desktop's recent files name, then everyday ones and the rest for a new account), a line, the places, All Programs and My Recent Documents with their cascades, Log Off and Turn Off Computer |
-| Folder windows | The menus, the toolbar from shell32's pictures, the address bar and Go, the Common Tasks pane from the shell style's art in each colour scheme, the Folders tree under the Desktop, the Search Companion, Favorites, web pages (with Qt WebEngine, otherwise in the desktop's browser), XP's warning on system folders, and Thumbnails, Tiles, Icons, List and Details |
+| Folder windows | A white line down the left edge and along the bottom, the menus, the toolbar from shell32's pictures, the address bar and Go, the Common Tasks pane from the shell style's art in each colour scheme, the Folders tree under the Desktop, the Search Companion, Favorites, web pages (with Qt WebEngine, otherwise in the desktop's browser), XP's warning on system folders, and Thumbnails, Tiles, Icons, List and Details |
 | Command Prompt | `console.cpp`, in All Programs > Accessories and as Open Command Prompt Here: 80 x 25 in XP's raster font (`vgaoem.fon`) with the console's 16 colours and XP's buffer of 300 lines, running bash with the Wine session's `session/xp-cmd.bashrc`, the root of the system as a `C:` of its own (`C:\\home\\you>`). It understands what Linux's programs send to an xterm. Drag to mark, right click to copy or paste, as XP's QuickEdit |
 | File operations | Copy, cut and paste (with the desktop's other file managers), Move To and Copy To, drag and drop, a thread with a progress window and XP's replace question, the Recycle Bin with Restore and Empty, Delete and Shift+Delete, rename, new folder, new text document, Properties with the size counted and the drive's pie |
 | Virtual folders | My Computer (with its groups and the drives' free space), the Recycle Bin, Control Panel, search results |
@@ -53,7 +53,7 @@ there. `native-shell/session.sh` is the same session for a whole X display, wher
 the computer off (`WIN4WINE_POWER=0` keeps it from doing so; `xp.sh native` sets it); with `--inside` it leaves the
 current window manager in place.
 
-`xp-native-shell --explore FOLDER` opens only a folder window and `--applet ID` only an applet (`--help` lists them).
+`explorer --explore FOLDER` opens only a folder window and `--applet ID` only an applet (`--help` lists them).
 In this session `xdg-open` brings folders to `--explore`, through `xp-explorer.desktop` and
 `~/.config/xp-shell-mimeapps.list`, which only this desktop reads.
 
@@ -68,7 +68,7 @@ It is what `shell32.dll`'s UIFILE 4 lays out and the shell style's UIFILE 2 (`bl
 
 | Element | Value in the blue style |
 |---|---|
-| The view | `rgb(99,117,214)`, a white line at the bottom, on its left a one-pixel gradient `rgb(148,187,255)` to `rgb(99,117,214)` |
+| The view | `rgb(99,117,214)`, on its left a one-pixel gradient `rgb(148,187,255)` to `rgb(99,117,214)` |
 | Watermark, in the lower right corner | Bitmap 26, the Control Panel's own picture |
 | Directive ("Pick a category") | Franklin Gothic Medium, 21 pt, `rgb(214,223,245)`, in GDI's made-up bold (drawn twice a pixel apart, each letter a pixel wider); at the top of the container's padding of 20, 30 px above a second one |
 | Links | Tahoma 8 bold, white, underlined under the pointer; 12 between items, none at the container's edge, 1 of padding, 5 before the text |

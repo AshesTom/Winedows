@@ -53,7 +53,7 @@ class Session:
             raise SystemExit('Build bridge-wm first')
         self.native_shell = None
         if config.get('native_shell'):
-            self.native_shell = ROOT / '.local/native-shell/bin/xp-native-shell'
+            self.native_shell = ROOT / '.local/native-shell/bin/explorer'
             if not self.native_shell.is_file():
                 raise SystemExit('Build native-shell first')
             os.environ['WIN4WINE_NATIVE_SHELL'] = 'prefix'

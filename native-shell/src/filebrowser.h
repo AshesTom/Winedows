@@ -104,6 +104,7 @@ private:
     void selectInTree(const QString &location);
     QMenu *buildFavoritesMenu();
     void reloadSettings();
+    void placeEdgeLines();
     bool blocked() const;
     void setSystemFolderShown(bool shown);
     void renamePending();
@@ -129,6 +130,7 @@ private:
     QWidget *m_categoryPage = nullptr;
     QScrollArea *m_categoryArea = nullptr;
     SystemFolderWarning *m_warning = nullptr;
+    QWidget *m_bottomLine = nullptr, *m_leftLine = nullptr;
     QSplitter *m_splitter = nullptr;
     TaskPane *m_pane = nullptr;
     QScrollArea *m_paneArea = nullptr;

@@ -913,8 +913,25 @@ void FileBrowser::buildPanes()
     m_splitter->addWidget(m_pages);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
-    m_splitter->setSizes({ShellTheme::instance()->scaled(210), width()});
+    // UIFILE 3's 210 includes the white line down its left edge.
+    m_splitter->setSizes({ShellTheme::instance()->scaled(210) - (ShellTheme::instance()->renderer() ? 1 : 0), width()});
     setCentralWidget(m_splitter);
+    // XP's folder windows have a white line down their left edge and along their bottom, the
+    // pane and the folder inside them.
+    const auto edgeLine = [this] {
+        auto *line = new QWidget(this);
+        line->setAttribute(Qt::WA_TransparentForMouseEvents);
+        line->setAutoFillBackground(true);
+        QPalette colour = line->palette();
+        colour.setColor(QPalette::Window, Qt::white);
+        line->setPalette(colour);
+        return line;
+    };
+    m_bottomLine = edgeLine();
+    m_leftLine = edgeLine();
+    m_splitter->installEventFilter(this);
+    connect(ShellTheme::instance(), &ShellTheme::changed, this, &FileBrowser::placeEdgeLines);
+    placeEdgeLines();
     connect(m_files, &QFileSystemModel::directoryLoaded, this, &FileBrowser::updateStatus);
 }
 
@@ -1763,8 +1780,24 @@ void FileBrowser::updatePane()
     m_pane->setGroups(groups);
 }
 
+void FileBrowser::placeEdgeLines()
+{
+    // A visual style's; Windows Classic has none.
+    const bool themed = ShellTheme::instance()->renderer();
+    m_splitter->setContentsMargins(themed ? 1 : 0, 0, 0, themed ? 1 : 0);
+    const QRect area = m_splitter->geometry();
+    m_leftLine->setGeometry(area.left(), area.top(), 1, area.height());
+    m_bottomLine->setGeometry(area.left(), area.bottom(), area.width(), 1);
+    m_leftLine->setVisible(themed);
+    m_bottomLine->setVisible(themed);
+    m_leftLine->raise();
+    m_bottomLine->raise();
+}
+
 bool FileBrowser::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_splitter && (event->type() == QEvent::Resize || event->type() == QEvent::Move))
+        placeEdgeLines();
     if (event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if (key->key() == Qt::Key_Delete) {

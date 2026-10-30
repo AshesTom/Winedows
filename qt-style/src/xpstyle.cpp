@@ -637,7 +637,9 @@ void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QP
         }
         break;
     case CE_ToolBar:
-        return;   // a rebar band: the dialog's face, no etched lines
+        // A rebar band: the style's own, no etched lines
+        draw(painter, option->rect, QStringLiteral("rebar"), {}, {}, 0);
+        return;
     case CE_MenuBarEmptyArea:
         painter->fillRect(option->rect, system(QStringLiteral("menubar"), option->palette.color(QPalette::Window)));
         return;
@@ -799,6 +801,34 @@ void XpStyle::drawComplexControl(ComplexControl control, const QStyleOptionCompl
         if (const auto *combo = qstyleoption_cast<const QStyleOptionComboBox *>(option)) {
             drawComboBox(combo, painter, widget);
             return;
+        }
+        break;
+    case CC_ToolButton:
+        // A button with its own arrow (Back, Forward): the toolbar's split button, in two parts.
+        if (const auto *tool = qstyleoption_cast<const QStyleOptionToolButton *>(option);
+            tool && (tool->features & QStyleOptionToolButton::MenuButtonPopup) && (tool->state & State_AutoRaise)) {
+            const QRect button = subControlRect(CC_ToolButton, tool, SC_ToolButton, widget);
+            const QRect arrow = subControlRect(CC_ToolButton, tool, SC_ToolButtonMenu, widget);
+            const bool enabled = tool->state & State_Enabled, hot = enabled && (tool->state & State_MouseOver);
+            const auto stateOf = [&](SubControl sc) {
+                if (!enabled)
+                    return PartState{QStringLiteral("disabled"), 4};
+                if ((tool->activeSubControls & sc) && (tool->state & State_Sunken))
+                    return PartState{QStringLiteral("pressed"), 3};
+                if (tool->state & State_On)
+                    return hot ? PartState{QStringLiteral("hotchecked"), 6} : PartState{QStringLiteral("checked"), 5};
+                return hot ? PartState{QStringLiteral("hot"), 2} : PartState{QStringLiteral("normal"), 1};
+            };
+            const PartState main = stateOf(SC_ToolButton), menu = stateOf(SC_ToolButtonMenu);
+            // At rest the button has no frame; its arrow, a glyph of the part, is always there.
+            if (main.id != 1 && main.id != 4)
+                draw(painter, button, QStringLiteral("toolbar"), QStringLiteral("splitbutton"), main.name, main.id);
+            if (draw(painter, arrow, QStringLiteral("toolbar"), QStringLiteral("splitbuttondropdown"), menu.name, menu.id)) {
+                QStyleOptionToolButton label = *tool;
+                label.rect = button;
+                drawControl(CE_ToolButtonLabel, &label, painter, widget);
+                return;
+            }
         }
         break;
     case CC_SpinBox:

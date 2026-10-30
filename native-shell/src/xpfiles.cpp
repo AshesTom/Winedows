@@ -15,7 +15,7 @@ static QStringList roots()
     QStringList out;
     if (const QString assets = qEnvironmentVariable("WIN4WINE_ASSETS"); !assets.isEmpty())
         out << assets;
-    // .local/native-shell/bin/xp-native-shell
+    // .local/native-shell/bin/explorer
     const QString local = QDir::cleanPath(QCoreApplication::applicationDirPath() + QStringLiteral("/../.."));
     out << local + QStringLiteral("/native-assets") << local + QStringLiteral("/assets");
     return out;

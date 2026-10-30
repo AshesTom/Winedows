@@ -10,7 +10,7 @@
 # Wine's proxy.exe draws them (session/supervisor.py).
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
-shell=$root/.local/native-shell/bin/xp-native-shell
+shell=$root/.local/native-shell/bin/explorer
 [[ -x $shell ]] || { echo "Build it first: $root/native-shell/build.sh" >&2; exit 1; }
 # Started from startx: no session bus yet (the tray host's StatusNotifierItem needs one).
 if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} ]] && command -v dbus-run-session >/dev/null; then

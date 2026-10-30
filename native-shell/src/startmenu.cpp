@@ -310,7 +310,7 @@ StartPanel::StartPanel(QPoint bottomLeft, std::function<void()> logOff, std::fun
     setAttribute(Qt::WA_OpaquePaintEvent);
     setMouseTracking(true);
     m_openTimer.setSingleShot(true);
-    m_openTimer.setInterval(300);
+    m_openTimer.setInterval(CASCADE_DELAY_MS);
     connect(&m_openTimer, &QTimer::timeout, this, [this] { openChildren(0); });
     m_switchTimer.setSingleShot(true);
     m_switchTimer.setInterval(CASCADE_DELAY_MS);
