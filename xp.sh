@@ -206,6 +206,7 @@ native)
     done
     # Turn Off Computer ends this window's session, never the machine.
     env -u WAYLAND_DISPLAY -u WIN4WINE_IPC -u SESSION_MANAGER -u DBUS_SESSION_BUS_ADDRESS \
+        WIN4WINE_DESKTOP_BUS="${DBUS_SESSION_BUS_ADDRESS:-}" \
         DISPLAY="$display" GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb XDG_SESSION_TYPE=x11 WIN4WINE_POWER=0 \
         "$root/native-shell/session.sh"
     ;;

@@ -23,7 +23,7 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 | Qt and GTK programs | Drawn with the current theme by `qt-style/`, from the same choices, with XP's fonts |
 | XP's icons | `session/icon_theme.py` makes the `win4wine-xp-icons` theme from the user's files the first time; it is the session's default for Qt and GTK programs too |
 | Clock | The locale's short time, the date as its tooltip; wakes once a minute |
-| Notification area | Linux tray icons from `bridge-wm/tray.py`'s files, left click, right click and their menus |
+| Notification area | Linux tray icons from `bridge-wm/tray.py`'s files, left click, right click and their menus; in a window (`xp.sh native`) also those of the desktop around it, whose programs open on that desktop. XP's volume (`pactl`: its slider and Mute) and network (`nmcli`: its status, the wireless networks) icons, with the pictures of `sndvol32.exe` and `netshell.dll` |
 | Windows key, Ctrl+Esc | Open the Start menu; Win+R and the other hotkeys do nothing yet |
 
 Not ported yet: XP's zip folders, Send To, shortcuts (`.lnk`), network places, Help (shown disabled, as is Printers
@@ -31,7 +31,7 @@ and Faxes without `system-config-printer`), the Accessibility Options applets (t
 Search Companion's sounds, its other characters and its balloon mode, Map Network Drive and Synchronize (greyed), the
 Start menu's keyboard navigation, grouping of similar taskbar buttons (they shrink to
 40 pixels, then those that do not fit are not shown), Quick Launch, the Screen Saver and Settings pages, the
-menus' drop shadows, XP's own tray icons (`xptray.exe`), the taskbar's menu. Strings that XP's files do not give
+menus' drop shadows, the taskbar's menu, a wireless picture for the network icon. Strings that XP's files do not give
 (the desktop's menus, the Linux Programs page) are in English.
 
 ## How to run it

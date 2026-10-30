@@ -103,21 +103,22 @@ def pixbuf_bytes(pixbuf, size):
 
 
 class Item:
-    def __init__(self, host, key, name, path):
+    def __init__(self, host, key, name, path, bus=None):
         self.host, self.key, self.name, self.path = host, key, name, path
+        self.bus = bus or host.bus
         self.id = host.next_id()
         self.props = {}
         self.icon = None  # last written icon bytes
         self.menu_seq = 0
-        self.watch = Gio.bus_watch_name_on_connection(host.bus, name, Gio.BusNameWatcherFlags.NONE,
+        self.watch = Gio.bus_watch_name_on_connection(self.bus, name, Gio.BusNameWatcherFlags.NONE,
                                                       None, lambda *_: host.remove(key))
-        self.subscription = host.bus.signal_subscribe(name, ITEM, None, path, None, Gio.DBusSignalFlags.NONE,
+        self.subscription = self.bus.signal_subscribe(name, ITEM, None, path, None, Gio.DBusSignalFlags.NONE,
                                                       lambda *_: self.refresh())
         self.refresh()
 
     def close(self):
         Gio.bus_unwatch_name(self.watch)
-        self.host.bus.signal_unsubscribe(self.subscription)
+        self.bus.signal_unsubscribe(self.subscription)
         for name in (f'tray-{self.id}.argb', f'menu-{self.id}.tsv'):
             try:
                 (self.host.ipc / name).unlink()
@@ -125,7 +126,7 @@ class Item:
                 pass
 
     def refresh(self):
-        self.host.bus.call(self.name, self.path, 'org.freedesktop.DBus.Properties', 'GetAll',
+        self.bus.call(self.name, self.path, 'org.freedesktop.DBus.Properties', 'GetAll',
                            GLib.Variant('(s)', (ITEM,)), GLib.VariantType('(a{sv})'),
                            Gio.DBusCallFlags.NONE, 2000, None, self.refreshed)
 
@@ -171,7 +172,7 @@ class Item:
         return pixbuf_bytes(pixbuf, size) if pixbuf else None
 
     def call(self, method, args, done=None):
-        self.host.bus.call(self.name, self.path, ITEM, method, args, None, Gio.DBusCallFlags.NONE, 2000, None,
+        self.bus.call(self.name, self.path, ITEM, method, args, None, Gio.DBusCallFlags.NONE, 2000, None,
                            done or self.host.ignore)
 
     def activate(self, x, y):
@@ -190,7 +191,7 @@ class Item:
         self.menu_seq += 1
         seq = self.menu_seq
         # AboutToShow lets the application update the entries first.
-        self.host.bus.call(self.name, menu, MENU, 'AboutToShow', GLib.Variant('(i)', (0,)), None,
+        self.bus.call(self.name, menu, MENU, 'AboutToShow', GLib.Variant('(i)', (0,)), None,
                            Gio.DBusCallFlags.NONE, 1000, None,
                            lambda bus, result: self.layout(menu, seq, bus, result))
 
@@ -235,7 +236,7 @@ class Item:
     def event(self, seq, item):
         if seq != self.menu_seq or not getattr(self, 'menu', None):
             return
-        self.host.bus.call(self.name, self.menu, MENU, 'Event',
+        self.bus.call(self.name, self.menu, MENU, 'Event',
                            GLib.Variant('(isvu)', (item, 'clicked', GLib.Variant('i', 0), int(time.time()))),
                            None, Gio.DBusCallFlags.NONE, 2000, None, self.host.ignore)
 
@@ -563,6 +564,7 @@ class Host:
     def __init__(self, ipc):
         self.ipc = ipc
         self.items = {}
+        self.desktop = None
         self.ids = 0
         self.tsv = None
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION)
@@ -581,6 +583,39 @@ class Host:
                            for p in (Path(d) / 'icons', Path(d) / 'pixmaps') if p.is_dir()]
         self.index = None
         self.xembed = None
+        # In a window of a desktop, the programs on that desktop's bus keep their icons in its
+        # tray; they are shown here too, and their menus and clicks go to them.
+        address = os.environ.get('WIN4WINE_DESKTOP_BUS')
+        if address:
+            try:
+                self.follow(Gio.DBusConnection.new_for_address_sync(
+                    address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
+                    None, None))
+            except GLib.Error as e:
+                print('no desktop bus:', e.message, file=sys.stderr)
+
+    def follow(self, bus):
+        self.desktop = bus
+        bus.signal_subscribe(WATCHER, WATCHER, 'StatusNotifierItemRegistered', '/StatusNotifierWatcher', None,
+                             Gio.DBusSignalFlags.NONE, lambda _b, _s, _p, _i, _n, params: self.add_desktop(params.unpack()[0]))
+        bus.call(WATCHER, '/StatusNotifierWatcher', 'org.freedesktop.DBus.Properties', 'Get',
+                 GLib.Variant('(ss)', (WATCHER, 'RegisteredStatusNotifierItems')), GLib.VariantType('(v)'),
+                 Gio.DBusCallFlags.NONE, 2000, None, self.followed)
+
+    def followed(self, bus, result):
+        try:
+            for service in bus.call_finish(result).unpack()[0]:
+                self.add_desktop(service)
+        except GLib.Error as e:
+            print('no tray on the desktop:', e.message, file=sys.stderr)
+
+    def add_desktop(self, service):
+        # "name/path", or a bare name
+        name, slash, path = service.partition('/')
+        key = f'desktop:{service}'
+        if key not in self.items and len(self.items) < MAX_ITEMS:
+            self.items[key] = Item(self, key, name, f'/{path}' if slash else '/StatusNotifierItem', self.desktop)
+            self.publish()
 
     def acquired(self, *_):
         self.emit('StatusNotifierHostRegistered', None)
@@ -592,6 +627,9 @@ class Host:
         self.publish()
 
     def lost(self, *_):
+        # On the bus of the desktop it follows, that desktop's watcher keeps the name.
+        if os.environ.get('WIN4WINE_DESKTOP_BUS'):
+            return
         # Another watcher (a desktop's own tray) already serves this login.
         print('another StatusNotifierWatcher owns the name; exiting', file=sys.stderr)
         self.loop.quit()

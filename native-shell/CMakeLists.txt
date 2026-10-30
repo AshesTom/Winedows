@@ -31,6 +31,7 @@ add_executable(xp-native-shell
     src/theme.cpp src/theme.h
     src/xpdialog.cpp src/xpdialog.h
     src/programs.cpp src/programs.h
+    src/systemicons.cpp src/systemicons.h
     src/taskbar.cpp src/taskbar.h
     src/tray.cpp src/tray.h
     src/windowlist.cpp src/windowlist.h

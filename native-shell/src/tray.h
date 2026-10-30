@@ -11,6 +11,7 @@
 #include <QObject>
 
 class QMenu;
+class SystemIcons;
 
 struct TrayIcon
 {
@@ -25,7 +26,7 @@ class Tray : public QObject
 public:
     // IPC may be empty: no tray host, no icons.
     Tray(const QString &ipc, int iconSize);
-    const QList<TrayIcon> &icons() const { return m_icons; }
+    const QList<TrayIcon> &icons() const { return m_shown; }
     void click(quint32 id, const char *op, QPoint at);
 
 Q_SIGNALS:
@@ -39,10 +40,12 @@ private:
     void showMenus();
     void showMenu(quint32 id, const QStringList &lines);
     void command(const QByteArray &line);
+    void showAll();
 
     QDir m_ipc;
     QFileSystemWatcher m_watcher;
-    QList<TrayIcon> m_icons;
+    QList<TrayIcon> m_icons, m_shown;
+    SystemIcons *m_system = nullptr;
     QHash<quint32, int> m_menusShown;
     QByteArray m_list;
     int m_shellKeys = 0, m_commands = 0;

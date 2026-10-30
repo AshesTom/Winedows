@@ -2,6 +2,7 @@
 #include "tray.h"
 
 #include "ipcfile.h"
+#include "systemicons.h"
 
 #include <QAction>
 #include <QCoreApplication>
@@ -19,7 +20,10 @@ static QByteArray readFile(const QString &path)
 
 Tray::Tray(const QString &ipc, int iconSize)
     : m_ipc(ipc)
+    , m_system(new SystemIcons(iconSize, this))
 {
+    connect(m_system, &SystemIcons::changed, this, &Tray::showAll);
+    showAll();
     if (ipc.isEmpty())
         return;
     QFile size(m_ipc.filePath(QStringLiteral("tray-size")));
@@ -67,6 +71,13 @@ void Tray::read()
     if (same)
         return;
     m_icons = icons;
+    showAll();
+}
+
+// The applications' icons, then XP's own next to the clock
+void Tray::showAll()
+{
+    m_shown = m_icons + m_system->icons();
     Q_EMIT changed();
 }
 
@@ -79,6 +90,8 @@ void Tray::command(const QByteArray &line)
 
 void Tray::click(quint32 id, const char *op, QPoint at)
 {
+    if (m_system->click(id, op, at))
+        return;
     m_menuPoint = at;
     command(QByteArray(op) + ' ' + QByteArray::number(id) + ' ' + QByteArray::number(at.x()) + ' ' + QByteArray::number(at.y()));
 }
