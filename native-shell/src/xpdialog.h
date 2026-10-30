@@ -63,4 +63,9 @@ private:
 // lower right, 50 x 14 dialog units each and 4 apart, 4 from the edges.
 void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &buttons);
 
+// Run's place: the lower left corner of the work area, above the Start button, frame included.
+void placeLowerLeft(QWidget *window);
+// winver's: the upper left corner of the work area, frame included.
+void placeUpperLeft(QWidget *window);
+
 } // namespace xpdialog

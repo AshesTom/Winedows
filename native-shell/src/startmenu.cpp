@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "startmenu.h"
 
+#include "applets.h"
+
 #include "xpdialog.h"
+#include <QTimer>
 #include <QSettings>
 #include <QPushButton>
 #include <QPointer>
@@ -42,6 +45,7 @@ namespace {
 // explorer.exe's and shell32.dll's strings, for the language of the user's XP
 const int EXPLORER_ALL_PROGRAMS = 8226, EXPLORER_LOG_OFF = 730, EXPLORER_TURN_OFF = 731;
 // shell32.dll's Run dialog, and how many commands its list keeps
+const int ACTIVATE_DELAY_MS = 100;
 const int DIALOG_RUN = 1003, RUN_COMMAND = 12298, RUN_SEPARATE_MEMORY = 12306, RUN_BROWSE = 12288, STRING_BROWSE_TITLE = 9015, RUN_HISTORY = 26;
 const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722;
 const int SHELL_DOCUMENTS = 9227, SHELL_RECENT = 12691, SHELL_PICTURES = 9076, SHELL_MUSIC = 9105, SHELL_COMPUTER = 9216;
@@ -112,6 +116,11 @@ void runCommand(const QString &line)
     if (words.isEmpty())
         return;
     const QString program = words.takeFirst();
+    // XP's own, which is here without a program of its own
+    if (program.compare(QLatin1String("winver"), Qt::CaseInsensitive) == 0) {
+        applets::open(QStringLiteral("winver"));
+        return;
+    }
     if (!QStandardPaths::findExecutable(program).isEmpty() || QFileInfo(program).isExecutable())
         QProcess::startDetached(program, words, QDir::homePath());
     else
@@ -155,7 +164,12 @@ void showRunDialog()
     ok->setDefault(true);
     ok->setEnabled(!combo->currentText().trimmed().isEmpty());
     QObject::connect(combo, &QComboBox::currentTextChanged, ok, [ok](const QString &text) { ok->setEnabled(!text.trimmed().isEmpty()); });
+    // Enter in the field, even with the text as it was: and only once, should the dialog see it too.
+    QObject::connect(combo->lineEdit(), &QLineEdit::returnPressed, ok, &QPushButton::click);
     QObject::connect(ok, &QPushButton::clicked, dialog, [dialog, combo] {
+        if (!dialog->isVisible() || combo->currentText().trimmed().isEmpty())
+            return;
+        dialog->hide();
         const QString line = combo->currentText().trimmed();
         QSettings write(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
         QStringList runs = write.value(QStringLiteral("runHistory")).toStringList();
@@ -172,8 +186,14 @@ void showRunDialog()
         if (!file.isEmpty())
             combo->setCurrentText(file);
     });
+    xpdialog::placeLowerLeft(dialog);
     dialog->show();
     combo->setFocus();
+    // The Windows key's grab may just be ending: ask for the keyboard once it has.
+    QTimer::singleShot(ACTIVATE_DELAY_MS, dialog, [dialog, combo] {
+        dialog->activateWindow();
+        combo->setFocus();
+    });
 }
 
 namespace {

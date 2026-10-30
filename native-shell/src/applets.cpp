@@ -218,6 +218,61 @@ void showSystem()
     sheet->show();
 }
 
+// "About Windows" (winver): shell32.dll's dialog, its banner and its line. The version line is
+// the system's that really runs here, as in System Properties.
+void showAbout()
+{
+    static QPointer<QDialog> open;
+    if (open) {
+        open->raise();
+        open->activateWindow();
+        return;
+    }
+    const auto shell = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
+    if (!shell)
+        return;
+    auto *dialog = new QDialog;
+    open = dialog;
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    const xpdialog::Page page = xpdialog::build(*shell, 14352, dialog);
+    const QString windows = QStringLiteral("Windows");
+    dialog->setWindowTitle(QString(page.caption).replace(QLatin1String("%s"), windows));
+    const auto picture = [&](int id, int y) {
+        auto *label = new QLabel(dialog);
+        const QImage image = xpfiles::bitmap(*shell, id);
+        label->setPixmap(QPixmap::fromImage(image));
+        label->setGeometry(0, y, image.width(), image.height());
+    };
+    // Banner 131, then its line 138: 256 colours, as XP's at more than 16
+    picture(131, 0);
+    picture(138, 72);
+    const auto label = [&](int id) { return qobject_cast<QLabel *>(page.controls.value(id)); };
+    if (QLabel *icon = label(12297)) {
+        if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe"))))
+            icon->setPixmap(QPixmap::fromImage(xpfiles::icon(*explorer, 100, 32)));
+    }
+    const auto fill = [&](int id, const QString &value) {
+        if (QLabel *line = label(id))
+            line->setText(value);
+    };
+    if (QLabel *line = label(13568))
+        line->setText(line->text().replace(QLatin1String("%s"), windows));
+    fill(13579, QObject::tr("%1, Linux %2").arg(osName(), QSysInfo::kernelVersion()));
+    if (QLabel *line = label(13578))
+        line->setText(line->text().replace(QLatin1String("%s"), QStringLiteral("1985-2001")));
+    fill(13575, qEnvironmentVariable("USER"));
+    fill(13576, QSysInfo::machineHostName());
+    // XP's words for it: the whole number of KB
+    fill(13571, QObject::tr("%1 KB").arg(QLocale().toString(memoryBytes() / 1024)));
+    if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(1))) {
+        ok->setDefault(true);
+        QObject::connect(ok, &QPushButton::clicked, dialog, &QDialog::accept);
+    }
+    xpdialog::placeUpperLeft(dialog);
+    dialog->show();
+    dialog->activateWindow();
+}
+
 // XP's clock in the Date and Time page: an analogue face that follows the time edit
 class ClockFace : public QWidget
 {
@@ -696,6 +751,10 @@ void open(const QString &id)
         return;
     }
     const QWidgetList before = QApplication::topLevelWidgets();
+    if (id == QLatin1String("winver")) {
+        showAbout();
+        return;
+    }
     if (id == QLatin1String("system"))
         showSystem();
     else if (id == QLatin1String("datetime"))

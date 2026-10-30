@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "xpdialog.h"
 
+#include "theme.h"
 #include "xpfiles.h"
+
+#include <QGuiApplication>
+#include <QScreen>
 
 #include <QAbstractButton>
 #include <QCheckBox>
@@ -370,6 +374,20 @@ void SheetTabs::mousePressEvent(QMouseEvent *event)
             setCurrentIndex(i);
             return;
         }
+}
+
+void placeLowerLeft(QWidget *window)
+{
+    const FrameStyle &frame = ShellTheme::instance()->frame();
+    const QRect room = QGuiApplication::primaryScreen()->availableGeometry();
+    window->move(room.left() + frame.border, room.bottom() + 1 - frame.border - window->height());
+}
+
+void placeUpperLeft(QWidget *window)
+{
+    const FrameStyle &frame = ShellTheme::instance()->frame();
+    const QRect room = QGuiApplication::primaryScreen()->availableGeometry();
+    window->move(room.left() + frame.border, room.top() + frame.top);
 }
 
 void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &buttons)

@@ -101,7 +101,7 @@ int main(int argc, char **argv)
     parser.addOption({QStringLiteral("ipc"), QStringLiteral("bridge-wm's IPC directory (tray icons, Windows key)"), QStringLiteral("dir")});
     parser.addOption({QStringLiteral("frames"), QStringLiteral("draw the Linux windows' frames (without Wine's proxy.exe; needs --ipc)")});
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
-    parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime"), QStringLiteral("id")});
+    parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime, winver"), QStringLiteral("id")});
     parser.process(app);
 
     xpfiles::loadFonts();

@@ -189,8 +189,12 @@ native)
         python3 "$root/native-shell/extract.py" "$source" "$local/native-assets"
     fi
     # Files that later versions read too: with the ISO at hand, take them.
-    if [[ ! -e $local/native-assets/system32/logonui.exe && $source != -- ]]; then
-        python3 "$root/native-shell/extract.py" "$source" "$local/native-assets"
+    if [[ ! -e $local/native-assets/fonts/arial.ttf ]]; then
+        if [[ $source != -- ]]; then
+            python3 "$root/native-shell/extract.py" "$source" "$local/native-assets"
+        else
+            echo "Some of XP's files are missing (the Welcome screen's fonts): run this once with the ISO instead of --." >&2
+        fi
     fi
     "$root/native-shell/build.sh" | tail -n 1
     for n in $(seq 5 99); do

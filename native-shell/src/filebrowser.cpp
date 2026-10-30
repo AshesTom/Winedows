@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "filebrowser.h"
 
+#include "applets.h"
 #include "controlpanel.h"
 #include "fileicons.h"
 #include "fileops.h"
@@ -996,9 +997,7 @@ void FileBrowser::buildMenus()
     QAction *helpAction = help->addAction(tr("Help and Support &Center"), this, [helpProgram] { QProcess::startDetached(helpProgram, {}); });
     helpAction->setEnabled(!helpProgram.isEmpty());
     help->addSeparator();
-    help->addAction(tr("&About Windows"), this, [this] {
-        QMessageBox::about(this, tr("About Windows"), tr("The Windows XP shell, ported to Linux.\nIts pictures and words come from your own copy of Windows XP."));
-    });
+    help->addAction(tr("&About Windows"), this, [] { applets::open(QStringLiteral("winver")); });
 }
 
 QMenu *FileBrowser::buildFavoritesMenu()
