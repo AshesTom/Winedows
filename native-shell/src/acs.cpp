@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "acs.h"
 
+#include "sounds.h"
 #include "xpfiles.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRandomGenerator>
@@ -124,6 +128,9 @@ std::shared_ptr<AcsCharacter> AcsCharacter::load(const QString &path)
     const quint32 animationsAt = header.read<quint32>();
     header.read<quint32>();
     const quint32 imagesAt = header.read<quint32>();
+    header.read<quint32>();
+    const quint32 soundsAt = header.read<quint32>();
+    character->m_name = QFileInfo(path).completeBaseName();
     if (!header.ok())
         return nullptr;
 
@@ -164,6 +171,14 @@ std::shared_ptr<AcsCharacter> AcsCharacter::load(const QString &path)
         images.at += 8;
     }
 
+    Reader soundList(data, soundsAt);
+    const quint32 soundCount = soundList.read<quint32>();
+    for (quint32 i = 0; i < soundCount && soundList.ok(); ++i) {
+        const qint64 at = soundList.read<quint32>(), size = soundList.read<quint32>();
+        soundList.at += 4;
+        character->m_sounds.append({at, size});
+    }
+
     Reader list(data, animationsAt);
     const quint32 animationCount = list.read<quint32>();
     for (quint32 i = 0; i < animationCount && list.ok(); ++i) {
@@ -184,7 +199,7 @@ std::shared_ptr<AcsCharacter> AcsCharacter::load(const QString &path)
                 const int x = animation.read<qint16>(), y = animation.read<qint16>();
                 frame.layers.append({index, x, y});
             }
-            animation.read<quint16>();    // its sound
+            frame.sound = animation.read<quint16>();
             frame.duration = animation.read<quint16>() * 10;
             frame.exit = animation.read<qint16>();
             const int branches = animation.read<quint8>();
@@ -237,6 +252,22 @@ QImage AcsCharacter::image(int index) const
     }
     m_cache.insert(index, out);
     return out;
+}
+
+QString AcsCharacter::soundFile(int sound) const
+{
+    if (sound < 0 || sound >= m_sounds.size() || m_sounds[sound].first + m_sounds[sound].second > m_data.size())
+        return QString();
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + QStringLiteral("/win4wine/agent");
+    const QString path = QStringLiteral("%1/%2-%3.wav").arg(folder, m_name).arg(sound);
+    if (!QFileInfo::exists(path)) {
+        QDir().mkpath(folder);
+        QFile out(path);
+        if (!out.open(QIODevice::WriteOnly))
+            return QString();
+        out.write(m_data.constData() + m_sounds[sound].first, m_sounds[sound].second);
+    }
+    return path;
 }
 
 QImage AcsCharacter::compose(const Frame &frame) const
@@ -315,6 +346,8 @@ void AgentWidget::step()
         m_shown = m_character->compose(frame);
         update();
     }
+    if (frame.sound != 0xffff && isVisible())
+        sounds::playFile(m_character->soundFile(frame.sound));
     m_frameTimer.start(qMax(frame.duration, 10));
 }
 

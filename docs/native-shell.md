@@ -19,12 +19,16 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 | Virtual folders | My Computer (with its groups and the drives' free space), the Recycle Bin, Control Panel, search results |
 | Control Panel | Category view and Classic view, with XP's own names and icons. Display, Folder Options, Fonts, Network Connections, Add or Remove Programs (a list), Sounds and Audio Devices, System, Mouse, Keyboard, Printers, User Accounts, Date and Time |
 | Title bars | XP's frames for Linux windows, without Wine: caption, active and inactive, the three buttons, the system menu, moving and sizing from every edge, maximizing as XP does (the borders off the screen), rounded corners as the window's shape |
+| Property sheets | `comctl32.dll`'s template 1006 (the tabs, and buttons of 50 x 14 dialog units, 4 apart and 4 from the edges), tabs on as many rows as they need with the selected row at the bottom, dialogs with only Close and "?" (`_NET_WM_CONTEXT_HELP`) |
+| System Properties | XP's six pages from `sysdm.cpl`, `netid.dll`, `wuaucpl.cpl` and `remotepg.dll`: General and the computer's name are filled in, the rest is greyed |
 | Display Properties | XP's tabs from `themeui.dll`'s dialogs: Themes (Windows XP, Windows Classic, and those imported by Browse... from a `.theme` or a `.msstyles`, which Delete removes: the style and its `Shell` folder are copied to `~/.local/share/win4wine/themes`, and only their resources are read), Desktop (wallpaper, position, colour), Screen Saver (the X server's blanking), Appearance (visual style, colour scheme, font size), Settings (the size, through `xrandr` when it is there), and Linux (the Qt and GTK style, the icon theme), with previews. Apply changes everything at once, open programs included. Save As, Customize Desktop, Effects and Advanced are greyed, and the title bar has no Help button |
 | Qt and GTK programs | Drawn with the current theme by `qt-style/`, from the same choices, with XP's fonts |
 | XP's icons | `session/icon_theme.py` makes the `win4wine-xp-icons` theme from the user's files the first time; it is the session's default for Qt and GTK programs too |
 | Clock | The locale's short time, the date as its tooltip; wakes once a minute |
 | Notification area | Linux tray icons from `bridge-wm/tray.py`'s files, left click, right click and their menus; in a window (`xp.sh native`) also those of the desktop around it, whose programs open on that desktop. XP's volume (`pactl`: its slider and Mute) and network (`nmcli`: its status, the wireless networks) icons, with the pictures of `sndvol32.exe` and `netshell.dll` |
-| Windows key, Ctrl+Esc | Open the Start menu; Win+R and the other hotkeys do nothing yet |
+| Windows key, Ctrl+Esc | Open the Start menu; Win+R is Run, Win+E My Computer, Win+F Search |
+| Sounds | XP's own from `%windir%\\Media` (LAYOUT.INF's names): startup, logon, logoff, shutdown, the message boxes', the click on going somewhere, the Recycle Bin. The Search Companion's character's, from its `.acs` |
+| Session screens | In a window, XP's Welcome screen first (no password: this user is logged in already), "Logging off..." and back; Log Off Windows and Turn off computer from `msgina.dll`, the screen fading to grey behind it |
 
 Not ported yet: XP's zip folders, Send To, shortcuts (`.lnk`), network places, Help (shown disabled, as is Printers
 and Faxes without `system-config-printer`), the Accessibility Options applets (the category is there, empty), the

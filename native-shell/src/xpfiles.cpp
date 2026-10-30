@@ -138,12 +138,9 @@ QFont themeFont(const QString &spec, int dpi)
         else if (style == QLatin1String("italic"))
             font.setItalic(true);
     }
-    if (pixels <= 16) {
-        font.setHintingPreference(QFont::PreferFullHinting);
-        font.setStyleStrategy(QFont::NoAntialias);
-    } else {
-        font.setHintingPreference(QFont::PreferNoHinting);
-    }
+    // Hinted as Windows hints it at any size; XP's Standard smoothing only smooths above 16 pixels.
+    font.setHintingPreference(QFont::PreferFullHinting);
+    font.setStyleStrategy(pixels <= 16 ? QFont::NoAntialias : QFont::StyleStrategy(QFont::PreferAntialias | QFont::NoSubpixelAntialias));
     return font;
 }
 

@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "taskbar.h"
 
+#include <QTimer>
+
+#include "filebrowser.h"
+#include "sessiondialog.h"
+#include "sounds.h"
+#include "startmenu.h"
+
 #include "filebrowser.h"
 #include "startmenu.h"
 #include "theme.h"
@@ -40,6 +47,7 @@ const int START_HEIGHT = 32;
 const int TASK_MAX_WIDTH = 160, TASK_MIN_WIDTH = 40;
 const int TASK_ICON_X = 10, TASK_ICON_Y = 7, TASK_TEXT_GAP = 3, TASK_TEXT_END = 7;
 const int TEXT_RAISE = 1;           // the taskbar's small text sits a pixel above the centre
+const int TURN_OFF_DELAY_MS = 200;
 // The tray's art starts with 10 transparent pixels.
 const int TRAY_ICON_X = 16, TRAY_ICON_STEP = 18, TRAY_CLOCK_GAP = 7, TRAY_END = 17;
 const int ICON_SIZE = 16;
@@ -98,6 +106,15 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         update();
     });
     connect(m_tray, &Tray::startRequested, this, &Taskbar::showStartMenu);
+    connect(m_tray, &Tray::hotkey, this, [](int key) {
+        // XP's hotkeys with the Windows key, by their virtual keys
+        if (key == 'R')
+            showRunDialog();
+        else if (key == 'E')
+            FileBrowser::open(places::Computer);
+        else if (key == 'F')
+            FileBrowser::open(places::Search);
+    });
     connect(theme(), &ShellTheme::changed, this, &Taskbar::themeChanged);
 
     m_clockTimer.setSingleShot(true);
@@ -216,29 +233,7 @@ void Taskbar::drawShadowedText(QPainter &painter, const QRect &rect, const QStri
     const QColor shadow = renderer->colour(START_BUTTON, QStringLiteral("textshadowcolor")).value_or(Qt::black);
     const QColor colour = renderer->colour(START_BUTTON, QStringLiteral("textcolor")).value_or(Qt::white);
 
-    // uxtheme's continuous shadow: the text's coverage, softened by a pixel, at its offset.
-    QImage mask(rect.size() + QSize(6, 6), QImage::Format_ARGB32_Premultiplied);
-    mask.fill(Qt::transparent);
-    {
-        QPainter textPainter(&mask);
-        textPainter.setFont(m_startFont);
-        textPainter.setPen(shadow);
-        textPainter.drawText(QRect(QPoint(0, 0), rect.size()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
-    }
-    QImage soft(mask.size(), QImage::Format_ARGB32_Premultiplied);
-    soft.fill(Qt::transparent);
-    {
-        QPainter softPainter(&soft);
-        for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx) {
-                softPainter.setOpacity(dx == 0 && dy == 0 ? 0.5 : dx == 0 || dy == 0 ? 0.125 : 0.0);
-                softPainter.setCompositionMode(QPainter::CompositionMode_Plus);
-                softPainter.drawImage(QPoint(dx, dy), mask);
-            }
-    }
-    painter.drawImage(rect.topLeft() + offset, soft);
-    painter.setPen(colour);
-    painter.drawText(rect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
+    ShellTheme::drawShadowedText(painter, rect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text, colour, shadow, offset);
 }
 
 void Taskbar::drawStart(QPainter &painter)
@@ -485,7 +480,10 @@ void Taskbar::showStartMenu()
         m_startPanel->close();
         return;
     }
-    auto *panel = new StartPanel(mapToGlobal(QPoint(0, 0)), [this] { endSession("logoff"); }, [this] { turnOff(); },
+    auto *panel = new StartPanel(mapToGlobal(QPoint(0, 0)), [this] {
+        if (sessiondialog::askLogOff())
+            endSession("logoff");
+    }, [this] { turnOff(); },
                                  [] { FileBrowser::open(places::ControlPanel); });
     panel->setAttribute(Qt::WA_DeleteOnClose);
     connect(panel, &StartPanel::closed, this, [this] {
@@ -499,19 +497,28 @@ void Taskbar::showStartMenu()
 
 void Taskbar::turnOff()
 {
-    QMessageBox box(QMessageBox::NoIcon, tr("Turn off computer"), tr("What do you want the computer to do?"));
-    QPushButton *off = box.addButton(tr("Turn Off"), QMessageBox::AcceptRole);
-    QPushButton *restart = box.addButton(tr("Restart"), QMessageBox::AcceptRole);
-    box.addButton(QMessageBox::Cancel);
-    box.exec();
-    if (box.clickedButton() == off)
-        endSession("shutdown");
-    else if (box.clickedButton() == restart)
-        endSession("reboot");
+    // Once the Start menu has gone: the screen fading behind the dialog is a picture of it.
+    QTimer::singleShot(TURN_OFF_DELAY_MS, this, [this] {
+        const bool power = qEnvironmentVariable("WIN4WINE_POWER") == QLatin1String("1");
+        const sessiondialog::Choice choice = sessiondialog::askTurnOff(power);
+        if (choice == sessiondialog::TurnOff)
+            endSession("shutdown");
+        else if (choice == sessiondialog::Restart)
+            endSession("reboot");
+        else if (choice == sessiondialog::StandBy)
+            QProcess::startDetached(QStringLiteral("systemctl"), {QStringLiteral("suspend")});
+    });
 }
 
 void Taskbar::endSession(const char *request)
 {
+    sounds::playAndWait(qstrcmp(request, "logoff") == 0 ? QStringLiteral("Windows XP Logoff Sound.wav") : QStringLiteral("Windows XP Shutdown.wav"), 4000);
+    // What session.sh does next
+    if (const QString file = qEnvironmentVariable("WIN4WINE_NATIVE_REQUEST"); !file.isEmpty()) {
+        QFile out(file);
+        if (out.open(QIODevice::WriteOnly))
+            out.write(QByteArray(request) + '\n');
+    }
     // WIN4WINE_SESSION_REQUEST: where XP's log off tells the supervisor, as a Wine path.
     QString path = qEnvironmentVariable("WIN4WINE_SESSION_REQUEST");
     if (path.startsWith(QLatin1String("Z:"), Qt::CaseInsensitive)) {

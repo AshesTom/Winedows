@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "startmenu.h"
 
+#include "xpdialog.h"
+#include <QSettings>
+#include <QPushButton>
+#include <QPointer>
+#include <QFileDialog>
+#include <QComboBox>
+
 #include "filebrowser.h"
 
 #include "programs.h"
@@ -34,6 +41,8 @@ namespace {
 
 // explorer.exe's and shell32.dll's strings, for the language of the user's XP
 const int EXPLORER_ALL_PROGRAMS = 8226, EXPLORER_LOG_OFF = 730, EXPLORER_TURN_OFF = 731;
+// shell32.dll's Run dialog, and how many commands its list keeps
+const int DIALOG_RUN = 1003, RUN_COMMAND = 12298, RUN_SEPARATE_MEMORY = 12306, RUN_BROWSE = 12288, STRING_BROWSE_TITLE = 9015, RUN_HISTORY = 26;
 const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722;
 const int SHELL_DOCUMENTS = 9227, SHELL_RECENT = 12691, SHELL_PICTURES = 9076, SHELL_MUSIC = 9105, SHELL_COMPUTER = 9216;
 const int SHELL_CONTROL_PANEL = 4161, SHELL_PRINTERS = 9319;
@@ -109,25 +118,65 @@ void runCommand(const QString &line)
         programs::open(line);
 }
 
+} // namespace
+
+// XP's own dialog from shell32.dll, with what was run before in its list
 void showRunDialog()
 {
+    static QPointer<QDialog> open;
+    if (open) {
+        open->raise();
+        open->activateWindow();
+        return;
+    }
+    const auto shell = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
+    if (!shell)
+        return;
     auto *dialog = new QDialog;
+    open = dialog;
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle(explorerString(EXPLORER_RUN_TITLE, "Run"));
-    auto *layout = new QVBoxLayout(dialog);
-    layout->addWidget(new QLabel(QObject::tr("Type the name of a program, folder, document, or Internet resource, and it will be opened for you."), dialog));
-    auto *edit = new QLineEdit(dialog);
-    layout->addWidget(edit);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
-    layout->addWidget(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, dialog, [dialog, edit] {
-        runCommand(edit->text());
+    dialog->setWindowFlag(Qt::WindowContextHelpButtonHint, true);
+    const xpdialog::Page page = xpdialog::build(*shell, DIALOG_RUN, dialog);
+    dialog->setWindowTitle(page.caption);
+    // It is there for 16-bit programs, and XP only shows it for them.
+    if (QWidget *memory = page.controls.value(RUN_SEPARATE_MEMORY))
+        memory->hide();
+    auto *combo = qobject_cast<QComboBox *>(page.controls.value(RUN_COMMAND));
+    auto *ok = qobject_cast<QPushButton *>(page.controls.value(1));
+    auto *cancel = qobject_cast<QPushButton *>(page.controls.value(2));
+    auto *browse = qobject_cast<QPushButton *>(page.controls.value(RUN_BROWSE));
+    if (!combo || !ok || !cancel || !browse)
+        return;
+    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+    const QStringList history = settings.value(QStringLiteral("runHistory")).toStringList();
+    combo->addItems(history);
+    combo->setCurrentText(history.value(0));
+    combo->lineEdit()->selectAll();
+    ok->setDefault(true);
+    ok->setEnabled(!combo->currentText().trimmed().isEmpty());
+    QObject::connect(combo, &QComboBox::currentTextChanged, ok, [ok](const QString &text) { ok->setEnabled(!text.trimmed().isEmpty()); });
+    QObject::connect(ok, &QPushButton::clicked, dialog, [dialog, combo] {
+        const QString line = combo->currentText().trimmed();
+        QSettings write(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+        QStringList runs = write.value(QStringLiteral("runHistory")).toStringList();
+        runs.removeAll(line);
+        runs.prepend(line);
+        write.setValue(QStringLiteral("runHistory"), runs.mid(0, RUN_HISTORY));
+        runCommand(line);
         dialog->accept();
     });
-    QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    dialog->resize(347, 130);
+    QObject::connect(cancel, &QPushButton::clicked, dialog, &QDialog::reject);
+    QObject::connect(browse, &QPushButton::clicked, dialog, [dialog, combo] {
+        // shell32's "Programs#*.exe;...#All Files#*.*#": Linux's programs have no such names.
+        const QString file = QFileDialog::getOpenFileName(dialog, xpfiles::shellString(STRING_BROWSE_TITLE, "Browse"), QDir::homePath());
+        if (!file.isEmpty())
+            combo->setCurrentText(file);
+    });
     dialog->show();
+    combo->setFocus();
 }
+
+namespace {
 
 QString xdgDir(QStandardPaths::StandardLocation location)
 {
@@ -440,11 +489,12 @@ void StartPanel::paintEvent(QPaintEvent *)
     painter.setFont(nameFont);
     const QRect nameRect(tile.right() + theme->scaled(8), m_user.y(), m_user.width() - tile.right() - theme->scaled(12), m_user.height());
     if (renderer) {
-        painter.setPen(renderer->colour(panelPart("userpane"), QStringLiteral("textshadowcolor")).value_or(Qt::black));
-        painter.drawText(nameRect.translated(2, 2), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, m_userName);
+        const QColor shadow = renderer->colour(panelPart("userpane"), QStringLiteral("textshadowcolor")).value_or(Qt::black);
+        ShellTheme::drawShadowedText(painter, nameRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, m_userName, Qt::white, shadow, QPoint(1, 1));
+    } else {
+        painter.setPen(Qt::white);
+        painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, m_userName);
     }
-    painter.setPen(Qt::white);
-    painter.drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, m_userName);
 
     // The items
     const QFont normal = theme->font(QStringLiteral("Tahoma, 8")), bold = theme->font(QStringLiteral("Tahoma, 8, bold"));

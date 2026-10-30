@@ -4,7 +4,10 @@
 #include "fileicons.h"
 #include "filebrowser.h"
 #include "programs.h"
+#include "xpdialog.h"
 #include "theme.h"
+
+#include <QLineEdit>
 #include "x11.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
@@ -72,21 +75,25 @@ public:
     {
         setAttribute(Qt::WA_DeleteOnClose);
         setWindowTitle(title);
-        auto *layout = new QVBoxLayout(this);
-        layout->setContentsMargins(7, 7, 7, 7);
-        tabs = new QTabWidget(this);
-        layout->addWidget(tabs);
-        auto *buttons = new QDialogButtonBox(m_apply ? QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply : QDialogButtonBox::Ok, this);
-        layout->addWidget(buttons);
-        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-        connect(buttons, &QDialogButtonBox::accepted, this, [this] {
+        tabs = new xpdialog::SheetTabs(this);
+        auto *ok = new QPushButton(QObject::tr("OK"), this);
+        ok->setDefault(true);
+        QList<QPushButton *> buttons{ok};
+        connect(ok, &QPushButton::clicked, this, [this] {
             if (!m_apply || m_apply())
                 accept();
         });
-        if (m_apply)
-            connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { m_apply(); });
+        if (m_apply) {
+            auto *cancel = new QPushButton(QObject::tr("Cancel"), this);
+            connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+            applyButton = new QPushButton(QObject::tr("&Apply"), this);
+            connect(applyButton, &QPushButton::clicked, this, [this] { m_apply(); });
+            buttons << cancel << applyButton;
+        }
+        xpdialog::arrangeSheet(this, tabs, buttons);
     }
-    QTabWidget *tabs;
+    xpdialog::SheetTabs *tabs;
+    QPushButton *applyButton = nullptr;
 
 private:
     std::function<bool()> m_apply;
@@ -117,56 +124,97 @@ qint64 memoryBytes()
     return qint64(sysconf(_SC_PHYS_PAGES)) * sysconf(_SC_PAGESIZE);
 }
 
+// General's words go in XP's own lines; a long one takes the next.
 void showSystem()
 {
     const auto sysdm = xpfiles::resources(xpfiles::find(QStringLiteral("sysdm.cpl")));
     QString title = sysdm ? xpfiles::string(*sysdm, 3) : QString();
     title.remove(QChar(0));
-    auto *sheet = new Sheet(title.isEmpty() ? QObject::tr("System Properties") : title);
-    auto *page = new QWidget;
-    auto *logo = new QLabel(page);
+    // OK, Cancel and a greyed Apply, as XP's until something changes: nothing here does.
+    auto *sheet = new Sheet(title.isEmpty() ? QObject::tr("System Properties") : title, [] { return true; });
+    sheet->applyButton->setEnabled(false);
+
+    auto *general = new QWidget;
     if (sysdm) {
-        // Its magenta is see-through; in this picture that is 255, 1, 255.
-        QImage art = xpfiles::bitmap(*sysdm, 1).convertToFormat(QImage::Format_ARGB32);
-        for (int y = 0; y < art.height(); ++y) {
-            auto *row = reinterpret_cast<QRgb *>(art.scanLine(y));
-            for (int x = 0; x < art.width(); ++x)
-                if (qRed(row[x]) == 255 && qGreen(row[x]) <= 1 && qBlue(row[x]) == 255)
-                    row[x] = 0;
+        const xpdialog::Page page = xpdialog::build(*sysdm, 101, general);
+        if (auto *logo = qobject_cast<QLabel *>(page.controls.value(51))) {
+            // Its magenta is see-through; in this picture that is 255, 1, 255.
+            QImage art = xpfiles::bitmap(*sysdm, 1).convertToFormat(QImage::Format_ARGB32);
+            for (int y = 0; y < art.height(); ++y) {
+                auto *row = reinterpret_cast<QRgb *>(art.scanLine(y));
+                for (int x = 0; x < art.width(); ++x)
+                    if (qRed(row[x]) == 255 && qGreen(row[x]) <= 1 && qBlue(row[x]) == 255)
+                        row[x] = 0;
+            }
+            logo->setPixmap(QPixmap::fromImage(art));
+            logo->setAlignment(Qt::AlignCenter);
         }
-        logo->setPixmap(QPixmap::fromImage(art));
+        const auto fill = [&](int id, const QString &value) {
+            if (auto *label = qobject_cast<QLabel *>(page.controls.value(id)))
+                label->setText(value);
+        };
+        fill(52, osName());
+        fill(53, QObject::tr("Linux %1").arg(QSysInfo::kernelVersion()));
+        fill(54, QSysInfo::currentCpuArchitecture());
+        fill(56, qEnvironmentVariable("USER"));
+        fill(57, QSysInfo::machineHostName());
+        // CPU names are long: as XP, on a line or two, then the memory
+        const QFontMetrics metrics(general->font());
+        const int room = page.controls.value(63) ? page.controls.value(63)->width() : 165;
+        QStringList lines{QString()};
+        for (const QString &word : cpuName().split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+            const QString longer = lines.last().isEmpty() ? word : lines.last() + QLatin1Char(' ') + word;
+            if (metrics.horizontalAdvance(longer) > room && !lines.last().isEmpty())
+                lines.append(word);
+            else
+                lines.last() = longer;
+        }
+        lines.append(QObject::tr("%1 of RAM").arg(QLocale().formattedDataSize(memoryBytes(), 2, QLocale::DataSizeTraditionalFormat)));
+        const QList<int> computer{63, 64, 65, 66, 67};
+        for (int i = 0; i < computer.size(); ++i)
+            if (QWidget *line = page.controls.value(computer[i])) {
+                fill(computer[i], lines.value(i));
+                line->setVisible(i < lines.size());
+            }
     }
-    logo->setGeometry(10, 16, 118, 113);
-    const auto text = [&](const QString &value, int y, bool bold = false) {
-        auto *label = new QLabel(value, page);
-        label->setGeometry(170, y, 200, 15);
-        if (bold) {
-            QFont font = label->font();
-            font.setBold(true);
-            label->setFont(font);
+    sheet->tabs->addTab(general, QObject::tr("General"));
+
+    // The pages of XP's that have nothing behind them here show as XP has them, greyed.
+    const auto xpPage = [&](const char *file, int id, const QString &name, const std::function<void(const xpdialog::Page &)> &fill = {}) {
+        const auto resources = xpfiles::resources(xpfiles::find(QLatin1String(file)));
+        if (!resources)
+            return;
+        auto *widget = new QWidget;
+        const xpdialog::Page page = xpdialog::build(*resources, id, widget);
+        if (page.controls.isEmpty()) {
+            delete widget;
+            return;
         }
+        xpdialog::greyControls(page);
+        if (fill)
+            fill(page);
+        sheet->tabs->addTab(widget, name);
     };
-    text(QObject::tr("System:"), 18, false);
-    text(osName(), 36);
-    text(QObject::tr("Linux %1").arg(QSysInfo::kernelVersion()), 52);
-    text(QSysInfo::currentCpuArchitecture(), 68);
-    text(QObject::tr("Registered to:"), 96);
-    const QString user = qEnvironmentVariable("USER");
-    text(user, 114);
-    text(QSysInfo::machineHostName(), 130);
-    text(QObject::tr("Computer:"), 170);
-    auto *cpu = new QLabel(cpuName(), page);
-    cpu->setWordWrap(true);
-    cpu->setGeometry(170, 188, 200, 30);
-    const qint64 ram = memoryBytes();
-    text(QObject::tr("%1 of RAM").arg(QLocale().formattedDataSize(ram, 2, QLocale::DataSizeTraditionalFormat)), 222);
-    page->setFixedSize(384, 354);
-    sheet->tabs->addTab(page, QObject::tr("General"));
-    auto *name = new QWidget;
-    auto *nameLayout = new QVBoxLayout(name);
-    nameLayout->addWidget(new QLabel(QObject::tr("Full computer name:  %1").arg(QSysInfo::machineHostName()), name));
-    nameLayout->addStretch(1);
-    sheet->tabs->addTab(name, QObject::tr("Computer Name"));
+    xpPage("netid.dll", 114, QObject::tr("Computer Name"), [](const xpdialog::Page &page) {
+        for (int id : {1017, 1026, 1019})
+            if (QWidget *control = page.controls.value(id))
+                control->hide();
+        if (auto *full = qobject_cast<QLabel *>(page.controls.value(1001)))
+            full->setText(QSysInfo::machineHostName());
+        if (auto *group = qobject_cast<QLabel *>(page.controls.value(116)))
+            group->setText(QStringLiteral("WORKGROUP"));
+    });
+    xpPage("sysdm.cpl", 2000, QObject::tr("Hardware"));
+    xpPage("sysdm.cpl", 115, QObject::tr("Advanced"));
+    xpPage("wuaucpl.cpl", 912, QObject::tr("Automatic Updates"), [](const xpdialog::Page &page) {
+        // A link and its plain text share the place: XP shows one of them.
+        if (QWidget *link = page.controls.value(1040))
+            link->hide();
+    });
+    xpPage("remotepg.dll", 510, QObject::tr("Remote"), [](const xpdialog::Page &page) {
+        if (auto *name = qobject_cast<QLabel *>(page.controls.value(538)))
+            name->setText(QSysInfo::machineHostName());
+    });
     sheet->show();
 }
 

@@ -6,6 +6,9 @@
 #include "controlpanel.h"
 #include "desktop.h"
 #include "displayproperties.h"
+#include "sounds.h"
+
+#include <QMessageBox>
 #include "filebrowser.h"
 #include "frames.h"
 #include "programs.h"
@@ -58,6 +61,25 @@ private:
 
 } // namespace
 
+// XP's sound for a message box, by its icon
+class MessageSounds : public QObject
+{
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::Show)
+            if (auto *box = qobject_cast<QMessageBox *>(watched)) {
+                if (box->icon() == QMessageBox::Critical)
+                    sounds::play(QStringLiteral("Windows XP Critical Stop.wav"));
+                else if (box->icon() == QMessageBox::Warning)
+                    sounds::play(QStringLiteral("Windows XP Exclamation.wav"));
+                else if (box->icon() == QMessageBox::Information)
+                    sounds::play(QStringLiteral("Windows XP Default.wav"));
+            }
+        return false;
+    }
+};
+
 int main(int argc, char **argv)
 {
     // Only X11 windows can be EWMH's desktop and dock here. Tahoma is hinted
@@ -104,6 +126,7 @@ int main(int argc, char **argv)
     }
     applets::applyInputSettings();
     DisplayProperties::restoreScreenSaver();
+    sounds::play(QStringLiteral("Windows XP Logon Sound.wav"));
 
     Desktop desktop;
     const int iconSize = theme->scaled(16);
@@ -117,6 +140,8 @@ int main(int argc, char **argv)
 
     WindowsKey windowsKey(&taskbar);
     app.installEventFilter(&windowsKey);
+    MessageSounds messageSounds;
+    app.installEventFilter(&messageSounds);
 
     const auto replace = [&] {
         desktop.placeOnScreens();

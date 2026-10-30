@@ -81,6 +81,48 @@ QList<int> numbers(const QString &value)
 
 // 32bpp art keeps its alpha; PARTIAL is when Wine's uxtheme (the session's
 // shell) blends it by its alpha instead of keying out its transparent colour.
+// An RLE8 picture as the plain one it stands for
+static QByteArray expandRle8(const QByteArray &dib, quint32 headerSize, int width, int height, quint32 colours)
+{
+    const qint64 start = headerSize + 4 * qint64(colours ? colours : 256);
+    const int stride = (width + 3) & ~3;
+    QByteArray out = dib.left(start);
+    // Compression 0, and the size of the image left for the reader to work out
+    qToLittleEndian<quint32>(0, out.data() + 16);
+    qToLittleEndian<quint32>(0, out.data() + 20);
+    const qint64 pixelsAt = out.size();
+    out.append(QByteArray(qint64(stride) * height, '\0'));
+    auto *pixels = reinterpret_cast<uchar *>(out.data() + pixelsAt);
+    const auto *in = reinterpret_cast<const uchar *>(dib.constData());
+    const qint64 size = dib.size();
+    int x = 0, y = 0;
+    for (qint64 i = start; i + 1 < size && y < height;) {
+        const int count = in[i], value = in[i + 1];
+        i += 2;
+        if (count) {
+            for (int n = 0; n < count && x < width; ++n)
+                pixels[y * stride + x++] = uchar(value);
+        } else if (value == 0) {
+            x = 0;
+            ++y;
+        } else if (value == 1) {
+            break;
+        } else if (value == 2) {
+            if (i + 1 >= size)
+                break;
+            x += in[i];
+            y += in[i + 1];
+            i += 2;
+        } else {
+            for (int n = 0; n < value && i + n < size; ++n)
+                if (x < width && y < height)
+                    pixels[y * stride + x++] = in[i + n];
+            i += value + (value & 1);
+        }
+    }
+    return out;
+}
+
 QImage decodeDib(const QByteArray &dib, bool *partial)
 {
     Reader r{dib};
@@ -88,6 +130,8 @@ QImage decodeDib(const QByteArray &dib, bool *partial)
     const quint32 headerSize = r.u32(0);
     if (!r.ok || headerSize < 40 || headerSize > quint32(dib.size()))
         return {};
+    if (r.u32(16) == 1 && r.u16(14) == 8 && qint32(r.u32(4)) > 0 && qint32(r.u32(8)) > 0 && qint32(r.u32(4)) <= 16384 && qint32(r.u32(8)) <= 16384 && r.u32(32) <= 256)
+        return decodeDib(expandRle8(dib, headerSize, qint32(r.u32(4)), qint32(r.u32(8)), r.u32(32)), partial);
     const qint32 width = qint32(r.u32(4));
     const qint32 rawHeight = qint32(r.u32(8));
     const int bits = r.u16(14);

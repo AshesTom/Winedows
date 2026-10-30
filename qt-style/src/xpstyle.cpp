@@ -16,6 +16,8 @@
 #include <QIcon>
 #include <QLineEdit>
 #include <QMenu>
+#include <QDialogButtonBox>
+#include <QFrame>
 #include <QMenuBar>
 #include <QPainter>
 #include <QProgressBar>
@@ -1088,7 +1090,8 @@ QSize XpStyle::sizeFromContents(ContentsType type, const QStyleOption *option, c
         s.setHeight(qMax(s.height(), 21 * scale / 96));
         break;
     case CT_PushButton:
-        s.setHeight(qMax(s.height(), 23 * scale / 96));
+        // XP's push button: 50 x 14 dialog units
+        s = s.expandedTo(QSize(75 * scale / 96, 23 * scale / 96));
         break;
     case CT_TabBarTab:
         s.setHeight(qMax(s.height(), 21 * scale / 96));
@@ -1144,6 +1147,10 @@ int XpStyle::pixelMetric(PixelMetric metric, const QStyleOption *option, const Q
         case PM_SpinBoxFrameWidth:
         case PM_ComboBoxFrameWidth:
             return 1;
+        // Qt takes this off every button of a dialog (they are all "auto default"), whose art
+        // would then be 2 pixels short each way; XP's default button only changes its art.
+        case PM_ButtonDefaultIndicator:
+            return 0;
         case PM_ButtonShiftHorizontal:
         case PM_ButtonShiftVertical:
             return 0;   // XP's themed buttons do not move their text when pressed
@@ -1155,6 +1162,17 @@ int XpStyle::pixelMetric(PixelMetric metric, const QStyleOption *option, const Q
         case PM_TabBarTabShiftVertical:
             return 0;
         case PM_ToolBarHandleExtent:
+            return 6 * m_look.dpi / 96;
+        // XP's dialogs: 7 units from the edges, 4 between controls (6 x 13 pixels to 4 x 8 units)
+        case PM_LayoutLeftMargin:
+        case PM_LayoutRightMargin:
+            return 11 * m_look.dpi / 96;
+        case PM_LayoutTopMargin:
+        case PM_LayoutBottomMargin:
+            return 11 * m_look.dpi / 96;
+        case PM_LayoutHorizontalSpacing:
+            return 6 * m_look.dpi / 96;
+        case PM_LayoutVerticalSpacing:
             return 6 * m_look.dpi / 96;
         default:
             break;
@@ -1172,6 +1190,12 @@ int XpStyle::styleHint(StyleHint hint, const QStyleOption *option, const QWidget
         return themed() ? 0 : QProxyStyle::styleHint(hint, option, widget, returnData);
     case SH_ComboBox_Popup:
         return 0;   // XP's drop-down lists, not a menu over the field
+    case SH_ComboBox_PopupFrameStyle:
+        return QFrame::Box | QFrame::Plain;   // with XP's one black line around them
+    case SH_DialogButtonLayout:
+        return QDialogButtonBox::WinLayout;
+    case SH_UnderlineShortcut:
+        return 0;   // XP hides its keyboard cues ("Hide underlined letters" is its default)
     case SH_ToolTipLabel_Opacity:
         return 255;
     case SH_Menu_MouseTracking:

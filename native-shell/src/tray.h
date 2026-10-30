@@ -33,6 +33,8 @@ Q_SIGNALS:
     void changed();
     // The windows key, or Ctrl+Esc, under a Linux window (shellkeys.tsv of bridge-wm)
     void startRequested();
+    // A key with the Windows key, by its virtual key
+    void hotkey(int key);
 
 private:
     void directoryChanged();

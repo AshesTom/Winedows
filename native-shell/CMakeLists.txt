@@ -22,6 +22,8 @@ add_executable(xp-native-shell
     src/fileicons.cpp src/fileicons.h
     src/fileops.cpp src/fileops.h
     src/searchcompanion.cpp src/searchcompanion.h
+    src/sessiondialog.cpp src/sessiondialog.h
+    src/sounds.cpp src/sounds.h
     src/taskpane.cpp src/taskpane.h
     src/desktopicons.cpp src/desktopicons.h
     src/displayproperties.cpp src/displayproperties.h

@@ -57,6 +57,32 @@ ShellTheme::ShellTheme()
     });
 }
 
+void ShellTheme::drawShadowedText(QPainter &painter, const QRect &rect, int flags, const QString &text, const QColor &colour, const QColor &shadow, QPoint offset)
+{
+    QImage mask(rect.size() + QSize(6, 6), QImage::Format_ARGB32_Premultiplied);
+    mask.fill(Qt::transparent);
+    {
+        QPainter textPainter(&mask);
+        textPainter.setFont(painter.font());
+        textPainter.setPen(shadow);
+        textPainter.drawText(QRect(QPoint(0, 0), rect.size()), flags, text);
+    }
+    QImage soft(mask.size(), QImage::Format_ARGB32_Premultiplied);
+    soft.fill(Qt::transparent);
+    {
+        QPainter softPainter(&soft);
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                softPainter.setOpacity(dx == 0 && dy == 0 ? 0.5 : dx == 0 || dy == 0 ? 0.125 : 0.0);
+                softPainter.setCompositionMode(QPainter::CompositionMode_Plus);
+                softPainter.drawImage(QPoint(dx, dy), mask);
+            }
+    }
+    painter.drawImage(rect.topLeft() + offset, soft);
+    painter.setPen(colour);
+    painter.drawText(rect, flags, text);
+}
+
 QString ShellTheme::shellStylePath(const LookChoice &look)
 {
     if (look.style.isEmpty())

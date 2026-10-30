@@ -29,12 +29,23 @@ Part windowPart(const char *name, int state)
     return Part{QStringLiteral("window"), QLatin1String(name), {}, state, {}};
 }
 
+bool shown(FrameButton button, const FrameLook &look)
+{
+    switch (button) {
+    case FrameButton::Maximize: return look.canMaximize;
+    case FrameButton::Minimize: return look.canMinimize;
+    case FrameButton::Help: return look.canHelp;
+    default: return true;
+    }
+}
+
 const char *buttonName(FrameButton button, bool maximized)
 {
     switch (button) {
     case FrameButton::Minimize: return "minbutton";
     case FrameButton::Maximize: return maximized ? "restorebutton" : "maxbutton";
     case FrameButton::Close: return "closebutton";
+    case FrameButton::Help: return "helpbutton";
     default: return "";
     }
 }
@@ -55,6 +66,11 @@ QRect frameButtonRect(FrameButton button, const QRect &rect, const FrameStyle &s
 {
     if (button == FrameButton::None || button == FrameButton::System)
         return QRect();
+    // Next to Close: XP has no other button on a window with this one.
+    if (button == FrameButton::Help) {
+        const QRect place = frameButtonRect(FrameButton::Maximize, rect, style, maximized);
+        return place;
+    }
     if (!style.renderer) {
         const int width = 16 * style.top / 23, height = 14 * style.top / 23;
         const int step = button == FrameButton::Close ? 2 : button == FrameButton::Maximize ? 2 + width + 2 : 2 + 2 * width + 2;
@@ -73,7 +89,7 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
     const int top = style.top, border = style.border;
     const QRect caption(rect.x(), rect.y(), rect.width(), top);
     QFont font = style.captionFont;
-    const FrameButton buttons[] = {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize};
+    const FrameButton buttons[] = {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize, FrameButton::Help};
     const int titleEnd = frameButtonRect(FrameButton::Minimize, rect, style, look.maximized).left() - 4;
     const int titleX = look.icon.isNull() ? ICON_X : ICON_X + ICON_SIZE + TITLE_GAP;
     const QRect titleRect(rect.x() + titleX, rect.y(), qMax(0, titleEnd - rect.x() - titleX), top);
@@ -98,7 +114,7 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
         painter.setPen(look.active ? style.activeText : style.inactiveText);
         painter.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
         for (FrameButton button : buttons) {
-            if (button == FrameButton::Maximize && !look.canMaximize)
+            if (!shown(button, look))
                 continue;
             int frame = look.pressed == button ? PressedButton : look.hot == button ? HotButton : NormalButton;
             if (!look.active)
@@ -131,13 +147,15 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
     if (!look.icon.isNull())
         painter.drawImage(bar.x() + 1, bar.y() + (bar.height() - ICON_SIZE) / 2, look.icon);
     painter.setPen(look.active ? style.activeText : style.inactiveText);
-    painter.drawText(QRect(bar.x() + ICON_SIZE + 3, bar.y(), titleEnd - bar.x() - ICON_SIZE - 3, bar.height()),
+    // A dialog has no icon: its title starts where the icon would.
+    const int titleX = look.icon.isNull() ? 2 : ICON_SIZE + 3;
+    painter.drawText(QRect(bar.x() + titleX, bar.y(), titleEnd - bar.x() - titleX, bar.height()),
                      Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                     QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleEnd - bar.x() - ICON_SIZE - 3));
+                     QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleEnd - bar.x() - titleX));
     QFont glyphs(QStringLiteral("Marlett"));
     glyphs.setPixelSize(bar.height() - 7);
     for (FrameButton button : buttons) {
-        if (button == FrameButton::Maximize && !look.canMaximize)
+        if (!shown(button, look))
             continue;
         const QRect r = frameButtonRect(button, rect, style, look.maximized);
         const bool down = look.pressed == button;
@@ -211,7 +229,16 @@ void FrameWindow::readHints()
             m_minimum = m_minimum.expandedTo(QSize(int(hints[5]) + 2 * style.border, int(hints[6]) + style.top + style.border));
         m_fixedSize = (hints[0] & 16) && (hints[0] & 32) && hints[5] == hints[7] && hints[6] == hints[8];
     }
-    m_look.canMaximize = !m_fixedSize;
+    // XP's dialogs have only Close, and "?" when they ask for it (Qt's WindowContextHelpButtonHint).
+    bool dialog = false;
+    for (quint32 type : x11::property32(m_client, x11::atom("_NET_WM_WINDOW_TYPE")))
+        dialog = dialog || type == x11::atom("_NET_WM_WINDOW_TYPE_DIALOG");
+    bool help = false;
+    for (quint32 protocol : x11::property32(m_client, x11::atom("WM_PROTOCOLS")))
+        help = help || protocol == x11::atom("_NET_WM_CONTEXT_HELP");
+    m_look.canMaximize = !m_fixedSize && !dialog;
+    m_look.canMinimize = !dialog;
+    m_look.canHelp = help;
 }
 
 void FrameWindow::setTitle(const QString &title)
@@ -277,8 +304,8 @@ void FrameWindow::resizeEvent(QResizeEvent *)
 FrameButton FrameWindow::buttonAt(QPoint at) const
 {
     const FrameStyle &style = ShellTheme::instance()->frame();
-    for (FrameButton button : {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize}) {
-        if (button == FrameButton::Maximize && !m_look.canMaximize)
+    for (FrameButton button : {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize, FrameButton::Help}) {
+        if (!shown(button, m_look))
             continue;
         if (frameButtonRect(button, rect(), style, m_look.maximized).contains(at))
             return button;
@@ -408,6 +435,18 @@ void FrameWindow::mouseReleaseEvent(QMouseEvent *event)
             m_manager->command("minimize", m_client);
         else if (button == FrameButton::Maximize)
             m_manager->command(m_look.maximized ? "restore" : "maximize", m_client);
+        else if (button == FrameButton::Help) {
+            // The window's own "What's This?" mode
+            xcb_client_message_event_t message{};
+            message.response_type = XCB_CLIENT_MESSAGE;
+            message.format = 32;
+            message.window = m_client;
+            message.type = x11::atom("WM_PROTOCOLS");
+            message.data.data32[0] = x11::atom("_NET_WM_CONTEXT_HELP");
+            message.data.data32[1] = XCB_CURRENT_TIME;
+            xcb_send_event(x11::connection(), false, m_client, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<const char *>(&message));
+            xcb_flush(x11::connection());
+        }
     } else if (drag != Drag::None) {
         // The WM followed each step; this is for what it could not, as proxy.exe does.
         const FrameStyle &style = ShellTheme::instance()->frame();

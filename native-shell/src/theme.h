@@ -57,6 +57,8 @@ public:
     // The first start of a session without a prefix: XP's own default look.
     static void ensureDefaultLook();
     static QString lunaPath();
+    // uxtheme's continuous shadow under a text: its coverage, softened by a pixel, at OFFSET.
+    static void drawShadowedText(QPainter &painter, const QRect &rect, int flags, const QString &text, const QColor &colour, const QColor &shadow, QPoint offset);
     // The file of the Common Tasks pane's art for a look: the style's own Shell folder, or
     // XP's for its colour. Empty for Windows Classic.
     static QString shellStylePath(const LookChoice &look);

@@ -14,6 +14,7 @@
 class AgentWidget;
 class QPushButton;
 class QScrollArea;
+class QHBoxLayout;
 class QVBoxLayout;
 
 struct SearchQuery
@@ -67,6 +68,7 @@ private:
     void activate(int id);
     void goBack();
     void submit();
+    void clearButtons();
     void submitWeb(const QString &text);
     SearchQuery buildQuery() const;
     bool condition(const QString &text) const;
@@ -76,7 +78,8 @@ private:
     QRect balloonRect() const;
 
     QScrollArea *m_scroll = nullptr;
-    QWidget *m_balloon = nullptr;
+    QWidget *m_panel = nullptr, *m_balloon = nullptr, *m_buttons = nullptr;
+    QHBoxLayout *m_buttonRow = nullptr;
     QVBoxLayout *m_content = nullptr;
     AgentWidget *m_agent = nullptr;
     QPushButton *m_back = nullptr, *m_search = nullptr, *m_stop = nullptr;

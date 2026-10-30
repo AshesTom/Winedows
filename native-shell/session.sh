@@ -28,6 +28,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM INT HUP
 
+# Display Properties' look is for this session's programs too; there is no prefix here.
+# (The window manager reads it too: no window of this session is Wine's.)
+export WIN4WINE_NATIVE_SHELL=wineless
 if [[ ${1:-} != --inside ]]; then
     "$python" "$root/bridge-wm/wm.py" --ipc "$ipc" > "$state/native-wm.log" 2>&1 &
     pids+=($!)
@@ -41,8 +44,6 @@ fi
 "$python" "$root/bridge-wm/tray.py" --ipc "$ipc" > "$state/native-tray.log" 2>&1 &
 pids+=($!)
 
-# Display Properties' look is for this session's programs too; there is no prefix here.
-export WIN4WINE_NATIVE_SHELL=wineless
 export XDG_CURRENT_DESKTOP=XP-Shell
 # Folders that other programs open come to the native folder windows, in this desktop only
 # (xp-shell-mimeapps.list is read for XDG_CURRENT_DESKTOP, before the user's own list).
@@ -109,4 +110,26 @@ if [[ -x $styles/bin/xpstyle-gtk ]]; then
     "$styles/bin/xpstyle-gtk" --watch > "$state/native-gtk-theme.log" 2>&1 &
     pids+=($!)
 fi
-"$shell" --ipc "$ipc" --frames 2>&1 | tee -a "$state/native-shell.log"
+# In a window (xp.sh native) XP's Welcome screen comes first, and Log Off comes back to it. A whole
+# session's Welcome is its display manager's greeter, where Log Off goes back to.
+export WIN4WINE_NATIVE_REQUEST=$ipc/session-request
+startup=--startup
+while :; do
+    if [[ ${WIN4WINE_NATIVE_WELCOME:-0} == 1 ]]; then
+        status=0
+        python3 "$root/greeter/xp-native-welcome.py" --assets "$assets" $startup > "$state/native-welcome.log" 2>&1 || status=$?
+        startup=
+        # 2: its files are not there, and the session goes on without it.
+        [[ $status == 3 || $status == 4 ]] && break
+    fi
+    : > "$WIN4WINE_NATIVE_REQUEST"
+    "$shell" --ipc "$ipc" --frames 2>&1 | tee -a "$state/native-shell.log" || true
+    [[ ${WIN4WINE_NATIVE_WELCOME:-0} == 1 && $(cat "$WIN4WINE_NATIVE_REQUEST" 2>/dev/null) == logoff ]] || break
+    # "Logging off...", then the Welcome screen again
+    if [[ -e $assets/system32/logonui.exe ]]; then
+        { echo saving; sleep 1; } | python3 "$root/greeter/xp-splash.py" logoff --assets "$assets" > /dev/null 2>&1 &
+        splash=$!
+        sleep 1.5
+        kill "$splash" 2>/dev/null || true
+    fi
+done

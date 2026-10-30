@@ -18,13 +18,15 @@ class AcsCharacter
 public:
     struct Layer { int image; int x, y; };
     struct Branch { int frame, probability; };
-    struct Frame { QList<Layer> layers; int duration; int exit; QList<Branch> branches; };
+    struct Frame { QList<Layer> layers; int duration; int exit; int sound; QList<Branch> branches; };
 
     static std::shared_ptr<AcsCharacter> load(const QString &path);
     QSize size() const { return m_size; }
     bool hasAnimation(const QString &name) const { return m_animations.contains(name.toLower()); }
     QList<Frame> animation(const QString &name) const { return m_animations.value(name.toLower()); }
     QImage compose(const Frame &frame) const;
+    // Its sound SOUND as a file, written the first time; empty if it has none.
+    QString soundFile(int sound) const;
 
 private:
     QImage image(int index) const;
@@ -34,6 +36,8 @@ private:
     int m_transparent = 0;
     QList<QRgb> m_palette;
     QList<qint64> m_images;
+    QList<QPair<qint64, qint64>> m_sounds;
+    QString m_name;
     QHash<QString, QList<Frame>> m_animations;
     mutable QHash<int, QImage> m_cache;
 };

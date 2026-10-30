@@ -146,7 +146,6 @@ QFont madeUpBold(ShellTheme *theme)
 {
     QFont font = theme->font(QStringLiteral("Franklin Gothic Medium, 21"));
     font.setLetterSpacing(QFont::AbsoluteSpacing, 1);
-    font.setHintingPreference(QFont::PreferNoHinting);
     return font;
 }
 

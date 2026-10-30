@@ -13,6 +13,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGroupBox>
@@ -44,6 +45,8 @@ namespace {
 const int DIALOG_THEMES = 1000, DIALOG_APPEARANCE = 1001;
 const int THEME_COMBO = 1101, THEME_SAVE = 1107, THEME_DELETE = 1108, THEME_PREVIEW = 1103;
 const int APPEARANCE_PREVIEW = 1110, APPEARANCE_STYLE = 1111, APPEARANCE_COLOUR = 1114, APPEARANCE_SIZE = 1116, APPEARANCE_ADVANCED = 1117, APPEARANCE_EFFECTS = 1118;
+const int STRING_PLEASE_WAIT = 2050, PLEASE_WAIT_MS = 700;
+const QSize PLEASE_WAIT_SIZE(220, 70);
 const int STRING_BROWSE = 2010, STRING_NOT_A_THEME = 3006, STRING_DELETE_ERROR = 3010;
 const int STRING_WINDOWS_CLASSIC = 2016, STRING_WINDOWS_XP = 2017, STRING_CLASSIC_STYLE = 2003, STRING_NORMAL = 2019, STRING_NONE = 2022, STRING_CURRENT = 2004;
 const int BITMAP_MONITOR = 126, BITMAP_COLOURS = 125, BITMAP_ENERGY = 122;
@@ -381,9 +384,7 @@ DisplayProperties::DisplayProperties()
 {
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(tr("Display Properties"));
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(7, 7, 7, 7);
-    m_tabs = new QTabWidget(this);
+    m_tabs = new xpdialog::SheetTabs(this);
     // In XP's order, and what Linux adds after them
     m_tabs->addTab(themesPage(), tr("Themes"));
     m_tabs->addTab(desktopPage(), tr("Desktop"));
@@ -391,17 +392,18 @@ DisplayProperties::DisplayProperties()
     m_tabs->addTab(appearancePage(), tr("Appearance"));
     m_tabs->addTab(settingsPage(), tr("Settings"));
     m_tabs->addTab(linuxPage(), tr("Linux"));
-    layout->addWidget(m_tabs);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, this);
-    layout->addWidget(buttons);
-    m_apply = buttons->button(QDialogButtonBox::Apply);
+    auto *ok = new QPushButton(tr("OK"), this);
+    auto *cancel = new QPushButton(tr("Cancel"), this);
+    m_apply = new QPushButton(tr("&Apply"), this);
+    ok->setDefault(true);
+    xpdialog::arrangeSheet(this, m_tabs, {ok, cancel, m_apply});
     m_apply->setEnabled(false);
     connect(m_apply, &QPushButton::clicked, this, &DisplayProperties::apply);
-    connect(buttons, &QDialogButtonBox::accepted, this, [this] {
+    connect(ok, &QPushButton::clicked, this, [this] {
         apply();
         accept();
     });
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
     fillAppearance();
     selectWallpaper();
     changed();
@@ -1036,7 +1038,26 @@ void DisplayProperties::apply()
 {
     applyScreenSaver();
     applyResolution();
+    // A new visual style takes a moment: XP says so meanwhile.
+    const LookChoice before = ShellTheme::instance()->choice();
+    const bool newStyle = before.style != m_choice.style || before.colour != m_choice.colour || before.size != m_choice.size;
+    QDialog wait(this);
+    if (newStyle) {
+        wait.setWindowTitle(text(STRING_PLEASE_WAIT, "Please Wait"));
+        auto *layout = new QVBoxLayout(&wait);
+        layout->setContentsMargins(24, 16, 24, 16);
+        layout->addWidget(new QLabel(tr("Please wait..."), &wait), 0, Qt::AlignCenter);
+        wait.setFixedSize(PLEASE_WAIT_SIZE);
+        wait.show();
+        // Its frame comes from the window manager, through this event loop.
+        QElapsedTimer shown;
+        shown.start();
+        while (shown.elapsed() < PLEASE_WAIT_MS)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
     ShellTheme::write(m_choice);
     applyLinuxLook();
+    if (newStyle)
+        wait.close();
     m_apply->setEnabled(false);
 }

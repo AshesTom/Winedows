@@ -16,13 +16,13 @@
 #include <QWidget>
 
 // What a frame shows. Used by the frames themselves and by Display Properties' previews.
-enum class FrameButton { None, System, Minimize, Maximize, Close };
+enum class FrameButton { None, System, Minimize, Maximize, Close, Help };
 
 struct FrameLook
 {
     QString title;
     QImage icon;
-    bool active = false, maximized = false, canMaximize = true;
+    bool active = false, maximized = false, canMaximize = true, canMinimize = true, canHelp = false;
     FrameButton hot = FrameButton::None, pressed = FrameButton::None;
 };
 

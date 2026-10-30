@@ -436,7 +436,7 @@ class Manager:
             return
         mode = X.ReplayKeyboard
         try:
-            if self.native_focus():
+            if self.native_focus() or os.environ.get('WIN4WINE_NATIVE_SHELL') == 'wineless':
                 mode = X.AsyncKeyboard
                 if e.detail == self.escape:
                     self.write_shell_keys('ctrl-escape', [])

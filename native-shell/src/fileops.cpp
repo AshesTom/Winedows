@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "fileops.h"
 
+#include "sounds.h"
+
 #include "fileicons.h"
 
 #include <QApplication>
@@ -300,6 +302,7 @@ QString trashFiles()
 
 void emptyTrash(QWidget *parent)
 {
+    sounds::play(QStringLiteral("Windows XP Recycle.wav"));
     const QDir files(trashFiles());
     const QStringList names = files.entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
     if (names.isEmpty())

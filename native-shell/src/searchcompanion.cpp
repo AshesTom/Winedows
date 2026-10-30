@@ -170,17 +170,35 @@ SearchCompanion::SearchCompanion(QWidget *parent)
     const QSettings settings(settingsPath(), QSettings::IniFormat);
     m_character = settings.value(QStringLiteral("searchCharacter"), true).toBool();
 
-    m_scroll = new QScrollArea(this);
+    // The panel: the step, which scrolls when it must, and its buttons, always in sight
+    m_panel = new Balloon(&m_body, this);
+    auto *panelLayout = new QVBoxLayout(m_panel);
+    // (Inside its rounded corners)
+    panelLayout->setContentsMargins(4, 6, 2, 0);
+    panelLayout->setSpacing(0);
+    m_scroll = new QScrollArea(m_panel);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setWidgetResizable(true);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_scroll->viewport()->setAutoFillBackground(false);
     m_scroll->setAutoFillBackground(false);
-    m_balloon = new Balloon(&m_body, m_scroll);
+    m_balloon = new QWidget(m_scroll);
+    QPalette panelColour = m_balloon->palette();
+    panelColour.setColor(QPalette::Window, m_body);
+    m_balloon->setPalette(panelColour);
+    m_balloon->setAutoFillBackground(true);
+    m_scroll->viewport()->setPalette(panelColour);
+    m_scroll->viewport()->setAutoFillBackground(true);
     m_content = new QVBoxLayout(m_balloon);
-    m_content->setContentsMargins(15, 14, 13, 13);
+    m_content->setContentsMargins(11, 8, 11, 6);
     m_content->setSpacing(0);
     m_scroll->setWidget(m_balloon);
+    panelLayout->addWidget(m_scroll, 1);
+    m_buttons = new QWidget(m_panel);
+    m_buttonRow = new QHBoxLayout(m_buttons);
+    m_buttonRow->setContentsMargins(15, 4, 13, 8);
+    m_buttonRow->setSpacing(6);
+    panelLayout->addWidget(m_buttons);
 
     m_agent = new AgentWidget(this);
     connect(m_agent, &AgentWidget::clicked, this, [this] { m_agent->play(QStringLiteral("ClickedOn")); });
@@ -198,10 +216,10 @@ void SearchCompanion::placeCharacter()
 {
     QRect room = balloonRect();
     // The panel is as tall as its step, up to what there is.
-    const int wanted = m_balloon->sizeHint().height();
+    const int wanted = m_balloon->sizeHint().height() + (m_buttons->isVisibleTo(m_panel) ? m_buttons->sizeHint().height() : 0);
     if (wanted > 0 && wanted < room.height())
         room.setHeight(wanted);
-    m_scroll->setGeometry(room);
+    m_panel->setGeometry(room);
     if (m_agent->isVisibleTo(this))
         m_agent->move((width() - m_agent->width()) / 2 - 20, height() - m_agent->height());
     update();
@@ -221,7 +239,7 @@ void SearchCompanion::paintEvent(QPaintEvent *)
     painter.fillRect(rect(), gradient);
     if (m_agent->isVisibleTo(this)) {
         // The panel's point, down to the character
-        const QRect panel = m_scroll->geometry();
+        const QRect panel = m_panel->geometry();
         QPainterPath tail;
         tail.moveTo(panel.left() + 12, panel.bottom() - 2);
         tail.lineTo(panel.left() + 32, panel.bottom() - 2);
@@ -294,6 +312,19 @@ std::optional<SearchCompanion::Node> SearchCompanion::loadStep(const QString &na
     return root;
 }
 
+// The row starts with what pushes its buttons to the right.
+void SearchCompanion::clearButtons()
+{
+    while (QLayoutItem *item = m_buttonRow->takeAt(0)) {
+        if (QWidget *widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
+        delete item;
+    }
+    m_buttonRow->addStretch(1);
+}
+
 void SearchCompanion::restart()
 {
     m_history.clear();
@@ -325,26 +356,19 @@ void SearchCompanion::showStep(const QString &name, bool remember)
     const bool form = name == QLatin1String("lclmm") || name == QLatin1String("lcldocs") || name == QLatin1String("lcladv") || name == QLatin1String("lclcomp");
     const bool web = name == QLatin1String("inetsrch") || name == QLatin1String("finish");
     const bool searching = name == QLatin1String("searching");
-    auto *row = new QWidget(m_balloon);
-    auto *buttons = new QHBoxLayout(row);
-    buttons->setContentsMargins(0, 8, 0, 0);
-    buttons->setSpacing(6);
-    buttons->addStretch(1);
+    clearButtons();
     if (!m_history.isEmpty() && !searching && name != QLatin1String("lclsrch") && name != QLatin1String("lclrfine")) {
-        auto *back = new QPushButton(srchString(STRING_BACK, "&Back"), row);
+        auto *back = new QPushButton(srchString(STRING_BACK, "&Back"), m_buttons);
         connect(back, &QPushButton::clicked, this, &SearchCompanion::goBack);
-        buttons->addWidget(back);
+        m_buttonRow->addWidget(back);
     }
     if (form || web) {
-        auto *search = new QPushButton(srchString(STRING_SEARCH, "Sea&rch"), row);
+        auto *search = new QPushButton(srchString(STRING_SEARCH, "Sea&rch"), m_buttons);
         search->setDefault(true);
         connect(search, &QPushButton::clicked, this, &SearchCompanion::submit);
-        buttons->addWidget(search);
+        m_buttonRow->addWidget(search);
     }
-    if (buttons->count() > 1)
-        m_content->addWidget(row);
-    else
-        delete row;
+    m_buttons->setVisible(m_buttonRow->count() > 1);
     m_content->addStretch(1);
 
     const QString animation = root->attributes.value(QStringLiteral("Animation"));
@@ -806,14 +830,11 @@ void SearchCompanion::submit()
     font.setBold(true);
     label->setFont(font);
     m_content->addWidget(label);
-    auto *row = new QWidget(m_balloon);
-    auto *buttons = new QHBoxLayout(row);
-    buttons->setContentsMargins(0, 8, 0, 0);
-    buttons->addStretch(1);
-    auto *stop = new QPushButton(srchString(STRING_STOP, "&Stop"), row);
+    clearButtons();
+    auto *stop = new QPushButton(srchString(STRING_STOP, "&Stop"), m_buttons);
     connect(stop, &QPushButton::clicked, this, &SearchCompanion::stopSearch);
-    buttons->addWidget(stop);
-    m_content->addWidget(row);
+    m_buttonRow->addWidget(stop);
+    m_buttons->setVisible(true);
     m_content->addStretch(1);
     m_titleOverride.clear();
     m_agent->play(m_query.byType && m_query.step == QLatin1String("lclmm") ? QStringLiteral("ImageSearching") : QStringLiteral("Searching"));

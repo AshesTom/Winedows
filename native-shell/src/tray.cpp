@@ -41,9 +41,11 @@ void Tray::directoryChanged()
     const QList<QByteArray> keys = readFile(m_ipc.filePath(QStringLiteral("shellkeys.tsv"))).trimmed().split(' ');
     if (const int serial = keys.value(0).toInt(); serial > m_shellKeys) {
         m_shellKeys = serial;
-        // Win+R and the like belong to XP's hotkeys, which have no native code yet.
         if (keys.size() == 2)
             Q_EMIT startRequested();
+        else if (keys.value(1) == "windows")
+            for (int i = 2; i < keys.size(); ++i)
+                Q_EMIT hotkey(keys[i].toInt(nullptr, 16));
     }
     read();
     showMenus();

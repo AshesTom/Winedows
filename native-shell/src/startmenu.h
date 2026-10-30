@@ -44,6 +44,9 @@ private:
     int m_hot = -1;
 };
 
+// XP's Run dialog
+void showRunDialog();
+
 class StartPanel : public QWidget
 {
     Q_OBJECT

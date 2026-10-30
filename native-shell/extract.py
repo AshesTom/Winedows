@@ -47,6 +47,10 @@ ICON_FILES = {
     'browseui.dll': 'system32', 'blue_ss.dll': 'themes/Luna/Shell/NormalColor', 'home_ss.dll': 'themes/Luna/Shell/Homestead',
     'metal_ss.dll': 'themes/Luna/Shell/Metallic', 'timedate.cpl': 'cpl', 'mmsys.cpl': 'cpl', 'sysdm.cpl': 'cpl',
     'nusrmgr.cpl': 'cpl', 'appwiz.cpl': 'cpl', 'ncpa.cpl': 'cpl',
+    # XP's Welcome, log off and Turn Off screens (greeter/welcome.py)
+    'logonui.exe': 'system32', 'msgina.dll': 'system32', 'winlogon.exe': 'system32', 'msgothic.ttc': 'fonts',
+    # System Properties' other pages
+    'netid.dll': 'cpl', 'wuaucpl.cpl': 'cpl', 'remotepg.dll': 'cpl',
     # The Search Companion: its icons and words, its steps, and its character
     'srchui.dll': 'srchasst', 'rover.acs': 'srchasst/chars',
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
@@ -141,10 +145,36 @@ def wallpapers(text):
     return found
 
 
+def sounds(text):
+    """{name on the media: its name in %windir%\\Media} from LAYOUT.INF: directory 26."""
+    strings, files, section = {}, {}, None
+    for raw in text.splitlines():
+        line = raw.split(';', 1)[0].strip()
+        if line.startswith('['):
+            section = line.strip('[]').lower()
+        elif section == 'strings' and '=' in line:
+            key, value = line.split('=', 1)
+            strings[key.strip().lower()] = value.strip().strip('"')
+        elif section and section.startswith('sourcedisksfiles') and '=' in line:
+            name, value = (part.strip() for part in line.split('=', 1))
+            fields = [f.strip() for f in value.split(',')]
+            if name.lower().endswith('.wav') and len(fields) > 7 and fields[7] == '26':
+                files[name.lower()] = fields[10] if len(fields) > 10 else ''
+    return {name: strings.get(rename.strip('%').lower(), name) if rename.startswith('%') else (rename or name)
+            for name, rename in files.items()}
+
+
 def extract(source, output):
     iso = Iso9660(source)
     wanted = {}
     media = list(iso.walk())
+    layout = next(((n, s, z) for n, s, z in media if n in ('layout.inf', 'layout.in_')), None)
+    if layout:
+        named = sounds(unpack(layout[0], iso.read(layout[1], layout[2])).decode('latin-1'))
+        for name, sector, size in media:
+            for stem, target in named.items():
+                if name in (stem, compressed(stem)):
+                    copy_file(iso, name, sector, size, output / 'media' / target)
     listing = next(((n, s, z) for n, s, z in media if n in (WALLPAPER_LIST, compressed(WALLPAPER_LIST))), None)
     if listing:
         shown = wallpapers(unpack(listing[0], iso.read(listing[1], listing[2])).decode('latin-1'))

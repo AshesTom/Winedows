@@ -188,6 +188,10 @@ native)
         [[ $source != -- ]] || { echo "The first time, give the XP ISO: $0 native /path/to/the.iso" >&2; exit 2; }
         python3 "$root/native-shell/extract.py" "$source" "$local/native-assets"
     fi
+    # Files that later versions read too: with the ISO at hand, take them.
+    if [[ ! -e $local/native-assets/system32/logonui.exe && $source != -- ]]; then
+        python3 "$root/native-shell/extract.py" "$source" "$local/native-assets"
+    fi
     "$root/native-shell/build.sh" | tail -n 1
     for n in $(seq 5 99); do
         [[ -e /tmp/.X11-unix/X$n || -e /tmp/.X$n-lock ]] || { display=:$n; break; }
@@ -206,7 +210,7 @@ native)
     done
     # Turn Off Computer ends this window's session, never the machine.
     env -u WAYLAND_DISPLAY -u WIN4WINE_IPC -u SESSION_MANAGER -u DBUS_SESSION_BUS_ADDRESS \
-        WIN4WINE_DESKTOP_BUS="${DBUS_SESSION_BUS_ADDRESS:-}" \
+        WIN4WINE_DESKTOP_BUS="${DBUS_SESSION_BUS_ADDRESS:-}" WIN4WINE_NATIVE_WELCOME=1 \
         DISPLAY="$display" GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb XDG_SESSION_TYPE=x11 WIN4WINE_POWER=0 \
         "$root/native-shell/session.sh"
     ;;

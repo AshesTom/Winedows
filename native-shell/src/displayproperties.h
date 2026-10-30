@@ -12,7 +12,7 @@
 class QComboBox;
 class QListWidget;
 class QPushButton;
-class QTabWidget;
+namespace xpdialog { class SheetTabs; }
 class QSlider;
 class QSpinBox;
 class QLabel;
@@ -86,7 +86,7 @@ private:
 
     LookChoice m_choice;
     bool m_filling = false;
-    QTabWidget *m_tabs = nullptr;
+    xpdialog::SheetTabs *m_tabs = nullptr;
     QPushButton *m_apply = nullptr;
     QComboBox *m_theme = nullptr, *m_style = nullptr, *m_colour = nullptr, *m_size = nullptr, *m_position = nullptr;
     QListWidget *m_wallpapers = nullptr;

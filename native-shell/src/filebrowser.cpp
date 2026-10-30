@@ -6,6 +6,7 @@
 #include "fileops.h"
 #include "programs.h"
 #include "searchcompanion.h"
+#include "sounds.h"
 #include "taskpane.h"
 #include "theme.h"
 #include "xpfiles.h"
@@ -1372,6 +1373,8 @@ void FileBrowser::navigate(const QString &location, bool remember)
     if (remember && target != m_location && !m_location.isEmpty()) {
         m_back.append(m_location);
         m_forward.clear();
+        // XP's click on going somewhere
+        sounds::play(QStringLiteral("Windows XP Start.wav"));
     }
     m_searchTimer->stop();
     m_location = target;
