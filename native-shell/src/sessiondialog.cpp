@@ -232,6 +232,33 @@ Choice askTurnOff(bool canStandBy)
     return dialog.choice();
 }
 
+QWidget *showPleaseWait(const QString &text)
+{
+    if (!msgina())
+        return nullptr;
+    const QImage picture = xpfiles::bitmap(*msgina(), BITMAP_BACKGROUND);
+    if (picture.isNull())
+        return nullptr;
+    QPixmap shown(picture.size());
+    {
+        QPainter painter(&shown);
+        painter.drawImage(0, 0, picture);
+        painter.setPen(Qt::black);
+        painter.drawRect(0, 0, shown.width() - 1, shown.height() - 1);
+        painter.setFont(xpfiles::themeFont(QStringLiteral("Franklin Gothic Medium, %1").arg(msginaString(STRING_TITLE_SIZE, "14")), 96));
+        painter.setPen(Qt::white);
+        painter.drawText(shown.rect(), Qt::AlignCenter | Qt::TextSingleLine, text);
+    }
+    auto *label = new QLabel(nullptr, Qt::FramelessWindowHint | Qt::X11BypassWindowManagerHint | Qt::WindowStaysOnTopHint);
+    label->setPixmap(shown);
+    label->setFixedSize(shown.size());
+    const QRect screen = QGuiApplication::primaryScreen()->geometry();
+    // Where the Turn Off dialog stands: one third down
+    label->move((screen.width() - shown.width()) / 2, (screen.height() - shown.height()) / 3);
+    label->show();
+    return label;
+}
+
 bool askLogOff()
 {
     QDialog dialog;

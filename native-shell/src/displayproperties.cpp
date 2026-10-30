@@ -5,6 +5,7 @@
 #include "frames.h"
 #include "x11.h"
 #include "session.h"
+#include "sessiondialog.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
@@ -37,6 +38,8 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include <memory>
+
 #include <xcb/xcb.h>
 
 namespace {
@@ -46,7 +49,6 @@ const int DIALOG_THEMES = 1000, DIALOG_APPEARANCE = 1001;
 const int THEME_COMBO = 1101, THEME_SAVE = 1107, THEME_DELETE = 1108, THEME_PREVIEW = 1103;
 const int APPEARANCE_PREVIEW = 1110, APPEARANCE_STYLE = 1111, APPEARANCE_COLOUR = 1114, APPEARANCE_SIZE = 1116, APPEARANCE_ADVANCED = 1117, APPEARANCE_EFFECTS = 1118;
 const int STRING_PLEASE_WAIT = 2050, PLEASE_WAIT_MS = 700;
-const QSize PLEASE_WAIT_SIZE(220, 70);
 const int STRING_BROWSE = 2010, STRING_NOT_A_THEME = 3006, STRING_DELETE_ERROR = 3010;
 const int STRING_WINDOWS_CLASSIC = 2016, STRING_WINDOWS_XP = 2017, STRING_CLASSIC_STYLE = 2003, STRING_NORMAL = 2019, STRING_NONE = 2022, STRING_CURRENT = 2004;
 const int BITMAP_MONITOR = 126, BITMAP_COLOURS = 125, BITMAP_ENERGY = 122;
@@ -1041,15 +1043,10 @@ void DisplayProperties::apply()
     // A new visual style takes a moment: XP says so meanwhile.
     const LookChoice before = ShellTheme::instance()->choice();
     const bool newStyle = before.style != m_choice.style || before.colour != m_choice.colour || before.size != m_choice.size;
-    QDialog wait(this);
+    std::unique_ptr<QWidget> wait;
     if (newStyle) {
-        wait.setWindowTitle(text(STRING_PLEASE_WAIT, "Please Wait"));
-        auto *layout = new QVBoxLayout(&wait);
-        layout->setContentsMargins(24, 16, 24, 16);
-        layout->addWidget(new QLabel(tr("Please wait..."), &wait), 0, Qt::AlignCenter);
-        wait.setFixedSize(PLEASE_WAIT_SIZE);
-        wait.show();
-        // Its frame comes from the window manager, through this event loop.
+        wait.reset(sessiondialog::showPleaseWait(text(STRING_PLEASE_WAIT, "Please Wait")));
+        // Painted before the new style takes the time it takes
         QElapsedTimer shown;
         shown.start();
         while (shown.elapsed() < PLEASE_WAIT_MS)
@@ -1057,7 +1054,5 @@ void DisplayProperties::apply()
     }
     ShellTheme::write(m_choice);
     applyLinuxLook();
-    if (newStyle)
-        wait.close();
     m_apply->setEnabled(false);
 }
