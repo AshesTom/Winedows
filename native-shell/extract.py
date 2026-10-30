@@ -47,6 +47,10 @@ ICON_FILES = {
     'browseui.dll': 'system32', 'blue_ss.dll': 'themes/Luna/Shell/NormalColor', 'home_ss.dll': 'themes/Luna/Shell/Homestead',
     'metal_ss.dll': 'themes/Luna/Shell/Metallic', 'timedate.cpl': 'cpl', 'mmsys.cpl': 'cpl', 'sysdm.cpl': 'cpl',
     'nusrmgr.cpl': 'cpl', 'appwiz.cpl': 'cpl', 'ncpa.cpl': 'cpl',
+    # The Search Companion: its icons and words, its steps, and its character
+    'srchui.dll': 'srchasst', 'rover.acs': 'srchasst/chars',
+    **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
+                     'lcldocs.xml', 'lclmm.xml', 'lclmode.xml', 'lclrfine.xml', 'lclsrch.xml'), 'srchasst/mui'),
 }
 # The wallpapers' setup list, which has their names as XP shows them.
 WALLPAPER_LIST = 'shl_img.inf'

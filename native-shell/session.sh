@@ -85,6 +85,8 @@ if [[ -e $styles/styles/libwin4wine-xp.so ]]; then
     export QT_PLUGIN_PATH=$styles${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
     export QML_IMPORT_PATH=$styles/qml${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}
     export QT_STYLE_OVERRIDE=Win4WineXP QT_QPA_PLATFORMTHEME=gtk3
+    # Tahoma hinted as Windows hints it, as the shell does
+    export FREETYPE_PROPERTIES=truetype:interpreter-version=35
 fi
 # What asks for the administrator's rights (Date and Time, for one): a desktop's own agent, whichever is installed.
 if [[ ${1:-} != --inside ]]; then

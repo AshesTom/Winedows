@@ -4,6 +4,7 @@
 #include "filebrowser.h"
 #include "session.h"
 
+#include <QXmlStreamReader>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -183,12 +184,52 @@ QList<Program> mostUsed(int count)
     });
     QList<Program> out;
     const QHash<QString, QString> files = entryFiles();
-    for (const QString &id : std::as_const(ids)) {
-        if (out.size() >= count)
-            break;
-        if (const auto program = readEntry(files.value(id)))
-            out.append(*program);
+    const auto add = [&](const std::optional<Program> &program) {
+        if (!program || out.size() >= count)
+            return;
+        for (const Program &already : std::as_const(out))
+            if (already.id == program->id)
+                return;
+        out.append(*program);
+    };
+    for (const QString &id : std::as_const(ids))
+        add(readEntry(files.value(id)));
+    if (out.size() >= count)
+        return out;
+
+    // Programs by the name they run as
+    QHash<QString, Program> byCommand;
+    for (const QString &file : files) {
+        const auto program = readEntry(file);
+        if (program && !program->command.isEmpty())
+            byCommand.insert(QFileInfo(program->command.first()).fileName(), *program);
     }
+    // What the desktop saw used lately, most recent first: its list of recent files says with what
+    QList<QPair<QString, QString>> recent;
+    QFile list(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/recently-used.xbel"));
+    if (list.open(QIODevice::ReadOnly)) {
+        QXmlStreamReader xml(&list);
+        while (!xml.atEnd()) {
+            xml.readNext();
+            if (xml.isStartElement() && xml.qualifiedName() == QLatin1String("bookmark:application")) {
+                const QString exec = xml.attributes().value(QLatin1String("exec")).toString().remove(QLatin1Char(0x27));
+                recent.append({xml.attributes().value(QLatin1String("modified")).toString(), QFileInfo(exec.section(QLatin1Char(0x20), 0, 0)).fileName()});
+            }
+        }
+    }
+    std::sort(recent.begin(), recent.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+    for (const auto &entry : std::as_const(recent))
+        if (const auto found = byCommand.constFind(entry.second); found != byCommand.constEnd())
+            add(*found);
+    // A new account: the everyday programs that are installed, as XP starts with its own
+    for (const char *name : {"konsole", "gnome-terminal", "xfce4-terminal", "lxterminal", "kate", "gedit", "gnome-text-editor", "mousepad", "dolphin", "nautilus", "thunar", "kcalc", "gnome-calculator", "galculator", "gwenview", "vlc", "xterm"})
+        if (const auto found = byCommand.constFind(QLatin1String(name)); found != byCommand.constEnd())
+            add(*found);
+    // Still room: the rest, by name, so that the column is full as XP's is
+    QList<Program> rest = byCommand.values();
+    std::sort(rest.begin(), rest.end(), [](const Program &a, const Program &b) { return a.name.compare(b.name, Qt::CaseInsensitive) < 0; });
+    for (const Program &program : std::as_const(rest))
+        add(program);
     return out;
 }
 

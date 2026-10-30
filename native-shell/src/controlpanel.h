@@ -13,7 +13,7 @@
 
 namespace controlpanel {
 
-enum CategoryId { Appearance, Network, Programs, Sounds, Performance, Hardware, Users, DateTime };
+enum CategoryId { Appearance, Network, Programs, Sounds, Performance, Hardware, Users, DateTime, Accessibility };
 
 struct Applet
 {
@@ -56,7 +56,7 @@ protected:
     bool event(QEvent *event) override;
 
 private:
-    struct Entry { QRect rect; QString text, description; QIcon icon; int category = -1; std::function<void()> action; };
+    struct Entry { QRect rect; QString text, description; QIcon icon; int iconSize = 0, category = -1; std::function<void()> action; };
     void loadStyle();
     void rebuild();
     int entryAt(QPoint at) const;
@@ -68,5 +68,30 @@ private:
 
     // From the shell style's resources
     QColor m_background, m_separatorTop, m_separatorBottom, m_headerLeft, m_headerRight, m_directive, m_link;
-    QImage m_listWatermark, m_categoryWatermark, m_bullet;
+    QImage m_watermark, m_bullet;
+};
+
+// What XP shows instead of a drive's or a system folder's files, by shell32.dll's
+// UIFILE 3 and the shell style's UIFILE 1: "These files are hidden."
+class SystemFolderWarning : public QWidget
+{
+    Q_OBJECT
+public:
+    SystemFolderWarning(std::function<void()> showContents, QWidget *parent);
+    void setDrive(bool drive);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+
+private:
+    void loadStyle();
+    QRect linkRect() const;
+
+    std::function<void()> m_showContents;
+    bool m_drive = true, m_hot = false;
+    QColor m_background, m_accentTop, m_accentBottom, m_title;
+    QImage m_watermark;
 };

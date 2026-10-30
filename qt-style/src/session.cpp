@@ -120,6 +120,15 @@ QByteArray binaryValue(const Registry &reg, const QString &key, const QString &n
 }
 
 // A LOGFONTW (92 bytes) as a Qt font, its height taken at the prefix's DPI.
+// Up to 16 pixels, XP's Standard smoothing does not smooth: whole pixels, hinted as Windows hints.
+static void drawnAsXpDoes(QFont *font, double pixels)
+{
+    if (qRound(pixels) <= 16) {
+        font->setHintingPreference(QFont::PreferFullHinting);
+        font->setStyleStrategy(QFont::NoAntialias);
+    }
+}
+
 std::optional<QFont> logFont(const QByteArray &data, int dpi)
 {
     if (data.size() < 92)
@@ -135,6 +144,7 @@ std::optional<QFont> logFont(const QByteArray &data, int dpi)
     // Negative: the character height in pixels; positive: the cell height.
     const double pixels = height < 0 ? -height : height * 0.85;
     font.setPointSizeF(pixels * 72.0 / dpi);
+    drawnAsXpDoes(&font, pixels);
     if (weight > 0)
         font.setWeight(QFont::Weight(qBound(1, int(weight), 1000)));
     font.setItalic(italic);
@@ -208,6 +218,7 @@ void readNativeLook(Look *look)
     }
     QFont message(QStringLiteral("Tahoma"));
     message.setPointSizeF(8);
+    drawnAsXpDoes(&message, 8 * look->dpi / 72.0);
     look->messageFont = look->menuFont = look->statusFont = message;
     look->haveFonts = true;
     const QStringList rgb = values.value(QStringLiteral("background")).split(QLatin1Char(' '), Qt::SkipEmptyParts);

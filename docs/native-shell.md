@@ -13,23 +13,23 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 | Wallpaper | Bliss stretched by default, or what Display Properties chose, followed live; the background colour; each monitor |
 | Desktop icons | Recycle Bin (empty or full) in XP's lower right corner and the Desktop folder's files in XP's grid. Select, double-click, drag to place (remembered), rename, send to the trash, Arrange Icons |
 | Taskbar | Luna or Classic: a button per window (normal, hot, active in bold, flashing), minimize by clicking the active button, a window menu, its strut |
-| Start menu | XP's two columns from the style's StartPanel parts: the user's picture and name, the default browser and mail, the most used programs, the places, All Programs and My Recent Documents with their cascades, Log Off and Turn Off Computer |
-| Folder windows | The menus, the toolbar from shell32's pictures, the address bar and Go, the Common Tasks pane from the shell style's art in each colour scheme, the Folders tree, a search, and Thumbnails, Tiles, Icons, List and Details |
+| Start menu | XP's two columns from the style's StartPanel parts: the user's picture and name, the default browser and mail, the six recent programs (those started here, then those the desktop's recent files name, then everyday ones and the rest for a new account), a line, the places, All Programs and My Recent Documents with their cascades, Log Off and Turn Off Computer |
+| Folder windows | The menus, the toolbar from shell32's pictures, the address bar and Go, the Common Tasks pane from the shell style's art in each colour scheme, the Folders tree under the Desktop, the Search Companion, Favorites, web pages (with Qt WebEngine, otherwise in the desktop's browser), XP's warning on system folders, and Thumbnails, Tiles, Icons, List and Details |
 | File operations | Copy, cut and paste (with the desktop's other file managers), Move To and Copy To, drag and drop, a thread with a progress window and XP's replace question, the Recycle Bin with Restore and Empty, Delete and Shift+Delete, rename, new folder, new text document, Properties with the size counted and the drive's pie |
 | Virtual folders | My Computer (with its groups and the drives' free space), the Recycle Bin, Control Panel, search results |
 | Control Panel | Category view and Classic view, with XP's own names and icons. Display, Folder Options, Fonts, Network Connections, Add or Remove Programs (a list), Sounds and Audio Devices, System, Mouse, Keyboard, Printers, User Accounts, Date and Time |
 | Title bars | XP's frames for Linux windows, without Wine: caption, active and inactive, the three buttons, the system menu, moving and sizing from every edge, maximizing as XP does (the borders off the screen), rounded corners as the window's shape |
-| Display Properties | Themes (Windows XP, Windows Classic), Desktop (wallpaper, position, colour), Appearance (visual style, colour scheme, font size) and Linux Programs (the Qt and GTK style, the icon theme), with previews. Apply changes everything at once, open programs included |
+| Display Properties | XP's tabs from `themeui.dll`'s dialogs: Themes (Windows XP, Windows Classic, and those imported by Browse... from a `.theme` or a `.msstyles`, which Delete removes: the style and its `Shell` folder are copied to `~/.local/share/win4wine/themes`, and only their resources are read), Desktop (wallpaper, position, colour), Screen Saver (the X server's blanking), Appearance (visual style, colour scheme, font size), Settings (the size, through `xrandr` when it is there), and Linux (the Qt and GTK style, the icon theme), with previews. Apply changes everything at once, open programs included. Save As, Customize Desktop, Effects and Advanced are greyed, and the title bar has no Help button |
 | Qt and GTK programs | Drawn with the current theme by `qt-style/`, from the same choices, with XP's fonts |
 | XP's icons | `session/icon_theme.py` makes the `win4wine-xp-icons` theme from the user's files the first time; it is the session's default for Qt and GTK programs too |
 | Clock | The locale's short time, the date as its tooltip; wakes once a minute |
 | Notification area | Linux tray icons from `bridge-wm/tray.py`'s files, left click, right click and their menus |
 | Windows key, Ctrl+Esc | Open the Start menu; Win+R and the other hotkeys do nothing yet |
 
-Not ported yet: XP's zip folders, Send To, shortcuts (`.lnk`), network places, Back's use of the tree for virtual
-folders (the Folders tree shows the file system from `/`, without XP's Desktop at its root), Help and the Start
-menu's Search (shown disabled, as is Printers and Faxes without `system-config-printer`), the Start menu's keyboard
-navigation, grouping of similar taskbar buttons (they shrink to
+Not ported yet: XP's zip folders, Send To, shortcuts (`.lnk`), network places, Help (shown disabled, as is Printers
+and Faxes without `system-config-printer`), the Accessibility Options applets (the category is there, empty), the
+Search Companion's sounds, its other characters and its balloon mode, Map Network Drive and Synchronize (greyed), the
+Start menu's keyboard navigation, grouping of similar taskbar buttons (they shrink to
 40 pixels, then those that do not fit are not shown), Quick Launch, the Screen Saver and Settings pages, the
 menus' drop shadows, XP's own tray icons (`xptray.exe`), the taskbar's menu. Strings that XP's files do not give
 (the desktop's menus, the Linux Programs page) are in English.
@@ -64,14 +64,29 @@ It is what `shell32.dll`'s UIFILE 4 lays out and the shell style's UIFILE 2 (`bl
 | Element | Value in the blue style |
 |---|---|
 | The view | `rgb(99,117,214)`, a white line at the bottom, on its left a one-pixel gradient `rgb(148,187,255)` to `rgb(99,117,214)` |
-| Watermark, in the lower right corner | Bitmap 25 for the categories, 26 inside a category |
-| Directive ("Pick a category") | Franklin Gothic Medium, 21 pt, bold, `rgb(214,223,245)`; 30 px above it, inside the container's padding of 20 |
-| Links | Tahoma 8 bold, white, underlined under the pointer; margin 12, a 32-pixel icon, 5 before the text; two columns |
+| Watermark, in the lower right corner | Bitmap 26, the Control Panel's own picture |
+| Directive ("Pick a category") | Franklin Gothic Medium, 21 pt, `rgb(214,223,245)`, in GDI's made-up bold (drawn twice a pixel apart, each letter a pixel wider); at the top of the container's padding of 20, 30 px above a second one |
+| Links | Tahoma 8 bold, white, underlined under the pointer; 12 between items, none at the container's edge, 1 of padding, 5 before the text |
+| Icons | 48 pixels for a category (five rows, the first column first), 32 for an applet, 16 for a task |
 | A category's banner | 35 tall, gradient `rgb(51,102,204)` to `rgb(99,117,214)`, title at 50, its icon at (10, 7) over the edge |
 
 A category is an address of its own (`::controlpanel/N`), so Back and Up work. Its tasks are shell32's words, for the
 tasks that do something here; Add or Remove Programs goes straight to its applet, as on XP. Under Windows Classic
 the view takes the system colours.
+
+## The warning on system folders
+
+`/` (XP's system drive) and `/usr`, `/etc`, `/boot` and `/opt` (XP's Windows and Program Files) first show "These files
+are hidden.", as `shell32.dll`'s UIFILE 3 lays it out and the shell style's UIFILE 1 draws it, over bitmap 25, the
+computer. Showing the contents is remembered for each folder, and the pane's System Tasks can hide them again.
+
+## The Search Companion
+
+Its steps are the `.xml` files of XP's `srchasst` folder, built into widgets at run time; the icons and the buttons'
+words come from `srchui.dll`. A web search opens Bing in the folder window; `inetpref.xml`'s dead engines are left out
+of the choice. `acs.cpp` plays the character from the user's own `rover.acs`, which `extract.py` takes from the media:
+nothing of it is in this repository, and without the file the bar simply has no character. An extraction from before
+this needs running again (`./xp.sh native /path/to/WindowsXPSP3.iso`).
 
 ## The Control Panel's applets
 

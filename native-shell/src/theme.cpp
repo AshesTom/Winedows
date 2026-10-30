@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "theme.h"
 
+#include <QDirIterator>
+
 #include "ipcfile.h"
 #include "session.h"
 #include "xpfiles.h"
@@ -53,6 +55,27 @@ ShellTheme::ShellTheme()
         reload();
         Q_EMIT changed();
     });
+}
+
+QString ShellTheme::shellStylePath(const LookChoice &look)
+{
+    if (look.style.isEmpty())
+        return QString();
+    // Beside a style that is not Luna: Shell\\NormalColor\\shellstyle.dll
+    if (look.style != lunaPath()) {
+        QDirIterator it(QFileInfo(look.style).absolutePath() + QStringLiteral("/Shell"), {QStringLiteral("shellstyle.dll")}, QDir::Files, QDirIterator::Subdirectories);
+        QString any;
+        while (it.hasNext()) {
+            const QString path = it.next();
+            if (QFileInfo(path).dir().dirName().compare(look.colour, Qt::CaseInsensitive) == 0)
+                return path;
+            any = path;
+        }
+        if (!any.isEmpty())
+            return any;
+    }
+    return xpfiles::find(look.colour == QLatin1String("Metallic") ? QStringLiteral("metal_ss.dll")
+                         : look.colour == QLatin1String("HomeStead") ? QStringLiteral("home_ss.dll") : QStringLiteral("blue_ss.dll"));
 }
 
 QString ShellTheme::lunaPath()

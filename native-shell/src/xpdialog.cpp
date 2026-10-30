@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "xpdialog.h"
 
+#include "xpfiles.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QSlider>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QtEndian>
@@ -112,12 +116,25 @@ Page build(const w4w::PeResources &pe, int id, QWidget *parent)
         } else if (ordinal == 0x82 || className.compare(QLatin1String("Static"), Qt::CaseInsensitive) == 0) {
             auto *label = new QLabel(text, parent);
             label->setWordWrap(true);
-            label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+            label->setAlignment(controlStyle & 1 ? Qt::AlignHCenter | Qt::AlignTop : Qt::AlignLeft | Qt::AlignTop);
+            // A picture of the file, by its number: SS_BITMAP or SS_ICON
+            const int kind = controlStyle & 0x1f;
+            if (titleOrdinal && (kind == 0x0e || kind == 0x03)) {
+                QImage image = kind == 0x0e ? xpfiles::bitmap(pe, titleOrdinal) : xpfiles::icon(pe, titleOrdinal, 32);
+                if (!image.isNull())
+                    label->setPixmap(QPixmap::fromImage(image));
+            }
             widget = label;
         } else if (ordinal == 0x85 || className.compare(QLatin1String("ComboBox"), Qt::CaseInsensitive) == 0) {
             auto *combo = new QComboBox(parent);
             // A combo's height is its list's in the resource.
             widget = combo;
+        } else if (ordinal == 0x81 || className.compare(QLatin1String("Edit"), Qt::CaseInsensitive) == 0) {
+            widget = new QLineEdit(text, parent);
+        } else if (className.compare(QLatin1String("msctls_trackbar32"), Qt::CaseInsensitive) == 0) {
+            auto *slider = new QSlider(Qt::Horizontal, parent);
+            slider->setTickPosition(QSlider::TicksBelow);
+            widget = slider;
         } else {
             widget = new QWidget(parent);
         }

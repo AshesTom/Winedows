@@ -12,6 +12,7 @@
 #include <QPointer>
 #include <QStringList>
 #include <functional>
+#include <memory>
 
 class QAction;
 class QActionGroup;
@@ -28,13 +29,20 @@ class QStandardItem;
 class QTimer;
 class QToolButton;
 class QTreeView;
+class QTreeWidget;
+class QTreeWidgetItem;
+class QWebEngineView;
+class SearchCompanion;
+struct SearchQuery;
 class FolderModel;
 class TaskPane;
 class ControlPanelCategories;
+class SystemFolderWarning;
 
 // Addresses of the virtual folders
 namespace places {
 extern const QString Computer, RecycleBin, ControlPanel, Search;
+bool isWeb(const QString &location);
 QString title(const QString &location);
 QIcon icon(const QString &location);
 }
@@ -86,9 +94,18 @@ private:
     void deleteSelected(bool permanent);
     void showProperties();
     void moveOrCopyTo(bool move);
-    void startSearch();
+    void startSearch(const SearchQuery &query);
     void continueSearch();
+    void finishSearch();
+    void showSearchBar(bool shown);
+    void showWebPage(const QString &address);
+    void searchTheWeb(const QString &text, const QString &engine);
+    void fillTreeItem(QTreeWidgetItem *item);
+    void selectInTree(const QString &location);
+    QMenu *buildFavoritesMenu();
     void reloadSettings();
+    bool blocked() const;
+    void setSystemFolderShown(bool shown);
     void renamePending();
 
     QString m_location;
@@ -100,13 +117,18 @@ private:
 
     QFileSystemModel *m_files = nullptr;
     FolderModel *m_model = nullptr;
-    QFileSystemModel *m_treeFiles = nullptr;
     QStandardItemModel *m_virtual = nullptr;
     QStackedWidget *m_pages = nullptr, *m_left = nullptr;
     QListView *m_list = nullptr, *m_virtualList = nullptr;
-    QTreeView *m_details = nullptr, *m_tree = nullptr;
+    QTreeView *m_details = nullptr, *m_results = nullptr;
+    QTreeWidget *m_tree = nullptr;
+    QStandardItemModel *m_resultsModel = nullptr;
+    SearchCompanion *m_searchCompanion = nullptr;
+    QWebEngineView *m_web = nullptr;
+    QMenu *m_toolbarsMenu = nullptr;
     QWidget *m_categoryPage = nullptr;
     QScrollArea *m_categoryArea = nullptr;
+    SystemFolderWarning *m_warning = nullptr;
     QSplitter *m_splitter = nullptr;
     TaskPane *m_pane = nullptr;
     QScrollArea *m_paneArea = nullptr;
@@ -117,10 +139,10 @@ private:
     QAction *m_statusAction = nullptr, *m_newTextAction = nullptr;
     QActionGroup *m_viewGroup = nullptr;
     QMenu *m_viewsMenu = nullptr;
-    QLineEdit *m_searchName = nullptr;
 
     // A running search: the folders left to read
     QStringList m_searchPending;
-    QString m_searchText;
+    std::shared_ptr<SearchQuery> m_query;
+    int m_searchFound = 0;
     QTimer *m_searchTimer = nullptr;
 };

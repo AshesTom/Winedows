@@ -166,8 +166,8 @@ Winedows を Linux そのものに移植しています。`native-shell/` は XP
 いずれ **Wine を完全に置き換えます**。XP のコードは実行しません。お手元の XP のファイルからは資源（ビジュアルスタイルの画像、文字列、アイコン、
 ダイアログ、フォント、壁紙）だけを実行時に読みます。
 
-デスクトップとそのアイコン、タスクバー、スタートメニュー、XP の窓の枠、画面のプロパティ（テーマの切り替えがその場で反映され、Qt と GTK のアプリにも効きます）、
-ファイル操作のできるフォルダウィンドウ、コントロールパネルがすでにあります。XP の多くの部分はまだなく、試したのも CachyOS の上のウィンドウの中だけなので、
+デスクトップとそのアイコン、タスクバー、スタートメニュー、XP の窓の枠、画面のプロパティ（テーマの切り替えがその場で反映され、Qt と GTK のアプリにも効きます。自分のテーマも取り込めます）、
+ファイル操作のできるフォルダウィンドウ、アニメーションキャラクターと Bing での Web 検索付きの検索コンパニオン、コントロールパネルがすでにあります。XP の多くの部分はまだなく、試したのも CachyOS の上のウィンドウの中だけなので、
 **まだ Wine のセッションの代わりにはなりません**。今のデスクトップのウィンドウの中で、Wine も prefix もなしで試せます。
 
 ```sh
@@ -175,6 +175,36 @@ Winedows を Linux そのものに移植しています。`native-shell/` は XP
 ```
 
 動くものと残っているもの: [docs/native-shell.md](../../docs/native-shell.md)（英語）
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="../../docs/images/screenshot.png" alt="通常モード: Wine の上で動く XP の explorer.exe と、Linux と Windows のアプリ" width="400" /><br />
+      <strong>通常モード</strong>: Wine の上で動く XP の <code>explorer.exe</code>
+    </td>
+    <td align="center" width="50%">
+      <img src="../../docs/images/native-session-en.png" alt="ネイティブモード: Wine なしのスタートメニュー、フォルダウィンドウ、コントロールパネル" width="400" /><br />
+      <strong>ネイティブモード</strong>: Wine を使わない Linux のプログラム（画面は英語版の XP のファイルから）
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="../../docs/images/native-explorer-en.png" alt="ネイティブモードのエクスプローラ: マイドキュメントと共通タスク" width="270" /><br />
+      エクスプローラ
+    </td>
+    <td align="center" width="33%">
+      <img src="../../docs/images/native-control-panel-en.png" alt="ネイティブモードのコントロールパネルのカテゴリ表示" width="270" /><br />
+      コントロールパネル
+    </td>
+    <td align="center" width="33%">
+      <img src="../../docs/images/native-start-menu-en.png" alt="ネイティブモードのスタートメニューとすべてのプログラム" width="270" /><br />
+      スタートメニュー
+    </td>
+  </tr>
+</table>
 
 ## 仕組み
 

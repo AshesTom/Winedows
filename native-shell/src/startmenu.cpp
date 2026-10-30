@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "startmenu.h"
 
+#include "filebrowser.h"
+
 #include "programs.h"
 #include "theme.h"
 #include "xpfiles.h"
 
+#include <algorithm>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -40,8 +43,10 @@ const int ICON_CONTROL_PANEL = 22, ICON_PRINTERS = 138, ICON_HELP = 24, ICON_SEA
 const int ICON_LOG_OFF = 45, ICON_TURN_OFF = 28, ICON_PROGRAMS = 20, ICON_DOCUMENT = 1;
 
 // The Start panel at 96 DPI, from the style's DefaultPaneSize and XP's menu
-const int PANEL_WIDTH = 380, COLUMN = 190, USER_HEIGHT = 64, LOGOFF_HEIGHT = 40, MORE_HEIGHT = 30, BODY_MIN = 336;
+const int PANEL_WIDTH = 380, COLUMN = 190, USER_HEIGHT = 64, LOGOFF_HEIGHT = 40, MORE_HEIGHT = 30, MORE_GAP = 6, BODY_MIN = 336;
 const int PLACE_HEIGHT = 30, PLACE_ICON = 24, LEFT_BIG = 39, LEFT_SMALL = 40;
+// XP's left column: six recent programs, and a line above All Programs
+const int RECENT_PROGRAMS = 6, LEFT_TOP = 5, LEFT_LINE = 7;
 const int CASCADE_ROW = 23, CASCADE_ICON = 16;
 
 Part panelPart(const char *name)
@@ -276,6 +281,15 @@ void StartPanel::addPlace(int &y, int iconId, const QString &text, bool bold, st
     y += height;
 }
 
+// "All Programs" and its arrow, together in the middle of the column
+QRect StartPanel::moreArrow() const
+{
+    ShellTheme *theme = ShellTheme::instance();
+    const int side = theme->scaled(19), gap = theme->scaled(MORE_GAP);
+    const int text = QFontMetrics(theme->font(QStringLiteral("Tahoma, 8, bold"))).horizontalAdvance(m_moreText);
+    return QRect(m_more.x() + (m_more.width() - text - gap - side) / 2 + text + gap, m_more.y() + (m_more.height() - side) / 2, side, side);
+}
+
 void StartPanel::build(QPoint bottomLeft)
 {
     ShellTheme *theme = ShellTheme::instance();
@@ -313,9 +327,12 @@ void StartPanel::build(QPoint bottomLeft)
     m_items.append(separator);
     y += theme->scaled(8);
     addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "Help and Support"), false, {});
-    addPlace(y, ICON_SEARCH, explorerString(EXPLORER_SEARCH, "Search"), false, {});
+    addPlace(y, ICON_SEARCH, explorerString(EXPLORER_SEARCH, "Search"), false, [] { FileBrowser::open(places::Search); });
     addPlace(y, ICON_RUN, explorerString(EXPLORER_RUN, "Run..."), false, [] { showRunDialog(); });
-    const int bodyHeight = qMax(theme->scaled(BODY_MIN), y - userHeight + theme->scaled(5));
+    const auto browser = programs::defaultBrowser(), mail = programs::defaultMail();
+    const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0);
+    const int leftHeight = theme->scaled(LEFT_TOP + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + RECENT_PROGRAMS * LEFT_SMALL + LEFT_LINE) + moreHeight;
+    const int bodyHeight = std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(5), leftHeight});
     m_right.setHeight(bodyHeight);
 
     m_user = QRect(0, 0, width, userHeight);
@@ -324,9 +341,8 @@ void StartPanel::build(QPoint bottomLeft)
     m_more = QRect(0, userHeight + bodyHeight - moreHeight, column, moreHeight);
 
     // The left column: the default browser and mail, then the most used programs
-    y = m_left.y() + theme->scaled(5);
+    y = m_left.y() + theme->scaled(LEFT_TOP);
     const auto launcher = [](const programs::Program &program) { return [program] { programs::launch(program); }; };
-    const auto browser = programs::defaultBrowser(), mail = programs::defaultMail();
     if (browser)
         addLeft(y, tr("Internet"), browser->name, programs::iconOf(*browser), launcher(*browser), true);
     if (mail)
@@ -336,15 +352,22 @@ void StartPanel::build(QPoint bottomLeft)
         line.separator = true;
         line.rect = QRect(m_left.x() + theme->scaled(10), y + theme->scaled(2), m_left.width() - theme->scaled(20), theme->scaled(2));
         m_items.append(line);
-        y += theme->scaled(7);
+        y += theme->scaled(LEFT_LINE);
     }
-    const int room = (m_left.bottom() - y) / theme->scaled(LEFT_SMALL);
-    const QList<programs::Program> used = programs::mostUsed(qMax(0, room));
+    // (Asking for two more: the browser and the mail may be among them.)
+    int added = 0;
+    const QList<programs::Program> used = programs::mostUsed(RECENT_PROGRAMS + 2);
     for (const programs::Program &program : used) {
         if ((browser && program.id == browser->id) || (mail && program.id == mail->id))
             continue;
+        if (added++ >= RECENT_PROGRAMS)
+            break;
         addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
     }
+    Item moreLine;
+    moreLine.separator = true;
+    moreLine.rect = QRect(m_left.x() + theme->scaled(10), m_more.y() - theme->scaled(4), m_left.width() - theme->scaled(20), theme->scaled(2));
+    m_items.append(moreLine);
 
     // The bottom's buttons, right-aligned as XP's
     QFontMetrics metrics(theme->font(QStringLiteral("Tahoma, 8")));
@@ -477,9 +500,9 @@ void StartPanel::paintEvent(QPaintEvent *)
 
     // All Programs
     const bool moreHot = m_hotPart == MoreHot;
-    const QRect arrow = QRect(m_more.right() - theme->scaled(30), m_more.y() + (m_more.height() - theme->scaled(19)) / 2, theme->scaled(19), theme->scaled(19));
+    const QRect arrow = moreArrow();
     painter.setFont(bold);
-    const QRect moreText(m_more.x(), m_more.y(), arrow.x() - m_more.x() - theme->scaled(6), m_more.height());
+    const QRect moreText(m_more.x(), m_more.y(), arrow.x() - m_more.x() - theme->scaled(MORE_GAP), m_more.height());
     if (moreHot) {
         const QRect band(m_more.x() + theme->scaled(8), m_more.y() + theme->scaled(3), m_more.width() - theme->scaled(10), m_more.height() - theme->scaled(6));
         painter.fillRect(band, leftHot);
@@ -597,7 +620,7 @@ void StartPanel::openChildren(int level)
         bool upward = false;
         if (m_openWanted == -2) {
             entries = allPrograms();
-            corner = mapToGlobal(QPoint(m_more.right() + 1, m_more.bottom() + 1));
+            corner = mapToGlobal(QPoint(moreArrow().right() + 1, m_more.bottom() + 1));
             upward = true;
         } else if (m_openWanted >= 0 && m_openWanted < m_items.size() && m_items[m_openWanted].children) {
             entries = m_items[m_openWanted].children();

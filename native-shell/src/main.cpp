@@ -5,6 +5,7 @@
 #include "applets.h"
 #include "controlpanel.h"
 #include "desktop.h"
+#include "displayproperties.h"
 #include "filebrowser.h"
 #include "frames.h"
 #include "programs.h"
@@ -66,6 +67,8 @@ int main(int argc, char **argv)
     // This is a desktop of its own: the desktop's platform theme is not for it
     // (Plasma's event filter crashed on the Start menu's cascades).
     qputenv("QT_QPA_PLATFORMTHEME", "generic");
+    // (For the web pages of a folder window, set before the application exists.)
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("xp-native-shell"));
     app.setQuitOnLastWindowClosed(false);
@@ -100,6 +103,7 @@ int main(int argc, char **argv)
         return app.exec();
     }
     applets::applyInputSettings();
+    DisplayProperties::restoreScreenSaver();
 
     Desktop desktop;
     const int iconSize = theme->scaled(16);

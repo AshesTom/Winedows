@@ -1101,6 +1101,9 @@ QSize XpStyle::sizeFromContents(ContentsType type, const QStyleOption *option, c
 
 int XpStyle::pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const
 {
+    // XP's tabs: their words and 6 pixels on each side
+    if (metric == PM_TabBarTabHSpace)
+        return 12 * (m_look.dpi > 0 ? m_look.dpi : 96) / 96;
     // The Accurate style: the toolbars of XP's own programs (WordPad,
     // Paint) and common dialogs have 16 x 16 pictures (comctl32's default).
     if (m_look.accurate && metric == PM_ToolBarIconSize)

@@ -75,7 +75,8 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
     QFont font = style.captionFont;
     const FrameButton buttons[] = {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize};
     const int titleEnd = frameButtonRect(FrameButton::Minimize, rect, style, look.maximized).left() - 4;
-    const QRect titleRect(rect.x() + ICON_X + ICON_SIZE + TITLE_GAP, rect.y(), qMax(0, titleEnd - rect.x() - ICON_X - ICON_SIZE - TITLE_GAP), top);
+    const int titleX = look.icon.isNull() ? ICON_X : ICON_X + ICON_SIZE + TITLE_GAP;
+    const QRect titleRect(rect.x() + titleX, rect.y(), qMax(0, titleEnd - rect.x() - titleX), top);
     const QString title = QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleRect.width());
     painter.setFont(font);
 
@@ -571,7 +572,11 @@ void FrameManager::readIcons()
         m_iconTimes[it.key()] = time;
         const int size = ShellTheme::instance()->scaled(ICON_SIZE);
         QImage icon = ipcfile::readIcon(path);
-        if (icon.isNull())
+        // XP's dialogs have no icon of their own, and none in their title bar.
+        bool dialog = false;
+        for (quint32 type : x11::property32(it.key(), x11::atom("_NET_WM_WINDOW_TYPE")))
+            dialog = dialog || type == x11::atom("_NET_WM_WINDOW_TYPE_DIALOG");
+        if (icon.isNull() && !dialog)
             icon = ShellTheme::instance()->defaultIcon(size);
         else if (icon.width() != size)
             icon = icon.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);

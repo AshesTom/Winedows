@@ -13,11 +13,13 @@
 namespace {
 
 // At 96 DPI, from the shell style's UI file
-const int MARGIN = 12, GROUP_GAP = 15, HEADER = 25, BODY_PADDING_X = 12, BODY_PADDING_Y = 10, ROW_GAP = 4, ICON = 16, ICON_GAP = 6;
+const int MARGIN = 12, GROUP_GAP = 15, HEADER = 25, BODY_PADDING_X = 13, BODY_PADDING_Y = 10, ROW_GAP = 4, ICON = 16, ICON_GAP = 6;
 // The header bitmaps and arrows of blue_ss.dll, home_ss.dll and metal_ss.dll
 const int BITMAP_PRIMARY_HEADER = 110, BITMAP_HEADER = 112;
 const int ARROW_UP = 100, ARROW_UP_HOT = 101, ARROW_DOWN = 102, ARROW_DOWN_HOT = 103;
 const int PRIMARY_ARROW_UP = 104, PRIMARY_ARROW_UP_HOT = 105, PRIMARY_ARROW_DOWN = 106, PRIMARY_ARROW_DOWN_HOT = 107;
+
+const int TITLE_ICON = 32;
 
 // Magenta is see-through in these bitmaps.
 QImage keyed(const QImage &source)
@@ -58,9 +60,7 @@ TaskPane::TaskPane(QWidget *parent)
 void TaskPane::loadStyle()
 {
     const LookChoice look = ShellTheme::instance()->choice();
-    const QString file = look.style.isEmpty() ? QString()
-        : look.colour == QLatin1String("Metallic") ? QStringLiteral("metal_ss.dll")
-        : look.colour == QLatin1String("HomeStead") ? QStringLiteral("home_ss.dll") : QStringLiteral("blue_ss.dll");
+    const QString file = ShellTheme::shellStylePath(look);
     m_top = QColor(123, 162, 231);
     m_bottom = QColor(99, 117, 214);
     m_primaryBody = QColor(239, 243, 255);
@@ -70,7 +70,7 @@ void TaskPane::loadStyle()
     for (QImage &arrow : m_arrows)
         arrow = QImage();
     m_primaryHeader = m_header = QImage();
-    const auto resources = file.isEmpty() ? std::nullopt : xpfiles::resources(xpfiles::find(file));
+    const auto resources = xpfiles::resources(file);
     if (!resources) {
         // Windows Classic: the system colours
         ShellTheme *theme = ShellTheme::instance();
@@ -132,8 +132,9 @@ void TaskPane::layoutGroups()
     int y = margin;
     for (int g = 0; g < m_groups.size(); ++g) {
         const PaneGroup &group = m_groups[g];
-        m_headers.append(QRect(margin, y, groupWidth, header));
-        y += header;
+        const int headerHeight = group.icon.isNull() ? header : qMax(header, theme->scaled(TITLE_ICON));
+        m_headers.append(QRect(margin, y, groupWidth, headerHeight));
+        y += headerHeight;
         const QRect body(margin, y, groupWidth, 0);
         if (m_collapsed.value(group.title)) {
             m_bodies.append(body);
@@ -186,12 +187,15 @@ void TaskPane::paintEvent(QPaintEvent *)
         painter.setFont(bold);
         const QColor title = group.primary ? QColor(Qt::white) : m_link;
         painter.setPen(hotHeader ? m_hotLink : title);
-        painter.drawText(header.adjusted(theme->scaled(10), art.isNull() ? 0 : header.height() - art.height(), -theme->scaled(25), 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+        const int titleX = group.icon.isNull() ? theme->scaled(12) : theme->scaled(TITLE_ICON);
+        painter.drawText(header.adjusted(titleX, art.isNull() ? 0 : header.height() - art.height(), -theme->scaled(25), 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                          painter.fontMetrics().elidedText(group.title, Qt::ElideRight, header.width() - theme->scaled(35)));
         const bool collapsed = m_collapsed.value(group.title);
         const int arrow = (group.primary ? 4 : 0) + (collapsed ? 2 : 0) + (hotHeader ? 1 : 0);
         if (!m_arrows[arrow].isNull())
             painter.drawImage(header.right() - m_arrows[arrow].width() - 1, header.y() + header.height() - m_arrows[arrow].height(), m_arrows[arrow]);
+        if (!group.icon.isNull())
+            group.icon.paint(&painter, QRect(header.x(), header.y(), theme->scaled(TITLE_ICON), theme->scaled(TITLE_ICON)));
         if (collapsed)
             continue;
         painter.fillRect(body, group.primary ? m_primaryBody : m_body);

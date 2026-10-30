@@ -23,6 +23,7 @@ struct PaneGroup
     QString title;
     bool primary = false;            // the blue header of a folder's main tasks
     QList<PaneTask> tasks;
+    QIcon icon = {};                 // 32 pixels, beside the title and above the header (mainsection)
 };
 
 class TaskPane : public QWidget

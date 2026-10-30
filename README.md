@@ -134,7 +134,8 @@ in time it will **replace Wine entirely**. It runs no XP code: your own XP files
 visual style's art, strings, icons, dialogs, fonts, wallpapers), read at run time.
 
 It already has the desktop and its icons, the taskbar, the Start menu, XP's window frames, Display Properties with live
-theme switching (also for Qt and GTK programs), folder windows with file operations, and the Control Panel. Much of XP
+theme switching (also for Qt and GTK programs) and your own imported themes, folder windows with file operations, the
+Search Companion with its animated character and web searches on Bing, and the Control Panel. Much of XP
 is still missing, and so far it has only been tried in a window on CachyOS, so **it does not replace the Wine session
 yet**. To try it in a window of your current desktop, without Wine or a prefix:
 
@@ -143,6 +144,36 @@ yet**. To try it in a window of your current desktop, without Wine or a prefix:
 ```
 
 What works and what is left: [docs/native-shell.md](docs/native-shell.md).
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/screenshot-en.png" alt="Normal mode: XP's own explorer.exe on Wine, with Linux and Windows applications" width="400" /><br />
+      <strong>Normal mode</strong>: XP's own <code>explorer.exe</code> on Wine
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/native-session-en.png" alt="Native mode: the Start menu, a folder window and the Control Panel, without Wine" width="400" /><br />
+      <strong>Native mode</strong>: a Linux program, without Wine
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/images/native-explorer-en.png" alt="Native mode's file explorer: My Documents with the Common Tasks pane" width="270" /><br />
+      File explorer
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/native-control-panel-en.png" alt="Native mode's Control Panel in category view" width="270" /><br />
+      Control Panel
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/native-start-menu-en.png" alt="Native mode's Start menu with All Programs open" width="270" /><br />
+      Start menu
+    </td>
+  </tr>
+</table>
 
 ## How it works
 

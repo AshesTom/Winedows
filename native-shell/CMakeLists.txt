@@ -14,12 +14,14 @@ pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-xkb)
 
 add_executable(xp-native-shell
     src/main.cpp
+    src/acs.cpp src/acs.h
     src/applets.cpp src/applets.h
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
     src/filebrowser.cpp src/filebrowser.h
     src/fileicons.cpp src/fileicons.h
     src/fileops.cpp src/fileops.h
+    src/searchcompanion.cpp src/searchcompanion.h
     src/taskpane.cpp src/taskpane.h
     src/desktopicons.cpp src/desktopicons.h
     src/displayproperties.cpp src/displayproperties.h
@@ -40,5 +42,11 @@ add_executable(xp-native-shell
 target_include_directories(xp-native-shell PRIVATE ../qt-style/src)
 target_link_libraries(xp-native-shell PRIVATE Qt6::Widgets PkgConfig::XCB)
 target_compile_options(xp-native-shell PRIVATE -Wall -Wextra)
+# Web pages inside a folder window, as XP has; without the module they open in the desktop's browser.
+find_package(Qt6 QUIET COMPONENTS WebEngineWidgets)
+if(Qt6WebEngineWidgets_FOUND)
+    target_link_libraries(xp-native-shell PRIVATE Qt6::WebEngineWidgets)
+    target_compile_definitions(xp-native-shell PRIVATE XP_WEB_PAGES)
+endif()
 
 install(TARGETS xp-native-shell RUNTIME DESTINATION bin)

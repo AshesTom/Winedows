@@ -30,6 +30,7 @@ const struct { int string, icon; const char *fallback; } CATEGORIES[] = {
     {32008, 272, "Printers and Other Hardware"},
     {32002, 269, "User Accounts"},
     {32016, 276, "Date, Time, Language, and Regional Options"},
+    {32000, 268, "Accessibility Options"},
 };
 QIcon cplIcon(const char *file, int group, int fallback)
 {
@@ -111,12 +112,15 @@ void open(const QString &id)
 
 namespace {
 
-// The shell style's resources: UIFILE 2 and the watermarks of the list and of a category
-const int BITMAP_LIST_WATERMARK = 25, BITMAP_CATEGORY_WATERMARK = 26;
-// At 96 DPI, from the two UI files: the container's padding, the directive's margin, the
-// items' margin, the banner's height and where its icon sits
-const int PADDING = 20, DIRECTIVE_TOP = 30, DIRECTIVE_HEIGHT = 34, LIST_TOP = 12, ITEM_MARGIN = 12, ICON = 32, ICON_GAP = 5, TASK_ICON = 16, BANNER = 35;
+// The shell style's resources: the Control Panel's watermark, and the computer behind a system folder's warning
+const int BITMAP_PANEL_WATERMARK = 26, BITMAP_WARNING_WATERMARK = 25;
+// At 96 DPI, from the two UI files, measured on XP where they leave it open: margins between
+// items collapse, and those at the container's edge do not count. A category's icon is 48
+// pixels, an applet's and the banner's 32.
+const int PADDING = 20, DIRECTIVE_TOP = 30, DIRECTIVE_HEIGHT = 36, LIST_TOP = 12, ITEM_MARGIN = 12, ITEM_PADDING = 1, CATEGORY_ICON = 48, ICON = 32, ICON_GAP = 5, TASK_ICON = 16, BANNER = 35;
 const int BANNER_ICON_X = 10, BANNER_ICON_Y = 7, BANNER_TEXT_X = 50;
+// gridlayout(5, 2): the categories go down the first column first
+const int CATEGORY_ROWS = 5, DIRECTIVE_INDENT = 3;
 // shell32.dll's "Pick a category", "Pick a task...", "Pick a Control Panel icon", "or pick a Control Panel icon"
 const int STRING_PICK_CATEGORY = 32513, STRING_PICK_TASK = 32514, STRING_PICK_ICON = 32515, STRING_OR_PICK_ICON = 32516;
 
@@ -134,6 +138,22 @@ QColor colourIn(const QString &text, const QString &pattern, const QColor &fallb
 {
     const auto match = QRegularExpression(pattern, QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption).match(text);
     return match.hasMatch() ? QColor(match.captured(1).toInt(), match.captured(2).toInt(), match.captured(3).toInt()) : fallback;
+}
+
+// Franklin Gothic Medium has no bold: GDI makes one by drawing it again a pixel to the right,
+// and each letter takes a pixel more. (Qt's made-up bold closes the dot of an "i".)
+QFont madeUpBold(ShellTheme *theme)
+{
+    QFont font = theme->font(QStringLiteral("Franklin Gothic Medium, 21"));
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 1);
+    font.setHintingPreference(QFont::PreferNoHinting);
+    return font;
+}
+
+void drawMadeUpBold(QPainter &painter, const QRect &rect, int flags, const QString &text, QRect *used = nullptr)
+{
+    painter.drawText(rect.translated(1, 0), flags, text);
+    painter.drawText(rect, flags, text, used);
 }
 
 const QString RGB = QStringLiteral("\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)");
@@ -158,11 +178,9 @@ void ControlPanelCategories::loadStyle()
 {
     ShellTheme *theme = ShellTheme::instance();
     const LookChoice look = theme->choice();
-    const QString file = look.style.isEmpty() ? QString()
-        : look.colour == QLatin1String("Metallic") ? QStringLiteral("metal_ss.dll")
-        : look.colour == QLatin1String("HomeStead") ? QStringLiteral("home_ss.dll") : QStringLiteral("blue_ss.dll");
-    m_listWatermark = m_categoryWatermark = m_bullet = QImage();
-    const auto resources = file.isEmpty() ? std::nullopt : xpfiles::resources(xpfiles::find(file));
+    const QString file = ShellTheme::shellStylePath(look);
+    m_watermark = m_bullet = QImage();
+    const auto resources = xpfiles::resources(file);
     if (!resources) {
         // Windows Classic: the system colours
         m_background = m_separatorBottom = theme->system(QStringLiteral("window"), Qt::white);
@@ -183,8 +201,7 @@ void ControlPanelCategories::loadStyle()
     m_headerRight = header.hasMatch() ? QColor(header.captured(4).toInt(), header.captured(5).toInt(), header.captured(6).toInt()) : m_background;
     m_directive = colourIn(ui, QStringLiteral("resid=DirectiveSS>.*?foreground:\\s*rgb") + RGB, QColor(214, 223, 245));
     m_link = Qt::white;
-    m_listWatermark = xpfiles::bitmap(*resources, BITMAP_LIST_WATERMARK);
-    m_categoryWatermark = xpfiles::bitmap(*resources, BITMAP_CATEGORY_WATERMARK);
+    m_watermark = xpfiles::bitmap(*resources, BITMAP_PANEL_WATERMARK);
     m_bullet = QImage::fromData(resources->find(QStringLiteral("23"), QStringLiteral("TASKBULLET.GIF")));
 }
 
@@ -204,21 +221,24 @@ void ControlPanelCategories::rebuild()
     m_entries.clear();
     m_hot = -1;
     ShellTheme *theme = ShellTheme::instance();
-    const int padding = theme->scaled(PADDING), margin = theme->scaled(ITEM_MARGIN), icon = theme->scaled(ICON);
+    const int padding = theme->scaled(PADDING), margin = theme->scaled(ITEM_MARGIN), itemPadding = theme->scaled(ITEM_PADDING);
     const int top = m_category >= 0 ? theme->scaled(BANNER) : 0;
     const int width = qMax(100, this->width() - 1 - 2 * padding);
-    int y = top + padding + theme->scaled(DIRECTIVE_TOP);
+    int y = top + padding;
     m_directiveY = y;
     m_directive2Y = -1;
-    const auto grid = [&](const QList<Entry> &entries) {
-        // gridlayout(n, 2): two columns
-        const int columnWidth = width / 2, rowHeight = icon + 2 * margin + 2;
+    // Two columns; ROWS fills the first column first, without it each row is filled in turn.
+    const auto grid = [&](const QList<Entry> &entries, int iconSize, int rows) {
+        const int columnWidth = (width - margin) / 2, height = iconSize + 2 * itemPadding, pitch = height + margin;
         for (int i = 0; i < entries.size(); ++i) {
             Entry entry = entries[i];
-            entry.rect = QRect(1 + padding + (i % 2) * columnWidth + margin, y + (i / 2) * rowHeight + margin, columnWidth - 2 * margin, icon + 2);
+            const int column = rows > 0 ? i / rows : i % 2, row = rows > 0 ? i % rows : i / 2;
+            entry.rect = QRect(1 + padding + column * (columnWidth + margin), y + row * pitch, columnWidth, height);
+            entry.iconSize = iconSize;
             m_entries.append(entry);
         }
-        y += ((int(entries.size()) + 1) / 2) * rowHeight;
+        const int used = rows > 0 ? qMin(rows, int(entries.size())) : (int(entries.size()) + 1) / 2;
+        y += used > 0 ? used * pitch - margin : 0;
     };
     y += theme->scaled(DIRECTIVE_HEIGHT) + theme->scaled(LIST_TOP);
     if (m_category < 0) {
@@ -232,26 +252,26 @@ void ControlPanelCategories::rebuild()
             entry.category = i;
             items.append(entry);
         }
-        grid(items);
+        grid(items, theme->scaled(CATEGORY_ICON), CATEGORY_ROWS);
     } else {
         // verticalflowlayout: one task under the other
         bool tasks = false;
-        const int taskHeight = theme->scaled(TASK_ICON) + 2;
+        const int taskHeight = theme->scaled(TASK_ICON) + 2 * itemPadding;
         for (const auto &task : TASKS) {
             if (task.category != m_category)
                 continue;
             tasks = true;
             Entry entry;
-            entry.rect = QRect(1 + padding + margin, y + margin, width - 2 * margin, taskHeight);
+            entry.rect = QRect(1 + padding, y, width, taskHeight);
             entry.text = xpfiles::shellString(task.string, "");
             entry.description = xpfiles::shellString(task.string + 1, "");
             const QString applet = QLatin1String(task.applet);
             entry.action = [applet] { controlpanel::open(applet); };
             m_entries.append(entry);
-            y += taskHeight + 2 * margin;
+            y += taskHeight + margin;
         }
         if (tasks) {
-            y += theme->scaled(DIRECTIVE_TOP);
+            y += theme->scaled(DIRECTIVE_TOP) - margin;
             m_directive2Y = y;
             y += theme->scaled(DIRECTIVE_HEIGHT) + theme->scaled(LIST_TOP);
         }
@@ -267,7 +287,7 @@ void ControlPanelCategories::rebuild()
             entry.action = [id] { controlpanel::open(id); };
             items.append(entry);
         }
-        grid(items);
+        grid(items, theme->scaled(ICON), 0);
     }
     setMinimumHeight(y + padding);
     update();
@@ -279,9 +299,8 @@ void ControlPanelCategories::paintEvent(QPaintEvent *)
     ShellTheme *theme = ShellTheme::instance();
     painter.fillRect(rect(), m_background);
     // The watermark, at the view's lower right corner
-    const QImage &watermark = m_category < 0 ? m_listWatermark : m_categoryWatermark;
-    if (!watermark.isNull())
-        painter.drawImage(width() - watermark.width(), height() - watermark.height(), watermark);
+    if (!m_watermark.isNull())
+        painter.drawImage(width() - m_watermark.width(), height() - m_watermark.height(), m_watermark);
     // The separator on its left, the white line along its bottom
     QLinearGradient separator(0, 0, 0, height());
     separator.setColorAt(0, m_separatorTop);
@@ -306,12 +325,12 @@ void ControlPanelCategories::paintEvent(QPaintEvent *)
     }
 
     // The directives: Franklin Gothic Medium, 21 points, the style's pale colour
-    painter.setFont(theme->font(QStringLiteral("Franklin Gothic Medium, 21, bold")));
+    painter.setFont(madeUpBold(theme));
     painter.setPen(m_directive);
     const int padding = theme->scaled(PADDING), directive = theme->scaled(DIRECTIVE_HEIGHT);
     const bool tasks = m_directive2Y >= 0;
     const auto directiveAt = [&](int y, const QString &text) {
-        painter.drawText(QRect(1 + padding, y, width() - 1 - 2 * padding, directive), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
+        drawMadeUpBold(painter, QRect(1 + padding + theme->scaled(DIRECTIVE_INDENT), y, width() - 1 - 2 * padding, directive), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
     };
     if (m_category < 0)
         directiveAt(m_directiveY, xpfiles::shellString(STRING_PICK_CATEGORY, "Pick a category"));
@@ -332,9 +351,9 @@ void ControlPanelCategories::paintEvent(QPaintEvent *)
         painter.setPen(m_link);
         int x = entry.rect.x();
         if (!entry.icon.isNull()) {
-            const int side = theme->scaled(ICON);
-            entry.icon.paint(&painter, QRect(x, entry.rect.y() + (entry.rect.height() - side) / 2, side, side));
-            x += side;
+            const int side = entry.iconSize;
+            entry.icon.paint(&painter, QRect(x + theme->scaled(ITEM_PADDING), entry.rect.y() + (entry.rect.height() - side) / 2, side, side));
+            x += side + theme->scaled(ITEM_PADDING);
         } else if (!m_bullet.isNull()) {
             painter.drawImage(x, entry.rect.y() + (entry.rect.height() - m_bullet.height()) / 2, m_bullet);
             x += theme->scaled(TASK_ICON);
@@ -396,4 +415,121 @@ void ControlPanelCategories::mouseReleaseEvent(QMouseEvent *event)
         controlpanel::open(QStringLiteral("programs"));   // XP goes straight to the applet.
     else if (entry.category >= 0)
         m_openCategory(entry.category);
+}
+
+namespace {
+// shell32.dll: "These files are hidden.", why, and the words for a drive and for a folder
+const int STRING_HIDDEN = 17240, STRING_WHY = 17241, STRING_SHOW_DRIVE = 31319, STRING_SHOW_FOLDER = 31323;
+// The shell style's UIFILE 1, at 96 DPI
+const int WARNING_LEFT = 10, WARNING_TITLE_TOP = 20, WARNING_MESSAGE_TOP = 15, WARNING_LINK_TOP = 20, WARNING_RIGHT = 10;
+}
+
+SystemFolderWarning::SystemFolderWarning(std::function<void()> showContents, QWidget *parent)
+    : QWidget(parent)
+    , m_showContents(std::move(showContents))
+{
+    setMouseTracking(true);
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    loadStyle();
+    connect(ShellTheme::instance(), &ShellTheme::changed, this, [this] {
+        loadStyle();
+        update();
+    });
+}
+
+void SystemFolderWarning::setDrive(bool drive)
+{
+    m_drive = drive;
+    update();
+}
+
+void SystemFolderWarning::loadStyle()
+{
+    ShellTheme *theme = ShellTheme::instance();
+    const LookChoice look = theme->choice();
+    const QString file = ShellTheme::shellStylePath(look);
+    m_watermark = QImage();
+    const auto resources = xpfiles::resources(file);
+    if (!resources) {
+        // Windows Classic: the system colours
+        m_background = m_accentBottom = theme->system(QStringLiteral("window"), Qt::white);
+        m_accentTop = theme->system(QStringLiteral("btnshadow"), Qt::gray);
+        m_title = theme->system(QStringLiteral("highlight"), QColor(10, 36, 106));
+        return;
+    }
+    const QString ui = QString::fromLatin1(resources->find(QStringLiteral("UIFILE"), QStringLiteral("1")));
+    m_background = colourIn(ui, QStringLiteral("atom\\(blockade\\)\\]\\s*\\{\\s*background:\\s*rgb") + RGB, QColor(99, 117, 214));
+    const auto accent = QRegularExpression(QStringLiteral("atom\\(blockadeaccent\\)\\]\\s*\\{\\s*background:\\s*gradient\\(") + ARGB + QStringLiteral(",\\s*") + ARGB, QRegularExpression::CaseInsensitiveOption).match(ui);
+    m_accentTop = accent.hasMatch() ? QColor(accent.captured(1).toInt(), accent.captured(2).toInt(), accent.captured(3).toInt()) : QColor(148, 187, 255);
+    m_accentBottom = accent.hasMatch() ? QColor(accent.captured(4).toInt(), accent.captured(5).toInt(), accent.captured(6).toInt()) : m_background;
+    m_title = colourIn(ui, QStringLiteral("atom\\(blockadetitle\\)\\].*?foreground:\\s*rgb") + RGB, QColor(214, 223, 245));
+    m_watermark = xpfiles::bitmap(*resources, BITMAP_WARNING_WATERMARK);
+}
+
+QRect SystemFolderWarning::linkRect() const
+{
+    ShellTheme *theme = ShellTheme::instance();
+    const int left = 1 + theme->scaled(WARNING_LEFT), width = qMax(50, this->width() - left - theme->scaled(WARNING_RIGHT));
+    int y = theme->scaled(WARNING_TITLE_TOP);
+    y += QFontMetrics(madeUpBold(theme)).boundingRect(QRect(0, 0, width, 1000), Qt::TextWordWrap, xpfiles::shellString(STRING_HIDDEN, "These files are hidden.")).height();
+    y += theme->scaled(WARNING_MESSAGE_TOP);
+    y += QFontMetrics(theme->font(QStringLiteral("Franklin Gothic Medium, 14"))).boundingRect(QRect(0, 0, width, 1000), Qt::TextWordWrap, xpfiles::shellString(STRING_WHY, "This folder contains files that keep your system working properly. You should not modify its contents.")).height();
+    y += theme->scaled(WARNING_LINK_TOP);
+    const QFontMetrics link(theme->font(QStringLiteral("Tahoma, 8, bold")));
+    const QString text = m_drive ? xpfiles::shellString(STRING_SHOW_DRIVE, "Show the contents of this drive") : xpfiles::shellString(STRING_SHOW_FOLDER, "Show the contents of this folder");
+    return QRect(left, y, link.horizontalAdvance(text) + theme->scaled(3) + 2, link.height() + 2);
+}
+
+void SystemFolderWarning::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    ShellTheme *theme = ShellTheme::instance();
+    painter.fillRect(rect(), m_background);
+    if (!m_watermark.isNull())
+        painter.drawImage(width() - 1 - m_watermark.width(), height() - 1 - m_watermark.height(), m_watermark);
+    QLinearGradient accent(0, 0, 0, height());
+    accent.setColorAt(0, m_accentTop);
+    accent.setColorAt(1, m_accentBottom);
+    painter.fillRect(QRect(0, 0, 1, height()), accent);
+    painter.fillRect(QRect(0, height() - 1, width(), 1), Qt::white);
+    painter.fillRect(QRect(width() - 1, 0, 1, height()), Qt::white);
+
+    const int left = 1 + theme->scaled(WARNING_LEFT), textWidth = qMax(50, width() - left - theme->scaled(WARNING_RIGHT));
+    int y = theme->scaled(WARNING_TITLE_TOP);
+    QRect used;
+    painter.setFont(madeUpBold(theme));
+    painter.setPen(m_title);
+    drawMadeUpBold(painter, QRect(left, y, textWidth, 1000), Qt::TextWordWrap, xpfiles::shellString(STRING_HIDDEN, "These files are hidden."), &used);
+    y += used.height() + theme->scaled(WARNING_MESSAGE_TOP);
+    painter.setFont(theme->font(QStringLiteral("Franklin Gothic Medium, 14")));
+    const bool classic = m_watermark.isNull();
+    painter.setPen(classic ? QColor(Qt::black) : QColor(Qt::white));
+    painter.drawText(QRect(left + 1, y, textWidth - 1, 1000), Qt::TextWordWrap, xpfiles::shellString(STRING_WHY, "This folder contains files that keep your system working properly. You should not modify its contents."));
+    QFont link = theme->font(QStringLiteral("Tahoma, 8, bold"));
+    link.setUnderline(m_hot);
+    painter.setFont(link);
+    painter.drawText(linkRect().adjusted(theme->scaled(3), 0, 0, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                     m_drive ? xpfiles::shellString(STRING_SHOW_DRIVE, "Show the contents of this drive") : xpfiles::shellString(STRING_SHOW_FOLDER, "Show the contents of this folder"));
+}
+
+void SystemFolderWarning::mouseMoveEvent(QMouseEvent *event)
+{
+    const bool hot = linkRect().contains(event->position().toPoint());
+    if (hot != m_hot) {
+        m_hot = hot;
+        setCursor(hot ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        update();
+    }
+}
+
+void SystemFolderWarning::leaveEvent(QEvent *)
+{
+    m_hot = false;
+    update();
+}
+
+void SystemFolderWarning::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && linkRect().contains(event->position().toPoint()))
+        m_showContents();
 }

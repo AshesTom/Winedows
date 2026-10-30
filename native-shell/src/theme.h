@@ -57,6 +57,9 @@ public:
     // The first start of a session without a prefix: XP's own default look.
     static void ensureDefaultLook();
     static QString lunaPath();
+    // The file of the Common Tasks pane's art for a look: the style's own Shell folder, or
+    // XP's for its colour. Empty for Windows Classic.
+    static QString shellStylePath(const LookChoice &look);
 
     // 3D edges of Windows Classic
     void raised(QPainter &painter, const QRect &rect, bool pressed = false) const;

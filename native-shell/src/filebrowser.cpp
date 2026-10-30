@@ -5,11 +5,21 @@
 #include "fileicons.h"
 #include "fileops.h"
 #include "programs.h"
+#include "searchcompanion.h"
 #include "taskpane.h"
 #include "theme.h"
 #include "xpfiles.h"
 
+#include <array>
+#include <cmath>
+
+#include <QRegularExpression>
 #include <QAbstractProxyModel>
+#include <QTreeWidget>
+#ifdef XP_WEB_PAGES
+#include <QWebEnginePage>
+#include <QWebEngineView>
+#endif
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -55,6 +65,7 @@
 #include <QStyleOptionMenuItem>
 #include <QStyledItemDelegate>
 #include <QTabWidget>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -69,6 +80,11 @@ const QString Computer = QStringLiteral("::computer"), RecycleBin = QStringLiter
 static QString shellText(int id, const char *fallback)
 {
     return xpfiles::shellString(id, fallback);
+}
+
+bool isWeb(const QString &location)
+{
+    return location.startsWith(QLatin1String("http://")) || location.startsWith(QLatin1String("https://"));
 }
 
 QString title(const QString &location)
@@ -93,6 +109,8 @@ QString title(const QString &location)
 
 QIcon icon(const QString &location)
 {
+    if (isWeb(location))
+        return fileicons::shell(fileicons::Search);
     if (location == Computer)
         return fileicons::shell(fileicons::Computer);
     if (location == RecycleBin)
@@ -107,7 +125,82 @@ QIcon icon(const QString &location)
 }
 } // namespace places
 
+// "59.9 KB": XP's units, not "KiB"
+static QString xpSize(qint64 bytes)
+{
+    if (bytes < 1024)
+        return QObject::tr("%1 bytes").arg(bytes);
+    // Three digits, the rest dropped: "59.9 KB"
+    double value = bytes;
+    int unit = -1;
+    while (value >= 1024 && unit < 3) {
+        value /= 1024;
+        ++unit;
+    }
+    const int decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
+    const double scale = std::pow(10, decimals);
+    return QStringLiteral("%1 %2").arg(QLocale().toString(std::floor(value * scale) / scale, 'f', decimals), QLatin1String(std::array{"KB", "MB", "GB", "TB"}[unit]));
+}
+
+// What XP keeps its users out of until they ask: its system drive and folders, here Linux's.
+static bool isSystemFolder(const QString &path)
+{
+    return path == QLatin1String("/") || path == QLatin1String("/usr") || path == QLatin1String("/etc") || path == QLatin1String("/boot") || path == QLatin1String("/opt");
+}
+
 namespace {
+
+// The search results' columns: shell32.dll's words
+void clearResults(QStandardItemModel *model)
+{
+    model->clear();
+    model->setHorizontalHeaderLabels({xpfiles::shellString(8976, "Name"), xpfiles::shellString(8977, "In Folder"), xpfiles::shellString(8978, "Size"),
+                                      xpfiles::shellString(8979, "Type"), xpfiles::shellString(8980, "Date Modified")});
+}
+
+// The results over the magnifier of the shell style, and what to do while there are none
+class SearchResultsView : public QTreeView
+{
+public:
+    explicit SearchResultsView(QWidget *parent) : QTreeView(parent)
+    {
+        const auto load = [this] {
+            const LookChoice look = ShellTheme::instance()->choice();
+            const QString file = ShellTheme::shellStylePath(look);
+            const auto resources = xpfiles::resources(file);
+            m_watermark = resources ? xpfiles::bitmap(*resources, BITMAP_SEARCH_WATERMARK) : QImage();
+        };
+        load();
+        connect(ShellTheme::instance(), &ShellTheme::changed, this, load);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        {
+            QPainter painter(viewport());
+            painter.fillRect(event->rect(), palette().base());
+            if (!m_watermark.isNull())
+                painter.drawImage(viewport()->width() - m_watermark.width(), viewport()->height() - m_watermark.height(), m_watermark);
+            if (!model()->rowCount()) {
+                painter.setPen(palette().text().color());
+                painter.drawText(viewport()->rect().adjusted(4, 4, -4, -4), Qt::TextWordWrap | Qt::AlignTop | Qt::AlignLeft,
+                                 xpfiles::shellString(29470, "To start your search, follow the instructions in the left pane."));
+            }
+        }
+        QTreeView::paintEvent(event);
+    }
+    void drawRow(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem transparent = option;
+        transparent.features &= ~QStyleOptionViewItem::Alternate;
+        QTreeView::drawRow(painter, transparent, index);
+    }
+
+private:
+    static constexpr int BITMAP_SEARCH_WATERMARK = 18;
+    QImage m_watermark;
+};
 
 // shell32.dll's strip of the toolbar's 24-pixel pictures (214, hot 215) and where they are in it
 const int STRIP_NORMAL = 214, STRIP_HOT = 215;
@@ -251,8 +344,10 @@ public:
 // How a view draws an item: XP's Tiles and Thumbnails; My Computer's group headers
 class ItemDelegate : public QStyledItemDelegate
 {
+    static constexpr int ICONS_TOP = 8;
+
 public:
-    enum Mode { Plain, TilesMode, ThumbnailMode };
+    enum Mode { Plain, IconsMode, TilesMode, ThumbnailMode };
     ItemDelegate(QListView *view, QObject *parent)
         : QStyledItemDelegate(parent)
         , m_view(view)
@@ -286,6 +381,13 @@ public:
         }
         if (m_mode == Plain) {
             QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        if (m_mode == IconsMode) {
+            // In its cell of 75 pixels, its icon 8 from the top, as XP has it
+            QStyleOptionViewItem moved = option;
+            moved.rect.translate(0, ICONS_TOP);
+            QStyledItemDelegate::paint(painter, moved, index);
             return;
         }
         const bool selected = option.state & QStyle::State_Selected;
@@ -403,7 +505,7 @@ private:
                 m_bytes += info.size();
             }
         }
-        m_size->setText(QObject::tr("%1 (%2 bytes)").arg(QLocale().formattedDataSize(m_bytes), QLocale().toString(m_bytes)));
+        m_size->setText(QObject::tr("%1 (%2 bytes)").arg(xpSize(m_bytes), QLocale().toString(m_bytes)));
         if (m_contains)
             m_contains->setText(QObject::tr("%1 Files, %2 Folders").arg(m_filesCount).arg(qMax(0, m_folders - 1)));
         if (m_pending.isEmpty())
@@ -490,10 +592,10 @@ void showItemProperties(const QStringList &paths, QWidget *parent)
         field(QObject::tr("File system:"), QString::fromLatin1(drive.fileSystemType()));
         line();
         const qint64 total = drive.bytesTotal(), free = drive.bytesAvailable();
-        field(QObject::tr("Used space:"), QObject::tr("%1 (%2 bytes)").arg(QLocale().formattedDataSize(total - free), QLocale().toString(total - free)));
-        field(QObject::tr("Free space:"), QObject::tr("%1 (%2 bytes)").arg(QLocale().formattedDataSize(free), QLocale().toString(free)));
+        field(QObject::tr("Used space:"), QObject::tr("%1 (%2 bytes)").arg(xpSize(total - free), QLocale().toString(total - free)));
+        field(QObject::tr("Free space:"), QObject::tr("%1 (%2 bytes)").arg(xpSize(free), QLocale().toString(free)));
         line();
-        field(QObject::tr("Capacity:"), QObject::tr("%1 (%2 bytes)").arg(QLocale().formattedDataSize(total), QLocale().toString(total)));
+        field(QObject::tr("Capacity:"), QObject::tr("%1 (%2 bytes)").arg(xpSize(total), QLocale().toString(total)));
         grid->addWidget(new DrivePie(total > 0 ? double(total - free) / total : 0, page), row++, 0, 1, 2, Qt::AlignCenter);
     } else {
         field(QObject::tr("Type of file:"), one ? fileicons::typeName(first) : QObject::tr("Multiple Types"));
@@ -622,48 +724,71 @@ void FileBrowser::buildPanes()
     m_paneArea->setWidget(m_pane);
     m_left->addWidget(m_paneArea);
 
-    // The Folders tree, under its small title
-    auto *foldersPage = new QWidget(m_left);
-    auto *foldersLayout = new QVBoxLayout(foldersPage);
-    foldersLayout->setContentsMargins(0, 0, 0, 0);
-    foldersLayout->setSpacing(0);
-    auto *title = new QWidget(foldersPage);
-    auto *titleLayout = new QHBoxLayout(title);
-    titleLayout->setContentsMargins(6, 2, 2, 2);
-    titleLayout->addWidget(new QLabel(tr("Folders"), title), 1);
-    auto *closeFolders = new QToolButton(title);
-    closeFolders->setAutoRaise(true);
-    closeFolders->setText(QStringLiteral("×"));
-    connect(closeFolders, &QToolButton::clicked, this, [this] { setFoldersShown(false); });
-    titleLayout->addWidget(closeFolders);
-    foldersLayout->addWidget(title);
-    m_tree = new QTreeView(foldersPage);
-    m_treeFiles = new QFileSystemModel(this);
-    m_treeFiles->setIconProvider(nullptr);
-    m_treeFiles->setFilter(QDir::Dirs | QDir::NoDotAndDotDot);
-    m_treeFiles->setRootPath(QStringLiteral("/"));
-    auto *treeModel = new FolderModel(this);
-    treeModel->setSourceModel(m_treeFiles);
-    m_tree->setModel(treeModel);
-    for (int column = 1; column < 4; ++column)
-        m_tree->hideColumn(column);
+    // A bar's small title, with what closes it
+    const auto barPage = [this](const QString &text, std::function<void()> close) {
+        auto *page = new QWidget(m_left);
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        auto *title = new QWidget(page);
+        auto *titleLayout = new QHBoxLayout(title);
+        titleLayout->setContentsMargins(6, 2, 2, 2);
+        titleLayout->addWidget(new QLabel(text, title), 1);
+        auto *closeButton = new QToolButton(title);
+        closeButton->setAutoRaise(true);
+        closeButton->setText(QStringLiteral("×"));
+        connect(closeButton, &QToolButton::clicked, this, close);
+        titleLayout->addWidget(closeButton);
+        layout->addWidget(title);
+        return page;
+    };
+
+    // The Folders tree: the Desktop, and under it what XP has there
+    auto *foldersPage = barPage(tr("Folders"), [this] { setFoldersShown(false); });
+    m_tree = new QTreeWidget(foldersPage);
     m_tree->setHeaderHidden(true);
+    m_tree->setIconSize(QSize(16, 16));
     m_tree->setRootIsDecorated(true);
-    connect(m_tree, &QTreeView::clicked, this, [this, treeModel](const QModelIndex &index) { navigate(treeModel->path(index)); });
-    foldersLayout->addWidget(m_tree, 1);
+    const auto addPlace = [this](QTreeWidgetItem *parent, const QString &text, const QIcon &icon, const QString &location) {
+        auto *item = new QTreeWidgetItem(QStringList(text));
+        item->setIcon(0, icon);
+        item->setData(0, Qt::UserRole, location);
+        if (parent)
+            parent->addChild(item);
+        else
+            m_tree->addTopLevelItem(item);
+        // A folder shows it can open until it is read.
+        if (!location.startsWith(QLatin1String("::")))
+            item->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+        return item;
+    };
+    const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    auto *desktopItem = addPlace(nullptr, xpfiles::shellString(9208, "Desktop"), fileicons::shell(35), desktop);
+    addPlace(desktopItem, places::title(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)), fileicons::shell(fileicons::Documents), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+    auto *computer = addPlace(desktopItem, places::title(places::Computer), places::icon(places::Computer), places::Computer);
+    addPlace(computer, QStringLiteral("/"), fileicons::shell(fileicons::Drive), QStringLiteral("/"));
+    addPlace(computer, places::title(places::ControlPanel), places::icon(places::ControlPanel), places::ControlPanel);
+    addPlace(desktopItem, places::title(places::RecycleBin), places::icon(places::RecycleBin), places::RecycleBin);
+    desktopItem->setExpanded(true);
+    computer->setExpanded(true);
+    connect(m_tree, &QTreeWidget::itemExpanded, this, &FileBrowser::fillTreeItem);
+    connect(m_tree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item) { navigate(item->data(0, Qt::UserRole).toString()); });
+    foldersPage->layout()->addWidget(m_tree);
     m_left->addWidget(foldersPage);
 
-    // The search form
-    auto *searchPage = new QWidget(m_left);
-    auto *searchLayout = new QVBoxLayout(searchPage);
-    searchLayout->addWidget(new QLabel(tr("All or part of the file name:"), searchPage));
-    m_searchName = new QLineEdit(searchPage);
-    searchLayout->addWidget(m_searchName);
-    auto *searchButton = new QPushButton(tr("Search"), searchPage);
-    searchLayout->addWidget(searchButton, 0, Qt::AlignRight);
-    searchLayout->addStretch(1);
-    connect(searchButton, &QPushButton::clicked, this, &FileBrowser::startSearch);
-    connect(m_searchName, &QLineEdit::returnPressed, this, &FileBrowser::startSearch);
+    // The Search Companion
+    auto *searchPage = barPage(xpfiles::resources(xpfiles::find(QStringLiteral("srchui.dll"))) ? xpfiles::string(*xpfiles::resources(xpfiles::find(QStringLiteral("srchui.dll"))), 5013) : tr("Search Companion"), [this] { showSearchBar(false); });
+    m_searchCompanion = new SearchCompanion(searchPage);
+    connect(m_searchCompanion, &SearchCompanion::searchFiles, this, &FileBrowser::startSearch);
+    connect(m_searchCompanion, &SearchCompanion::stopSearch, this, &FileBrowser::finishSearch);
+    connect(m_searchCompanion, &SearchCompanion::searchWeb, this, &FileBrowser::searchTheWeb);
+#ifdef XP_WEB_PAGES
+    connect(m_searchCompanion, &SearchCompanion::highlightWeb, this, [this](const QString &text) {
+        if (m_web)
+            m_web->findText(text);
+    });
+#endif
+    static_cast<QVBoxLayout *>(searchPage->layout())->addWidget(m_searchCompanion, 1);
     m_left->addWidget(searchPage);
 
     // The folder itself
@@ -726,6 +851,30 @@ void FileBrowser::buildPanes()
     m_categoryArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_categoryArea->setWidget(m_categoryPage);
     m_pages->addWidget(m_categoryArea);
+    m_warning = new SystemFolderWarning([this] { setSystemFolderShown(true); }, m_pages);
+    m_pages->addWidget(m_warning);
+    m_resultsModel = new QStandardItemModel(this);
+    m_results = new SearchResultsView(m_pages);
+    m_results->setModel(m_resultsModel);
+    m_results->setRootIsDecorated(false);
+    m_results->setItemsExpandable(false);
+    m_results->setSortingEnabled(true);
+    m_results->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_results->setFrameShape(QFrame::NoFrame);
+    m_results->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_results->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_results, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) {
+        showContextMenu(m_results->viewport()->mapToGlobal(at), m_results->indexAt(at).isValid());
+    });
+    connect(m_results, &QAbstractItemView::activated, this, [this](const QModelIndex &index) {
+        openPath(m_resultsModel->index(index.row(), 0).data(Qt::UserRole).toString());
+    });
+    m_pages->addWidget(m_results);
+    connect(m_results->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] {
+        updateActions();
+        updateStatus();
+    });
+    clearResults(m_resultsModel);
 
     for (QItemSelectionModel *selection : {m_list->selectionModel(), m_virtualList->selectionModel()})
         connect(selection, &QItemSelectionModel::selectionChanged, this, [this] {
@@ -750,6 +899,12 @@ void FileBrowser::buildMenus()
     m_newFolderAction = file->addAction(tr("New &Folder"), this, &FileBrowser::newFolder);
     m_newTextAction = file->addAction(tr("New &Text Document"), this, &FileBrowser::newTextDocument);
     file->addSeparator();
+    file->addAction(tr("Create &Shortcut"), this, [this] {
+        for (const QString &path : selectedPaths()) {
+            const QFileInfo info(path);
+            QFile::link(path, info.absolutePath() + QLatin1Char('/') + tr("Shortcut to %1").arg(info.fileName()));
+        }
+    });
     m_deleteAction = file->addAction(tr("&Delete"), this, [this] { deleteSelected(false); });
     m_renameAction = file->addAction(tr("Rena&me"), this, &FileBrowser::renameSelected);
     m_propertiesAction = file->addAction(tr("P&roperties"), this, &FileBrowser::showProperties);
@@ -757,6 +912,8 @@ void FileBrowser::buildMenus()
     file->addAction(tr("&Close"), this, &QWidget::close);
 
     QMenu *edit = menuBar()->addMenu(tr("&Edit"));
+    edit->addAction(tr("&Undo"), QKeySequence::Undo)->setEnabled(false);
+    edit->addSeparator();
     m_cutAction = edit->addAction(tr("Cu&t"), QKeySequence::Cut, this, [this] { fileops::copyToClipboard(selectedPaths(), true); });
     m_copyAction = edit->addAction(tr("&Copy"), QKeySequence::Copy, this, [this] { fileops::copyToClipboard(selectedPaths(), false); });
     m_pasteAction = edit->addAction(tr("&Paste"), QKeySequence::Paste, this, [this] { fileops::pasteInto(currentFolder(), this); });
@@ -765,9 +922,19 @@ void FileBrowser::buildMenus()
     m_moveAction = edit->addAction(tr("Mo&ve To Folder..."), this, [this] { moveOrCopyTo(true); });
     edit->addSeparator();
     edit->addAction(tr("Select &All"), QKeySequence::SelectAll, this, [this] { currentView()->selectAll(); });
+    edit->addAction(tr("&Invert Selection"), this, [this] {
+        QAbstractItemView *view = currentView();
+        QItemSelection all;
+        const QModelIndex root = view->rootIndex();
+        const int rows = view->model()->rowCount(root), columns = view->model()->columnCount(root);
+        if (rows && columns)
+            all.select(view->model()->index(0, 0, root), view->model()->index(rows - 1, columns - 1, root));
+        view->selectionModel()->select(all, QItemSelectionModel::Toggle);
+    });
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
-    m_statusAction = view->addAction(tr("&Status Bar"));
+    m_toolbarsMenu = view->addMenu(tr("&Toolbars"));
+    m_statusAction = view->addAction(tr("Status &Bar"));
     m_statusAction->setCheckable(true);
     connect(m_statusAction, &QAction::toggled, statusBar(), &QWidget::setVisible);
     m_foldersAction = new QAction(stripIcon(FOLDERS), tr("Folders"), this);
@@ -775,12 +942,8 @@ void FileBrowser::buildMenus()
     connect(m_foldersAction, &QAction::triggered, this, &FileBrowser::setFoldersShown);
     m_searchAction = new QAction(stripIcon(SEARCH), tr("Search"), this);
     m_searchAction->setCheckable(true);
-    connect(m_searchAction, &QAction::triggered, this, [this](bool on) {
-        m_searchShown = on;
-        setFoldersShown(m_foldersShown);
-        if (on)
-            m_searchName->setFocus();
-    });
+    m_searchAction->setShortcut(Qt::CTRL | Qt::Key_E);
+    connect(m_searchAction, &QAction::triggered, this, &FileBrowser::showSearchBar);
     QMenu *bar = view->addMenu(tr("E&xplorer Bar"));
     bar->addAction(m_searchAction);
     bar->addAction(m_foldersAction);
@@ -798,18 +961,87 @@ void FileBrowser::buildMenus()
         connect(action, &QAction::triggered, this, [this, target = mode.mode] { setView(target); });
     }
     view->addSeparator();
+    QMenu *arrange = view->addMenu(tr("Arrange Icons &by"));
+    const struct { int string; const char *fallback; int column; } orders[] = {{8976, "Name", 0}, {8978, "Size", 1}, {8979, "Type", 2}, {8980, "Date Modified", 3}};
+    for (const auto &order : orders)
+        arrange->addAction(xpfiles::shellString(order.string, order.fallback), this, [this, column = order.column] { m_details->sortByColumn(column, Qt::AscendingOrder); });
+    view->addSeparator();
+    QMenu *go = view->addMenu(tr("&Go To"));
+    go->addAction(tr("&Back"), this, [this] { if (m_backButton->isEnabled()) m_backButton->click(); });
+    go->addAction(tr("&Forward"), this, [this] { if (m_forwardButton->isEnabled()) m_forwardButton->click(); });
+    go->addAction(tr("&Up One Level"), this, [this] { m_upAction->trigger(); });
     view->addAction(tr("&Refresh"), QKeySequence(Qt::Key_F5), this, [this] { navigate(m_location, false); });
     const QSettings settings(settingsPath(), QSettings::IniFormat);
     m_statusAction->setChecked(settings.value(QStringLiteral("status"), false).toBool());
     statusBar()->setVisible(m_statusAction->isChecked());
 
+    menuBar()->addMenu(buildFavoritesMenu());
+
     QMenu *tools = menuBar()->addMenu(tr("&Tools"));
+    // Linux mounts its network drives elsewhere: XP's entries, greyed as XP greys them when it has none.
+    tools->addAction(tr("Map &Network Drive..."))->setEnabled(false);
+    tools->addAction(tr("&Disconnect Network Drive..."))->setEnabled(false);
+    tools->addAction(tr("&Synchronize..."))->setEnabled(false);
+    tools->addSeparator();
     tools->addAction(tr("Folder &Options..."), this, [] { controlpanel::open(QStringLiteral("folders")); });
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
+    const auto helpProgram = [] {
+        for (const char *name : {"khelpcenter", "yelp"})
+            if (const QString found = QStandardPaths::findExecutable(QLatin1String(name)); !found.isEmpty())
+                return found;
+        return QString();
+    }();
+    QAction *helpAction = help->addAction(tr("Help and Support &Center"), this, [helpProgram] { QProcess::startDetached(helpProgram, {}); });
+    helpAction->setEnabled(!helpProgram.isEmpty());
+    help->addSeparator();
     help->addAction(tr("&About Windows"), this, [this] {
         QMessageBox::about(this, tr("About Windows"), tr("The Windows XP shell, ported to Linux.\nIts pictures and words come from your own copy of Windows XP."));
     });
+}
+
+QMenu *FileBrowser::buildFavoritesMenu()
+{
+    // XP's Favorites folder: links to places, in a folder of the user's.
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Favorites");
+    auto *menu = new QMenu(xpfiles::shellString(9106, "Favorites").prepend(QLatin1Char('&')).replace(QStringLiteral("&Favorites"), tr("F&avorites")), this);
+    connect(menu, &QMenu::aboutToShow, this, [this, menu, folder] {
+        menu->clear();
+        menu->addAction(tr("&Add to Favorites..."), this, [this, folder] {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, tr("Add Favorite"), tr("&Name:"), QLineEdit::Normal, places::title(m_location), &ok);
+            if (!ok || name.isEmpty())
+                return;
+            QDir().mkpath(folder);
+            if (m_location.startsWith(QLatin1String("::")) || places::isWeb(m_location)) {
+                QFile link(folder + QLatin1Char('/') + name + QStringLiteral(".place"));
+                if (link.open(QIODevice::WriteOnly))
+                    link.write(m_location.toUtf8());
+            } else {
+                QFile::link(m_location, folder + QLatin1Char('/') + name);
+            }
+        });
+        menu->addAction(tr("&Organize Favorites..."), this, [folder] {
+            QDir().mkpath(folder);
+            FileBrowser::open(folder);
+        });
+        const QFileInfoList entries = QDir(folder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+        if (!entries.isEmpty())
+            menu->addSeparator();
+        for (const QFileInfo &entry : entries) {
+            QString target = entry.symLinkTarget();
+            if (entry.suffix() == QLatin1String("place")) {
+                QFile link(entry.filePath());
+                if (link.open(QIODevice::ReadOnly))
+                    target = QString::fromUtf8(link.readAll());
+            }
+            if (!target.isEmpty())
+                menu->addAction(places::icon(target), entry.completeBaseName().isEmpty() ? entry.fileName() : entry.suffix() == QLatin1String("place") ? entry.completeBaseName() : entry.fileName(), this, [this, target] { navigate(target); });
+        }
+    });
+    // A menu's empty until it opens, and the bar only opens it if it has something.
+    menu->addAction(tr("&Add to Favorites..."));
+    return menu;
 }
 
 void FileBrowser::buildToolbars()
@@ -817,6 +1049,7 @@ void FileBrowser::buildToolbars()
     auto *toolbar = new RebarToolBar(tr("Standard Buttons"), this);
     addToolBar(toolbar);
     toolbar->setMovable(false);
+    toolbar->setContentsMargins(4, 0, 0, 0);
     toolbar->setIconSize(QSize(24, 24));
     toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     const auto historyButton = [&](int icon, const QString &text, bool back) {
@@ -846,7 +1079,17 @@ void FileBrowser::buildToolbars()
             navigate(places::ControlPanel);
             return;
         }
-        if (m_location.startsWith(QLatin1String("::")))
+        // XP's tree: the Desktop holds My Computer, My Documents and the Recycle Bin.
+        const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+        if (m_location == places::Computer || m_location == places::RecycleBin || m_location == QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)) {
+            navigate(desktop);
+            return;
+        }
+        if (m_location == places::ControlPanel) {
+            navigate(places::Computer);
+            return;
+        }
+        if (m_location.startsWith(QLatin1String("::")) || places::isWeb(m_location))
             return;
         const QFileInfo info(m_location);
         navigate(info.isRoot() ? places::Computer : info.absolutePath());
@@ -860,15 +1103,6 @@ void FileBrowser::buildToolbars()
     withText(m_searchAction);
     withText(m_foldersAction);
     toolbar->addSeparator();
-    QAction *moveAction = toolbar->addAction(stripIcon(MOVE_TO), tr("Move To"), this, [this] { moveOrCopyTo(true); });
-    QAction *copyAction = toolbar->addAction(stripIcon(COPY_TO), tr("Copy To"), this, [this] { moveOrCopyTo(false); });
-    QAction *deleteAction = toolbar->addAction(stripIcon(DELETE_ICON), tr("Delete"), this, [this] { deleteSelected(false); });
-    connect(m_deleteAction, &QAction::changed, deleteAction, [this, deleteAction, moveAction, copyAction] {
-        deleteAction->setEnabled(m_deleteAction->isEnabled());
-        moveAction->setEnabled(m_deleteAction->isEnabled());
-        copyAction->setEnabled(m_deleteAction->isEnabled());
-    });
-    toolbar->addSeparator();
     auto *views = new QToolButton(toolbar);
     views->setIcon(stripIcon(VIEWS));
     views->setToolTip(tr("Views"));
@@ -881,12 +1115,19 @@ void FileBrowser::buildToolbars()
     auto *addressBar = new RebarToolBar(tr("Address Bar"), this);
     addToolBar(addressBar);
     addressBar->setMovable(false);
+    toolbar->toggleViewAction()->setText(tr("&Standard Buttons"));
+    addressBar->toggleViewAction()->setText(tr("&Address Bar"));
+    m_toolbarsMenu->addAction(toolbar->toggleViewAction());
+    m_toolbarsMenu->addAction(addressBar->toggleViewAction());
     // One widget for the whole row: a toolbar folds away a stretching child of its own.
     auto *row = new QWidget(addressBar);
     auto *rowLayout = new QHBoxLayout(row);
     rowLayout->setContentsMargins(4, 1, 2, 1);
     rowLayout->setSpacing(4);
-    rowLayout->addWidget(new QLabel(tr("Address"), row));
+    auto *addressLabel = new QLabel(tr("Address"), row);
+    addressLabel->setForegroundRole(QPalette::PlaceholderText);
+    addressLabel->setPalette([&] { QPalette palette = addressLabel->palette(); palette.setColor(QPalette::PlaceholderText, ShellTheme::instance()->system(QStringLiteral("graytext"), QColor(128, 128, 128))); return palette; }());
+    rowLayout->addWidget(addressLabel);
     m_address = new QComboBox(row);
     m_address->setEditable(true);
     m_address->setInsertPolicy(QComboBox::NoInsert);
@@ -908,6 +1149,10 @@ void FileBrowser::buildToolbars()
                 navigate(place);
                 return;
             }
+        if (places::isWeb(text)) {
+            navigate(text);
+            return;
+        }
         const QString expanded = text.startsWith(QLatin1Char('~')) ? QDir::homePath() + text.mid(1) : text;
         if (QFileInfo(expanded).isDir())
             navigate(expanded);
@@ -959,7 +1204,7 @@ void FileBrowser::setView(View view)
         m_list->setIconSize(QSize(48, 48));
         break;
     case Icons:
-        delegate->setMode(ItemDelegate::Plain);
+        delegate->setMode(ItemDelegate::IconsMode);
         m_list->setViewMode(QListView::IconMode);
         m_list->setGridSize(QSize(75, 75));
         m_list->setIconSize(QSize(32, 32));
@@ -975,12 +1220,13 @@ void FileBrowser::setView(View view)
     case Details:
         break;
     }
-    // IconMode lets items be dragged about; here a drag is a file's.
+    // IconMode lets items be dragged about; here a drag is a file's. (And a flow set for List stays.)
     if (view != List) {
+        m_list->setFlow(QListView::LeftToRight);
         m_list->setMovement(QListView::Static);
         m_list->setWrapping(true);
     }
-    if (!m_location.startsWith(QLatin1String("::")))
+    if (!m_location.startsWith(QLatin1String("::")) && !blocked())
         m_pages->setCurrentWidget(view == Details ? static_cast<QWidget *>(m_details) : m_list);
     m_list->doItemsLayout();
 }
@@ -1004,6 +1250,81 @@ void FileBrowser::setFoldersShown(bool shown)
     m_splitter->setHandleWidth(shown || m_searchShown ? 4 : 0);
     // XP's "Use Windows classic folders" hides the pane unless a bar is open.
     m_left->setVisible(shown || m_searchShown || !m_noTasks);
+    if (shown)
+        selectInTree(m_location);
+}
+
+void FileBrowser::showSearchBar(bool shown)
+{
+    m_searchShown = shown;
+    m_searchAction->setChecked(shown);
+    if (shown) {
+        m_foldersShown = false;
+        m_foldersAction->setChecked(false);
+        m_searchCompanion->setCurrentFolder(currentFolder());
+    }
+    setFoldersShown(m_foldersShown);
+}
+
+// A folder of the tree: its subfolders, read when it opens.
+void FileBrowser::fillTreeItem(QTreeWidgetItem *item)
+{
+    const QString location = item->data(0, Qt::UserRole).toString();
+    if (location.startsWith(QLatin1String("::")) || item->data(0, Qt::UserRole + 1).toBool())
+        return;
+    item->setData(0, Qt::UserRole + 1, true);
+    QDir::Filters filter = QDir::Dirs | QDir::NoDotAndDotDot;
+    const QSettings settings(settingsPath(), QSettings::IniFormat);
+    if (settings.value(QStringLiteral("showHidden"), false).toBool())
+        filter |= QDir::Hidden;
+    const QFileInfoList children = QDir(location).entryInfoList(filter, QDir::Name | QDir::IgnoreCase);
+    for (const QFileInfo &child : children) {
+        auto *childItem = new QTreeWidgetItem(QStringList(child.fileName()));
+        childItem->setIcon(0, fileicons::forFile(child));
+        childItem->setData(0, Qt::UserRole, child.absoluteFilePath());
+        childItem->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+        item->addChild(childItem);
+    }
+    if (children.isEmpty())
+        item->setChildIndicatorPolicy(QTreeWidgetItem::DontShowIndicatorWhenChildless);
+}
+
+// Opens the tree down to LOCATION, from the deepest place that holds it.
+void FileBrowser::selectInTree(const QString &location)
+{
+    if (!m_tree || !m_foldersShown)
+        return;
+    QTreeWidgetItem *best = nullptr;
+    int bestLength = -1;
+    std::function<void(QTreeWidgetItem *)> look = [&](QTreeWidgetItem *item) {
+        const QString place = item->data(0, Qt::UserRole).toString();
+        const bool holds = place == location || (!place.startsWith(QLatin1String("::")) && location.startsWith(place == QLatin1String("/") ? place : place + QLatin1Char('/')));
+        if (holds && place.size() > bestLength) {
+            best = item;
+            bestLength = int(place.size());
+        }
+        for (int i = 0; i < item->childCount(); ++i)
+            look(item->child(i));
+    };
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i)
+        look(m_tree->topLevelItem(i));
+    if (!best)
+        return;
+    while (best->data(0, Qt::UserRole).toString() != location) {
+        best->setExpanded(true);
+        fillTreeItem(best);
+        QTreeWidgetItem *next = nullptr;
+        for (int i = 0; i < best->childCount() && !next; ++i) {
+            const QString child = best->child(i)->data(0, Qt::UserRole).toString();
+            if (child == location || location.startsWith(child + QLatin1Char('/')))
+                next = best->child(i);
+        }
+        if (!next)
+            break;
+        best = next;
+    }
+    m_tree->setCurrentItem(best);
+    m_tree->scrollToItem(best);
 }
 
 QString FileBrowser::currentFolder() const
@@ -1013,6 +1334,8 @@ QString FileBrowser::currentFolder() const
 
 QAbstractItemView *FileBrowser::currentView() const
 {
+    if (m_location == places::Search)
+        return m_results;
     if (m_pages->currentWidget() == m_details)
         return m_details;
     if (m_pages->currentWidget() == m_virtualList)
@@ -1022,6 +1345,13 @@ QAbstractItemView *FileBrowser::currentView() const
 
 QStringList FileBrowser::selectedPaths() const
 {
+    if (m_location == places::Search) {
+        QStringList paths;
+        const QModelIndexList rows = m_results->selectionModel()->selectedRows();
+        for (const QModelIndex &row : rows)
+            paths.append(row.data(Qt::UserRole).toString());
+        return paths;
+    }
     QStringList paths;
     QAbstractItemView *view = currentView();
     if (view == m_virtualList)
@@ -1036,7 +1366,8 @@ QStringList FileBrowser::selectedPaths() const
 void FileBrowser::navigate(const QString &location, bool remember)
 {
     QString target = location;
-    if (!target.startsWith(QLatin1String("::")))
+    const bool web = places::isWeb(target);
+    if (!target.startsWith(QLatin1String("::")) && !web)
         target = QDir::cleanPath(QFileInfo(target).absoluteFilePath());
     if (remember && target != m_location && !m_location.isEmpty()) {
         m_back.append(m_location);
@@ -1049,13 +1380,22 @@ void FileBrowser::navigate(const QString &location, bool remember)
     m_address->blockSignals(true);
     m_address->clear();
     m_address->addItem(places::icon(target), target.startsWith(QLatin1String("::")) ? places::title(target) : target);
+    if (m_searchCompanion)
+        m_searchCompanion->setCurrentFolder(target.startsWith(QLatin1String("::")) || web ? QDir::homePath() : target);
     m_address->setCurrentIndex(0);
     m_address->blockSignals(false);
     m_backButton->setEnabled(!m_back.isEmpty());
     m_forwardButton->setEnabled(!m_forward.isEmpty());
-    m_upAction->setEnabled(!target.startsWith(QLatin1String("::")) || target.startsWith(places::ControlPanel + QLatin1Char('/')));
+    m_upAction->setEnabled(target != places::Search && !web && target != QStandardPaths::writableLocation(QStandardPaths::DesktopLocation));
 
     const QString folder = target == places::RecycleBin ? fileops::trashFiles() : target;
+    if (web) {
+        showWebPage(target);
+        updatePane();
+        updateActions();
+        updateStatus();
+        return;
+    }
     if (!folder.startsWith(QLatin1String("::"))) {
         QDir().mkpath(target == places::RecycleBin ? folder : QString());
         const QModelIndex root = m_files->setRootPath(folder);
@@ -1064,15 +1404,16 @@ void FileBrowser::navigate(const QString &location, bool remember)
         m_details->setRootIndex(shown);
         m_list->clearSelection();
         m_details->clearSelection();
-        m_pages->setCurrentWidget(m_view == Details ? static_cast<QWidget *>(m_details) : m_list);
-        if (auto *treeModel = static_cast<FolderModelImpl *>(m_tree->model()); target != places::RecycleBin) {
-            const QModelIndex current = treeModel->mapFromSource(m_treeFiles->index(target));
-            m_tree->setCurrentIndex(current);
-            m_tree->scrollTo(current);
+        if (blocked()) {
+            m_warning->setDrive(target == QLatin1String("/"));
+            m_pages->setCurrentWidget(m_warning);
+        } else {
+            m_pages->setCurrentWidget(m_view == Details ? static_cast<QWidget *>(m_details) : m_list);
         }
     } else {
         showVirtual(target);
     }
+    selectInTree(target);
     updatePane();
     updateActions();
     updateStatus();
@@ -1126,14 +1467,14 @@ void FileBrowser::fillComputer()
         }
         const QString name = drive.displayName().isEmpty() || drive.displayName() == path ? xpfiles::shellString(9402, "Local Disk") : drive.displayName();
         addVirtual(QStringLiteral("%1 (%2)").arg(name, path), fileicons::shell(fileicons::Drive), [this, path] { navigate(path); },
-                   tr("%1 free of %2").arg(QLocale().formattedDataSize(drive.bytesAvailable()), QLocale().formattedDataSize(drive.bytesTotal())));
+                   tr("%1 free of %2").arg(xpSize(drive.bytesAvailable()), xpSize(drive.bytesTotal())));
     }
     if (!removable.isEmpty()) {
         addVirtualHeader(tr("Devices with Removable Storage"));
         for (const QStorageInfo &drive : std::as_const(removable)) {
             const QString path = drive.rootPath();
             addVirtual(drive.displayName(), fileicons::shell(fileicons::Removable), [this, path] { navigate(path); },
-                       tr("%1 free of %2").arg(QLocale().formattedDataSize(drive.bytesAvailable()), QLocale().formattedDataSize(drive.bytesTotal())));
+                       tr("%1 free of %2").arg(xpSize(drive.bytesAvailable()), xpSize(drive.bytesTotal())));
         }
     }
 }
@@ -1149,7 +1490,9 @@ void FileBrowser::fillControlPanel()
 void FileBrowser::showVirtual(const QString &location)
 {
     if (location == places::Search) {
-        m_pages->setCurrentWidget(m_virtualList);
+        m_pages->setCurrentWidget(m_results);
+        if (!m_searchShown)
+            showSearchBar(true);
         return;
     }
     m_virtual->clear();
@@ -1179,6 +1522,25 @@ void FileBrowser::showVirtual(const QString &location)
     }
     m_pages->setCurrentWidget(m_virtualList);
     m_virtualList->doItemsLayout();
+}
+
+bool FileBrowser::blocked() const
+{
+    const QSettings settings(settingsPath(), QSettings::IniFormat);
+    return isSystemFolder(m_location) && !settings.value(QStringLiteral("shownSystemFolders")).toStringList().contains(m_location);
+}
+
+// XP remembers, for each of them, that its contents were asked for.
+void FileBrowser::setSystemFolderShown(bool shown)
+{
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    QStringList folders = settings.value(QStringLiteral("shownSystemFolders")).toStringList();
+    folders.removeAll(m_location);
+    if (shown)
+        folders.append(m_location);
+    settings.setValue(QStringLiteral("shownSystemFolders"), folders);
+    settings.sync();
+    navigate(m_location, false);
 }
 
 void FileBrowser::openPath(const QString &path)
@@ -1234,6 +1596,10 @@ void FileBrowser::updateStatus()
     QString text;
     if (!selected.isEmpty()) {
         text = tr("%n object(s) selected", nullptr, int(selected.size()));
+    } else if (m_location == places::Search) {
+        text = tr("%n object(s) found", nullptr, m_resultsModel->rowCount());
+    } else if (places::isWeb(m_location)) {
+        text = tr("Done");
     } else if (!m_location.startsWith(QLatin1String("::")) || m_location == places::RecycleBin) {
         const int count = m_model->rowCount(m_list->rootIndex());
         text = tr("%n object(s)", nullptr, count);
@@ -1279,7 +1645,7 @@ void FileBrowser::updatePane()
     } else if (m_location == places::ControlPanel) {
         QSettings settings(settingsPath(), QSettings::IniFormat);
         const bool classic = settings.value(QStringLiteral("classicPanel"), false).toBool();
-        groups.append({places::title(places::ControlPanel), true, {
+        PaneGroup panel{places::title(places::ControlPanel), true, {
             {xpfiles::shellString(classic ? STRING_SWITCH_CATEGORY : STRING_SWITCH_CLASSIC, classic ? "Switch to Category View" : "Switch to Classic View"),
              fileicons::shell(fileicons::ControlPanel), [this, classic] {
                  QSettings write(settingsPath(), QSettings::IniFormat);
@@ -1288,26 +1654,65 @@ void FileBrowser::updatePane()
                  showVirtual(places::ControlPanel);
                  updatePane();
              }},
-        }});
-        groups.append({xpfiles::shellString(STRING_SEE_ALSO, "See Also"), false, {
-            {tr("Folder Options"), fileicons::shell(fileicons::Folder), [] { controlpanel::open(QStringLiteral("folders")); }},
-        }});
+        }};
+        panel.icon = fileicons::shell(fileicons::ControlPanel);
+        groups.append(panel);
+        // XP's Windows Update and Help and Support: Linux's own, when it has them
+        PaneGroup seeAlso{xpfiles::shellString(STRING_SEE_ALSO, "See Also"), false, {}};
+        const auto programOf = [](std::initializer_list<const char *> names) {
+            for (const char *name : names)
+                if (const QString found = QStandardPaths::findExecutable(QLatin1String(name)); !found.isEmpty())
+                    return found;
+            return QString();
+        };
+        if (const QString updater = programOf({"plasma-discover", "gnome-software", "pamac-manager", "update-manager"}); !updater.isEmpty())
+            seeAlso.tasks.append({xpfiles::shellString(32038, "Windows Update"), fileicons::shell(47), [updater] { QProcess::startDetached(updater, {}); }});
+        if (const QString help = programOf({"khelpcenter", "yelp"}); !help.isEmpty())
+            seeAlso.tasks.append({xpfiles::shellString(32036, "Help and Support"), fileicons::shell(24), [help] { QProcess::startDetached(help, {}); }});
+        if (seeAlso.tasks.isEmpty())
+            seeAlso.tasks.append({tr("Folder Options"), fileicons::shell(fileicons::Folder), [] { controlpanel::open(QStringLiteral("folders")); }});
+        groups.append(seeAlso);
         m_pane->setGroups(groups);
         return;
-    } else if (m_location == places::Search) {
-        groups.append({tr("Search Results"), true, {{tr("Search again"), fileicons::shell(fileicons::Search), [this] { m_searchName->setFocus(); }}}});
+    } else if (m_location == places::Search || places::isWeb(m_location)) {
         m_pane->setGroups(groups);
         return;
+    } else if (isSystemFolder(m_location) && blocked()) {
+        const bool drive = m_location == QLatin1String("/");
+        groups.append({xpfiles::shellString(STRING_SYSTEM_TASKS, "System Tasks"), true, {
+            {drive ? xpfiles::shellString(31319, "Show the contents of this drive") : xpfiles::shellString(31323, "Show the contents of this folder"), fileicons::shell(fileicons::FolderOpen), [this] { setSystemFolderShown(true); }},
+            {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::Application), [] { controlpanel::open(QStringLiteral("programs")); }},
+            {tr("Search for files or folders"), fileicons::shell(fileicons::Search), [this] { showSearchBar(true); }},
+        }});
+        others.tasks = {place(places::Computer), place(documents)};
+        details.tasks = {{places::title(m_location), {}, {}, true}, {drive ? xpfiles::shellString(9402, "Local Disk") : fileicons::typeName(QFileInfo(m_location)), {}, {}}};
+        if (drive) {
+            const QStorageInfo disk(m_location);
+            details.tasks.append({tr("File System: %1").arg(QString::fromLatin1(disk.fileSystemType())), {}, {}});
+            details.tasks.append({tr("Free Space: %1").arg(xpSize(disk.bytesAvailable())), {}, {}});
+            details.tasks.append({tr("Total Size: %1").arg(xpSize(disk.bytesTotal())), {}, {}});
+        }
     } else {
-        PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), true, {}};
+        if (isSystemFolder(m_location)) {
+            const bool drive = m_location == QLatin1String("/");
+            groups.append({xpfiles::shellString(STRING_SYSTEM_TASKS, "System Tasks"), true, {
+                {drive ? xpfiles::shellString(31321, "Hide the contents of this drive") : xpfiles::shellString(31325, "Hide the contents of this folder"), fileicons::shell(fileicons::FolderOpen), [this] { setSystemFolderShown(false); }},
+            }});
+        }
+        PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), !isSystemFolder(m_location), {}};
         if (selected.isEmpty()) {
             tasks.tasks.append({xpfiles::shellString(STRING_NEW_FOLDER, "Make a new folder"), fileicons::shell(fileicons::FolderOpen), [this] { newFolder(); }});
         } else {
-            if (selected.size() == 1)
-                tasks.tasks.append({xpfiles::shellString(STRING_RENAME, "Rename this file"), stripIcon(0).isNull() ? QIcon() : fileicons::shell(fileicons::Document), [this] { renameSelected(); }});
-            tasks.tasks.append({xpfiles::shellString(STRING_MOVE, "Move this file"), stripIcon(MOVE_TO), [this] { moveOrCopyTo(true); }});
-            tasks.tasks.append({xpfiles::shellString(STRING_COPY, "Copy this file"), stripIcon(COPY_TO), [this] { moveOrCopyTo(false); }});
-            tasks.tasks.append({xpfiles::shellString(STRING_DELETE, "Delete this file"), stripIcon(DELETE_ICON), [this] { deleteSelected(false); }});
+            // XP's words for what is selected: a file, a folder or several items
+            const bool several = selected.size() > 1, folder = !several && QFileInfo(selected.first()).isDir();
+            const auto words = [&](int fileId, const char *fileText, int folderId, const char *folderText, int manyId, const char *manyText) {
+                return several ? xpfiles::shellString(manyId, manyText) : folder ? xpfiles::shellString(folderId, folderText) : xpfiles::shellString(fileId, fileText);
+            };
+            if (!several)
+                tasks.tasks.append({folder ? xpfiles::shellString(31254, "Rename this folder") : xpfiles::shellString(STRING_RENAME, "Rename this file"), fileicons::shell(fileicons::Document), [this] { renameSelected(); }});
+            tasks.tasks.append({words(STRING_MOVE, "Move this file", 31256, "Move this folder", 31264, "Move the selected items"), stripIcon(MOVE_TO), [this] { moveOrCopyTo(true); }});
+            tasks.tasks.append({words(STRING_COPY, "Copy this file", 31258, "Copy this folder", 31266, "Copy the selected items"), stripIcon(COPY_TO), [this] { moveOrCopyTo(false); }});
+            tasks.tasks.append({words(STRING_DELETE, "Delete this file", 31262, "Delete this folder", 31270, "Delete the selected items"), stripIcon(DELETE_ICON), [this] { deleteSelected(false); }});
         }
         groups.append(tasks);
         const QFileInfo info(m_location);
@@ -1322,7 +1727,7 @@ void FileBrowser::updatePane()
             details.tasks.append({fileicons::typeName(shown), {}, {}});
             details.tasks.append({tr("Date Modified: %1").arg(QLocale().toString(shown.lastModified(), QLocale::ShortFormat)), {}, {}});
             if (!shown.isDir())
-                details.tasks.append({tr("Size: %1").arg(QLocale().formattedDataSize(shown.size())), {}, {}});
+                details.tasks.append({tr("Size: %1").arg(xpSize(shown.size())), {}, {}});
         }
     }
     if (!others.tasks.isEmpty())
@@ -1501,41 +1906,154 @@ void FileBrowser::moveOrCopyTo(bool move)
         fileops::transfer(selected, target, move ? fileops::Action::Move : fileops::Action::Copy, this);
 }
 
-void FileBrowser::startSearch()
+void FileBrowser::startSearch(const SearchQuery &query)
 {
-    m_searchText = m_searchName->text().trimmed();
-    if (m_searchText.isEmpty())
-        return;
-    const QString from = currentFolder().isEmpty() ? (m_searchFrom.isEmpty() ? QDir::homePath() : m_searchFrom) : currentFolder();
-    m_searchFrom = from;
-    m_virtual->clear();
-    m_actions.clear();
-    auto *delegate = delegateOf(m_virtualList);
-    m_virtualList->setViewMode(QListView::IconMode);
-    m_virtualList->setGridSize(QSize());
-    m_virtualList->setIconSize(QSize(48, 48));
-    delegate->setMode(ItemDelegate::TilesMode);
-    m_searchPending = {from};
+    m_query = std::make_shared<SearchQuery>(query);
+    m_searchFound = 0;
+    clearResults(m_resultsModel);
+    if (m_query->folder.isEmpty())
+        m_query->folder = QDir::homePath();
+    m_searchPending = {m_query->folder};
     navigate(places::Search);
+    // (navigate stops the timer.)
     m_searchTimer->start(0);
 }
 
-void FileBrowser::continueSearch()
+namespace {
+
+// Never searched: what Linux makes up, and is not files
+bool neverSearched(const QString &path)
 {
-    // A few folders at a time: the window stays alive while the search runs.
-    for (int i = 0; i < 20 && !m_searchPending.isEmpty(); ++i) {
-        const QDir folder(m_searchPending.takeFirst());
-        const QFileInfoList children = folder.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot);
-        for (const QFileInfo &child : children) {
-            if (child.isDir() && !child.isSymLink())
-                m_searchPending.append(child.absoluteFilePath());
-            if (child.fileName().contains(m_searchText, Qt::CaseInsensitive)) {
-                const QString path = child.absoluteFilePath();
-                addVirtual(child.fileName(), fileicons::forFile(child), [this, path] { openPath(path); }, child.absolutePath());
-            }
+    return path == QLatin1String("/proc") || path == QLatin1String("/sys") || path == QLatin1String("/dev") || path == QLatin1String("/run");
+}
+
+bool systemFolder(const QString &path)
+{
+    static const QStringList folders{QStringLiteral("/usr"), QStringLiteral("/etc"), QStringLiteral("/boot"), QStringLiteral("/opt"), QStringLiteral("/bin"), QStringLiteral("/sbin"), QStringLiteral("/lib"), QStringLiteral("/lib64"), QStringLiteral("/var")};
+    return folders.contains(path);
+}
+
+bool nameMatches(const QString &name, const QString &wanted, Qt::CaseSensitivity sensitivity)
+{
+    if (wanted.isEmpty())
+        return true;
+    // Several names, as XP takes them; a "*" or "?" is a pattern, anything else a part of the name.
+    for (const QString &part : wanted.split(QRegularExpression(QStringLiteral("[,;]")), Qt::SkipEmptyParts)) {
+        const QString trimmed = part.trimmed();
+        if (trimmed.contains(QLatin1Char('*')) || trimmed.contains(QLatin1Char('?'))) {
+            const auto options = sensitivity == Qt::CaseInsensitive ? QRegularExpression::CaseInsensitiveOption : QRegularExpression::NoPatternOption;
+            if (QRegularExpression(QRegularExpression::wildcardToRegularExpression(trimmed), options).match(name).hasMatch())
+                return true;
+        } else if (name.contains(trimmed, sensitivity)) {
+            return true;
         }
     }
-    statusBar()->showMessage(m_searchPending.isEmpty() ? tr("%n object(s) found", nullptr, m_virtual->rowCount()) : tr("Searching..."));
+    return false;
+}
+
+bool fileContains(const QString &path, const QByteArray &text, Qt::CaseSensitivity sensitivity)
+{
+    const qint64 MOST = 16 * 1024 * 1024;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > MOST)
+        return false;
+    const QByteArray data = file.readAll();
+    return sensitivity == Qt::CaseSensitive ? data.contains(text) : data.toLower().contains(text.toLower());
+}
+
+} // namespace
+
+void FileBrowser::continueSearch()
+{
+    // A little at a time: the window stays alive while the search runs.
+    QElapsedTimer budget;
+    budget.start();
+    const SearchQuery &query = *m_query;
+    const Qt::CaseSensitivity sensitivity = query.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    while (!m_searchPending.isEmpty() && budget.elapsed() < 30) {
+        const QDir folder(m_searchPending.takeFirst());
+        QDir::Filters filter = QDir::AllEntries | QDir::NoDotAndDotDot;
+        if (query.hidden)
+            filter |= QDir::Hidden;
+        const QFileInfoList children = folder.entryInfoList(filter);
+        for (const QFileInfo &child : children) {
+            const QString path = child.absoluteFilePath();
+            if (child.isDir() && !child.isSymLink() && query.subfolders && !neverSearched(path) && (query.system || !systemFolder(path)))
+                m_searchPending.append(path);
+            if (!nameMatches(child.fileName(), query.name, sensitivity))
+                continue;
+            if (!query.extensions.isEmpty() && !query.extensions.contains(child.suffix().toLower()))
+                continue;
+            if (query.minSize >= 0 && (child.isDir() || child.size() < query.minSize))
+                continue;
+            if (query.maxSize >= 0 && (child.isDir() || child.size() > query.maxSize))
+                continue;
+            const QDateTime when = query.whichDate == 2 ? child.birthTime() : query.whichDate == 3 ? child.lastRead() : child.lastModified();
+            if ((query.after.isValid() && when < query.after) || (query.before.isValid() && when > query.before))
+                continue;
+            if (!query.text.isEmpty() && (child.isDir() || !fileContains(path, query.text.toUtf8(), sensitivity)))
+                continue;
+            auto *name = new QStandardItem(fileicons::forFile(child), child.fileName());
+            name->setData(path, Qt::UserRole);
+            m_resultsModel->appendRow({name, new QStandardItem(child.absolutePath()), new QStandardItem(child.isDir() ? QString() : xpSize(child.size())),
+                                       new QStandardItem(fileicons::typeName(child)), new QStandardItem(QLocale().toString(child.lastModified(), QLocale::ShortFormat))});
+            ++m_searchFound;
+        }
+    }
+    statusBar()->showMessage(m_searchPending.isEmpty() ? tr("%n object(s) found", nullptr, m_searchFound) : tr("Searching..."));
     if (m_searchPending.isEmpty())
-        m_searchTimer->stop();
+        finishSearch();
+}
+
+void FileBrowser::finishSearch()
+{
+    m_searchTimer->stop();
+    m_searchPending.clear();
+    m_results->resizeColumnToContents(0);
+    m_searchCompanion->searchFinished(m_searchFound);
+}
+
+void FileBrowser::searchTheWeb(const QString &text, const QString &engine)
+{
+    navigate(engine + QString::fromUtf8(QUrl::toPercentEncoding(text)));
+}
+
+void FileBrowser::showWebPage(const QString &address)
+{
+#ifdef XP_WEB_PAGES
+    if (!m_web) {
+        // A link that asks for a new window stays in this one, as a folder window's does.
+        class Page : public QWebEngineView
+        {
+        public:
+            using QWebEngineView::QWebEngineView;
+
+        protected:
+            QWebEngineView *createWindow(QWebEnginePage::WebWindowType) override { return this; }
+        };
+        m_web = new Page(m_pages);
+        m_pages->addWidget(m_web);
+        connect(m_web, &QWebEngineView::titleChanged, this, [this](const QString &title) {
+            if (places::isWeb(m_location) && !title.isEmpty())
+                setWindowTitle(title);
+        });
+        connect(m_web, &QWebEngineView::urlChanged, this, [this](const QUrl &url) {
+            // A link followed in the page goes through the window's history.
+            const QString now = url.toString();
+            if (!places::isWeb(m_location) || now == m_location || now.isEmpty())
+                return;
+            m_back.append(m_location);
+            m_forward.clear();
+            m_location = now;
+            m_backButton->setEnabled(true);
+            m_forwardButton->setEnabled(false);
+            m_address->setItemText(0, now);
+        });
+    }
+    m_pages->setCurrentWidget(m_web);
+    if (m_web->url().toString() != address)
+        m_web->load(QUrl(address));
+#else
+    programs::open(address);
+#endif
 }

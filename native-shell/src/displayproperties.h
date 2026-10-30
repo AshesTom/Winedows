@@ -13,18 +13,25 @@ class QComboBox;
 class QListWidget;
 class QPushButton;
 class QTabWidget;
+class QSlider;
+class QSpinBox;
+class QLabel;
 
 class ThemePreview : public QWidget
 {
     Q_OBJECT
 public:
     explicit ThemePreview(QWidget *parent);
+    // The Themes tab shows one window and the desktop, Appearance a window of each kind.
+    enum Mode { ThemeSample, AppearanceSample };
+    void setMode(Mode mode) { m_mode = mode; }
     void setChoice(const LookChoice &choice);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
+    Mode m_mode = ThemeSample;
     LookChoice m_choice;
     FrameStyle m_style;
     QImage m_wallpaper;
@@ -51,15 +58,24 @@ class DisplayProperties : public QDialog
 {
     Q_OBJECT
 public:
-    enum Tab { Themes, Desktop, Appearance, LinuxPrograms };
+    enum Tab { Themes, Desktop, ScreenSaver, Appearance, Settings, LinuxPrograms };
     // The one window of them, on TAB.
     static void showTab(Tab tab);
+    // The screen saver chosen here, when the session starts.
+    static void restoreScreenSaver();
 
 private:
     DisplayProperties();
     QWidget *themesPage();
     QWidget *desktopPage();
     QWidget *appearancePage();
+    QWidget *screenSaverPage();
+    QWidget *settingsPage();
+    void applyScreenSaver();
+    void fillThemes();
+    void importTheme();
+    void deleteTheme();
+    void applyResolution();
     QWidget *linuxPage();
     void showIconSamples();
     void applyLinuxLook();
@@ -79,5 +95,12 @@ private:
     QWidget *m_iconSamples = nullptr;
     bool m_rebuild = false;
     ThemePreview *m_themePreview = nullptr, *m_appearancePreview = nullptr;
-    MonitorPreview *m_monitor = nullptr;
+    MonitorPreview *m_monitor = nullptr, *m_saverMonitor = nullptr, *m_settingsMonitor = nullptr;
+    QComboBox *m_saver = nullptr;
+    QSpinBox *m_saverWait = nullptr;
+    QSlider *m_resolution = nullptr;
+    QPushButton *m_deleteTheme = nullptr;
+    QLabel *m_resolutionText = nullptr;
+    QList<QSize> m_modes;
+    QSize m_mode;
 };
