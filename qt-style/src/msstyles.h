@@ -119,6 +119,10 @@ private:
     mutable QHash<QString, QImage> m_cache;
 };
 
+// A BITMAP resource (a DIB without its file header) as an ARGB32 image; PARTIAL
+// tells whether any pixel is not opaque. Null if it cannot be read.
+QImage decodeDib(const QByteArray &dib, bool *partial);
+
 bool parseColour(const QString &value, QColor *out);
 bool parseMargins(const QString &value, QMargins *out);   // "left, right, top, bottom"
 bool parseSize(const QString &value, QSize *out);

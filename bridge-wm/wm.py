@@ -1061,9 +1061,12 @@ class Manager:
         owners = []
         for i, c in self.clients.items():
             w = c['w']
-            if c['kind'] != 'normal' or c['hwnd'] or (c['owner'] and not self.framed_owned(c)):
+            # A window "owned" by what is no client has no owner to stay with: Qt's dialogs
+            # without a parent name its hidden group leader. It gets a frame of its own.
+            orphan = c['owner'] and c['owner'] not in self.clients and not c.get('undecorated')
+            if c['kind'] != 'normal' or c['hwnd'] or (c['owner'] and not self.framed_owned(c) and not orphan):
                 continue
-            if c['owner']:
+            if c['owner'] and not orphan:
                 owners.append(f'{i:x}\t{c["owner"]:x}\n')
             if c['icon_dirty']:
                 # The caption's 16x16 icon beside the big one; the proxy

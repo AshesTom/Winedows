@@ -51,6 +51,12 @@ class Session:
         self.proxy = ROOT / '.local/bridge/proxy.exe'
         if not self.proxy.is_file():
             raise SystemExit('Build bridge-wm first')
+        self.native_shell = None
+        if config.get('native_shell'):
+            self.native_shell = ROOT / '.local/native-shell/bin/xp-native-shell'
+            if not self.native_shell.is_file():
+                raise SystemExit('Build native-shell first')
+            os.environ['WIN4WINE_NATIVE_SHELL'] = 'prefix'
         self.state = Path(config.get('state', str(Path.home() / '.local/state/win4wine')))
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         # The logs only grow while a session runs (Wine's debug channels and
@@ -756,7 +762,7 @@ class Session:
             ipc_win = 'Z:' + str(self.ipc).replace('/', '\\')
             proxy = self.spawn([self.wine, str(self.proxy), ipc_win], 'proxy')
             self.keyboard_watch()
-            shell = self.spawn([self.wine, self.shell['command']], 'xp-shell')
+            shell = self.spawn(self.shell_command(), 'xp-shell')
             started = time.monotonic()
             ready = False
             while not self.stopping:
@@ -801,6 +807,14 @@ class Session:
                 self.fallback(wm)
                 return
             time.sleep(1)
+
+    def shell_command(self):
+        """The shell's command: XP's explorer on Wine, or (session.json's
+        "native_shell", experimental) the Linux port of its desktop and taskbar
+        (native-shell/). Linux windows keep their XP frames from the proxy."""
+        if self.native_shell:
+            return [str(self.native_shell), '--ipc', str(self.ipc)]
+        return [self.wine, self.shell['command']]
 
     def stage(self, args, script):
         """The shell's staging step, its progress (prefix/stage.py) passed on to

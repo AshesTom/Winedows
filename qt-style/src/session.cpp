@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "session.h"
 
+#include "msstyles.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -160,7 +162,65 @@ void readLinuxLook(Look *look)
     }
 }
 
+// native-look.conf, in the same format: over what the prefix says, as a native
+// session's Display Properties has the last word.
+void readNativeLook(Look *look)
+{
+    if (!qEnvironmentVariableIsSet("WIN4WINE_NATIVE_SHELL"))
+        return;
+    QFile file(nativeLookPath());
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+    QHash<QString, QString> values;
+    for (const QByteArray &raw : file.readAll().split('\n')) {
+        const QString line = QString::fromUtf8(raw).trimmed();
+        const int equals = line.indexOf(QLatin1Char('='));
+        if (!line.startsWith(QLatin1Char('#')) && equals > 0)
+            values.insert(line.left(equals).trimmed(), line.mid(equals + 1).trimmed());
+    }
+    look->stylePath = values.value(QStringLiteral("style"));
+    look->themed = !look->stylePath.isEmpty() && QFileInfo(look->stylePath).isFile();
+    look->colourName = values.value(QStringLiteral("colour"));
+    look->sizeName = values.value(QStringLiteral("size"));
+    look->haveWallpaper = true;
+    look->wallpaper = values.value(QStringLiteral("wallpaper"));
+    look->wallpaperStyle = values.value(QStringLiteral("wallpaper_style")).toInt();
+    look->tileWallpaper = values.value(QStringLiteral("tile_wallpaper")).toInt() != 0;
+    // Without a prefix the system colours and fonts are the style's own, or Windows Classic's.
+    const struct { const char *registry; int r, g, b; const char *metric; } colours[] = {
+        {"window", 255, 255, 255, "window"}, {"windowtext", 0, 0, 0, nullptr}, {"windowframe", 0, 0, 0, nullptr},
+        {"buttonface", 212, 208, 200, "btnface"}, {"buttontext", 0, 0, 0, nullptr}, {"buttonhilight", 255, 255, 255, "btnhighlight"},
+        {"buttonlight", 212, 208, 200, "light3d"}, {"buttonshadow", 128, 128, 128, "btnshadow"}, {"buttondkshadow", 64, 64, 64, "dkshadow3d"},
+        {"graytext", 128, 128, 128, "graytext"}, {"hilight", 10, 36, 106, "highlight"}, {"hilighttext", 255, 255, 255, "highlighttext"},
+        {"menu", 212, 208, 200, "menu"}, {"menubar", 212, 208, 200, "menubar"}, {"menutext", 0, 0, 0, nullptr},
+        {"menuhilight", 10, 36, 106, "menuhilight"}, {"scrollbar", 212, 208, 200, nullptr}, {"infowindow", 255, 255, 225, nullptr},
+        {"infotext", 0, 0, 0, nullptr}, {"hottrackingcolor", 0, 0, 128, nullptr}, {"activetitle", 10, 36, 106, "activecaption"},
+        {"inactivetitle", 128, 128, 128, "inactivecaption"}, {"titletext", 255, 255, 255, "captiontext"},
+        {"inactivetitletext", 212, 208, 200, "inactivecaptiontext"}, {"gradientactivetitle", 166, 202, 240, "gradientactivecaption"},
+        {"gradientinactivetitle", 192, 192, 192, "gradientinactivecaption"},
+    };
+    const std::shared_ptr<Theme> theme = look->themed ? Theme::load(look->stylePath, look->colourName, look->sizeName) : nullptr;
+    for (const auto &entry : colours) {
+        QColor colour(entry.r, entry.g, entry.b);
+        if (theme && entry.metric)
+            parseColour(theme->sysMetric(QLatin1String(entry.metric)).value_or(QString()), &colour);
+        look->colours.insert(QLatin1String(entry.registry), colour);
+    }
+    QFont message(QStringLiteral("Tahoma"));
+    message.setPointSizeF(8);
+    look->messageFont = look->menuFont = look->statusFont = message;
+    look->haveFonts = true;
+    const QStringList rgb = values.value(QStringLiteral("background")).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (rgb.size() == 3)
+        look->colours.insert(QStringLiteral("background"), QColor(rgb[0].toInt(), rgb[1].toInt(), rgb[2].toInt()));
+}
+
 } // namespace
+
+QString nativeLookPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-look.conf");
+}
 
 QString linuxLookPath()
 {
@@ -169,6 +229,9 @@ QString linuxLookPath()
 
 QString findPrefix()
 {
+    // A native session without Wine has no prefix, whatever ~/.wine is.
+    if (qEnvironmentVariable("WIN4WINE_NATIVE_SHELL") == QLatin1String("wineless"))
+        return QString();
     for (const char *variable : {"WIN4WINE_PREFIX", "WINEPREFIX"}) {
         const QString value = qEnvironmentVariable(variable);
         if (!value.isEmpty() && QFileInfo(value + QStringLiteral("/user.reg")).isFile())
@@ -220,8 +283,10 @@ Look readLook(const QString &prefix)
 {
     Look look;
     readLinuxLook(&look);
-    if (prefix.isEmpty())
+    if (prefix.isEmpty()) {
+        readNativeLook(&look);
         return look;
+    }
     const Registry reg = parseRegistry(prefix + QStringLiteral("/user.reg"));
     const QString manager = QStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager");
     const QString dll = stringValue(reg, manager, QStringLiteral("DllName"));
@@ -234,6 +299,7 @@ Look readLook(const QString &prefix)
     }
     look.colourName = stringValue(reg, manager, QStringLiteral("ColorName"));
     look.sizeName = stringValue(reg, manager, QStringLiteral("SizeName"));
+    readNativeLook(&look);
     // For trying another style (qt-style/README.md): WIN4WINE_QT_MSSTYLES=PATH[:COLOR]
     if (const QString forced = qEnvironmentVariable("WIN4WINE_QT_MSSTYLES"); !forced.isEmpty()) {
         look.stylePath = forced.section(QLatin1Char(':'), 0, 0);
@@ -246,6 +312,14 @@ Look readLook(const QString &prefix)
         const QStringList rgb = stringValue(reg, colours, it.key()).split(QLatin1Char(' '), Qt::SkipEmptyParts);
         if (rgb.size() == 3)
             look.colours.insert(it.key(), QColor(rgb[0].toInt(), rgb[1].toInt(), rgb[2].toInt()));
+    }
+
+    const QString desktop = QStringLiteral("Control Panel\\Desktop");
+    if (reg.value(desktop.toLower()).contains(QStringLiteral("wallpaper"))) {
+        look.haveWallpaper = true;
+        look.wallpaper = linuxPath(prefix, stringValue(reg, desktop, QStringLiteral("Wallpaper")));
+        look.wallpaperStyle = stringValue(reg, desktop, QStringLiteral("WallpaperStyle")).toInt();
+        look.tileWallpaper = stringValue(reg, desktop, QStringLiteral("TileWallpaper")).toInt() != 0;
     }
 
     const QString metrics = QStringLiteral("Control Panel\\Desktop\\WindowMetrics");
@@ -292,15 +366,17 @@ Session::Session()
 
 void Session::watch()
 {
-    if (m_prefix.isEmpty())
-        return;
     const QStringList files = m_watcher.files(), directories = m_watcher.directories();
     if (!files.isEmpty())
         m_watcher.removePaths(files);
     if (!directories.isEmpty())
         m_watcher.removePaths(directories);
-    m_watcher.addPath(m_prefix);
-    m_watcher.addPath(m_prefix + QStringLiteral("/user.reg"));
+    if (!m_prefix.isEmpty()) {
+        m_watcher.addPath(m_prefix);
+        m_watcher.addPath(m_prefix + QStringLiteral("/user.reg"));
+    } else if (!qEnvironmentVariableIsSet("WIN4WINE_NATIVE_SHELL")) {
+        return;
+    }
     // Control Panel replaces linux-look.conf by renaming a new file over it.
     const QString conf = linuxLookPath();
     QDir().mkpath(QFileInfo(conf).absolutePath());

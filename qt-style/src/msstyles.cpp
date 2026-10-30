@@ -77,10 +77,10 @@ QList<int> numbers(const QString &value)
     return out;
 }
 
-// A BITMAP resource (a DIB without its file header) as an ARGB32 image.
-// 32bpp art keeps its alpha; PARTIAL tells whether any pixel is not opaque,
-// which is when Wine's uxtheme (the session's shell) blends it by its alpha
-// instead of keying out its transparent colour.
+} // namespace
+
+// 32bpp art keeps its alpha; PARTIAL is when Wine's uxtheme (the session's
+// shell) blends it by its alpha instead of keying out its transparent colour.
 QImage decodeDib(const QByteArray &dib, bool *partial)
 {
     Reader r{dib};
@@ -176,6 +176,8 @@ QImage decodeDib(const QByteArray &dib, bool *partial)
     *partial = anyPartial;
     return image;
 }
+
+namespace {
 
 enum class Sizing { Stretch, Tile, TrueSize };
 

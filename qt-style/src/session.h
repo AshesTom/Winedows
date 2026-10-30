@@ -26,6 +26,11 @@ struct Look
     QFont messageFont, menuFont, statusFont;
     bool haveFonts = false;
     int dpi = 96;
+    // Control Panel\Desktop, as XP's Display Properties leaves it (or native-look.conf). Native shell only.
+    bool haveWallpaper = false;   // the prefix says what the desktop shows
+    QString wallpaper;            // the picture, as a Linux path; empty for none
+    int wallpaperStyle = 0;       // 0 centred, 2 stretched
+    bool tileWallpaper = false;
     // linux-look.conf: the Accurate style (XP's own metrics, no pictures on
     // buttons or in menus) rather than the Standard one; the icon theme the
     // user chose (empty: the desktop's); the GTK theme's build, which a
@@ -38,7 +43,9 @@ struct Look
         return themed == o.themed && stylePath == o.stylePath && colourName == o.colourName
             && sizeName == o.sizeName && colours == o.colours && messageFont == o.messageFont
             && menuFont == o.menuFont && statusFont == o.statusFont && dpi == o.dpi
-            && accurate == o.accurate && iconTheme == o.iconTheme && themeBuild == o.themeBuild;
+            && accurate == o.accurate && iconTheme == o.iconTheme && themeBuild == o.themeBuild
+            && haveWallpaper == o.haveWallpaper && wallpaper == o.wallpaper
+            && wallpaperStyle == o.wallpaperStyle && tileWallpaper == o.tileWallpaper;
     }
 };
 
@@ -72,5 +79,8 @@ QString linuxPath(const QString &prefix, const QString &windowsPath);
 Look readLook(const QString &prefix);
 // ~/.config/win4wine/linux-look.conf
 QString linuxLookPath();
+// ~/.config/win4wine/native-look.conf: the look that the native shell's Display
+// Properties chose. Read only in a native session (WIN4WINE_NATIVE_SHELL).
+QString nativeLookPath();
 
 } // namespace w4w

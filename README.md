@@ -127,6 +127,23 @@ The theme (XP's classic one, for example) and the text size can be changed later
   </tr>
 </table>
 
+## Native mode (in development)
+
+Winedows is being ported to Linux itself: `native-shell/` is the XP shell rewritten as a **native Linux program**, and
+in time it will **replace Wine entirely**. It runs no XP code: your own XP files only give it their resources (the
+visual style's art, strings, icons, dialogs, fonts, wallpapers), read at run time.
+
+It already has the desktop and its icons, the taskbar, the Start menu, XP's window frames, Display Properties with live
+theme switching (also for Qt and GTK programs), folder windows with file operations, and the Control Panel. Much of XP
+is still missing, and so far it has only been tried in a window on CachyOS, so **it does not replace the Wine session
+yet**. To try it in a window of your current desktop, without Wine or a prefix:
+
+```sh
+./xp.sh native /path/to/WindowsXPSP3.iso   # later runs: ./xp.sh native --
+```
+
+What works and what is left: [docs/native-shell.md](docs/native-shell.md).
+
 ## How it works
 
 ```text

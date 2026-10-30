@@ -7,6 +7,9 @@
 #   ./xp.sh run [WxH]       open the XP session in a Xephyr window (default: 1280x800)
 #   ./xp.sh log [NAME]      follow a log of the running session (default: xp-shell)
 #   ./xp.sh kill            stop the session and everything that runs in the prefix
+#   ./xp.sh native ISO|-- [WxH]
+#                           the native shell without Wine, in a window: its files from
+#                           the ISO the first time, then -- will do (docs/native-shell.md)
 #
 # Switches, for a test copy beside your own:
 #   XP_PREFIX     the Wine prefix (default: .local/prefix, the one scripts/setup.sh makes)
@@ -175,6 +178,36 @@ EOF
         DISPLAY="$display" GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb XDG_SESSION_TYPE=x11 \
         dbus-run-session -- python3 "$root/session/supervisor.py" --config "$state/session.json" ||
         echo "The session ended with an error; see $state" >&2
+    ;;
+native)
+    need bsdtar cmake dbus-run-session
+    source=${2:---}
+    size=${3:-1280x800}
+    [[ $size =~ ^[0-9]+x[0-9]+$ ]] || { echo "usage: $0 native ISO|-- [WIDTHxHEIGHT]" >&2; exit 2; }
+    if [[ ! -e $local/native-assets/system32/browseui.dll ]]; then
+        [[ $source != -- ]] || { echo "The first time, give the XP ISO: $0 native /path/to/the.iso" >&2; exit 2; }
+        python3 "$root/native-shell/extract.py" "$source" "$local/native-assets"
+    fi
+    "$root/native-shell/build.sh" | tail -n 1
+    for n in $(seq 5 99); do
+        [[ -e /tmp/.X11-unix/X$n || -e /tmp/.X$n-lock ]] || { display=:$n; break; }
+    done
+    # Xephyr, or Xwayland's own window under a Wayland desktop.
+    if command -v Xephyr >/dev/null; then
+        Xephyr "$display" -screen "$size" -title "XP native shell ($display)" -no-host-grab -nolisten tcp &
+    else
+        Xwayland "$display" -geometry "$size" -decorate &
+    fi
+    server=$!
+    trap 'kill $server 2>/dev/null || true' EXIT
+    for _ in $(seq 50); do
+        [[ -e /tmp/.X11-unix/X${display#:} ]] && break
+        sleep 0.1
+    done
+    # Turn Off Computer ends this window's session, never the machine.
+    env -u WAYLAND_DISPLAY -u WIN4WINE_IPC -u SESSION_MANAGER -u DBUS_SESSION_BUS_ADDRESS \
+        DISPLAY="$display" GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb XDG_SESSION_TYPE=x11 WIN4WINE_POWER=0 \
+        "$root/native-shell/session.sh"
     ;;
 log)
     tail -n 50 -F "$state/${2:-xp-shell}.log"

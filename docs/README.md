@@ -8,6 +8,7 @@
 | [development.md](development.md) | 開発の手順。chroot でのビルド、試験、手作業での導入、既存の環境の更新 |
 | [reactos.md](reactos.md) | ReactOS のシェル。XP の ISO の代わりに ReactOS の explorer を使うセッション、取得とライセンス、prefix、制限 |
 | [wayland.md](wayland.md) | Wayland のセッション（試験中）。パッチを当てた labwc、モニターごとの倍率、X11 のセッションとの違い |
+| [native-shell.md](native-shell.md) | ネイティブのシェル（試作、英語）。Wine を使わずに XP の explorer のデスクトップ、タスクバー、スタートメニュー、窓の枠、画面のプロパティを Linux のプログラムにしたもの |
 | [original-features.md](original-features.md) | XP には無いオリジナル機能（既定はオフ）。窓の寄せ（`window_snap`） |
 
 使い方と導入は、リポジトリの [README](../README.md) と [INSTALL.md](../INSTALL.md) にあります。
