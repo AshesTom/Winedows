@@ -148,10 +148,10 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
         painter.drawImage(bar.x() + 1, bar.y() + (bar.height() - ICON_SIZE) / 2, look.icon);
     painter.setPen(look.active ? style.activeText : style.inactiveText);
     // A dialog has no icon: its title starts where the icon would.
-    const int titleX = look.icon.isNull() ? 2 : ICON_SIZE + 3;
-    painter.drawText(QRect(bar.x() + titleX, bar.y(), titleEnd - bar.x() - titleX, bar.height()),
+    const int classicTitleX = look.icon.isNull() ? 2 : ICON_SIZE + 3;
+    painter.drawText(QRect(bar.x() + classicTitleX, bar.y(), titleEnd - bar.x() - classicTitleX, bar.height()),
                      Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                     QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleEnd - bar.x() - titleX));
+                     QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleEnd - bar.x() - classicTitleX));
     QFont glyphs(QStringLiteral("Marlett"));
     glyphs.setPixelSize(bar.height() - 7);
     for (FrameButton button : buttons) {
