@@ -6,7 +6,10 @@
 # root of the Linux system (Wine's drives of the session).
 __xp_folder() {
     local path=$PWD drive=Z: c=${XP_CMD_PREFIX:+$XP_CMD_PREFIX/drive_c}
-    if [[ -n $c && ( $path == "$c" || $path == "$c"/* ) ]]; then
+    # The native shell's console has no drives: only C:\, the root of the system.
+    if [[ -n ${XP_CMD_ROOT_IS_C:-} ]]; then
+        drive=C:
+    elif [[ -n $c && ( $path == "$c" || $path == "$c"/* ) ]]; then
         drive=C: path=${path#"$c"}
     elif [[ $path == "$HOME" || $path == "$HOME"/* ]]; then
         drive=H: path=${path#"$HOME"}
@@ -25,7 +28,11 @@ __xp_path() {
             case ${name:0:1} in
                 [Hh]) name=$HOME/${rest#/} ;;
                 [Zz]) name=/${rest#/} ;;
-                [Cc]) name=${XP_CMD_PREFIX:-$HOME/.wine}/drive_c/${rest#/} ;;
+                [Cc]) if [[ -n ${XP_CMD_ROOT_IS_C:-} ]]; then
+                          name=/${rest#/}
+                      else
+                          name=${XP_CMD_PREFIX:-$HOME/.wine}/drive_c/${rest#/}
+                      fi ;;
             esac ;;
     esac
     printf '%s' "$name"

@@ -16,6 +16,7 @@ add_executable(xp-native-shell
     src/main.cpp
     src/acs.cpp src/acs.h
     src/applets.cpp src/applets.h
+    src/console.cpp src/console.h
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
     src/filebrowser.cpp src/filebrowser.h

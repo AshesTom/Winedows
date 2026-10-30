@@ -32,6 +32,9 @@ public:
     int entryAt(QPoint global) const;
     void setHot(int index);
     int hot() const { return m_hot; }
+    // The row of the cascade before it that this one opened from
+    void setOwnerRow(int row) { m_ownerRow = row; }
+    int ownerRow() const { return m_ownerRow; }
     const MenuEntry &entry(int index) const { return m_entries[index]; }
     QRect entryGlobalRect(int index) const;
 
@@ -41,7 +44,7 @@ protected:
 private:
     QList<MenuEntry> m_entries;
     QList<QRect> m_rects;
-    int m_hot = -1;
+    int m_hot = -1, m_ownerRow = -1;
 };
 
 // XP's Run dialog
@@ -82,6 +85,7 @@ private:
     void addPlace(int &y, int iconId, const QString &text, bool bold, std::function<void()> action, bool arrow = false);
     void paintPane(QPainter &painter, const char *part, const QRect &rect, const QColor &fallback);
     void track(QPoint global);
+    void switchCascade();
     void openChildren(int level);
     void closeCascades(int from);
     void run(const std::function<void()> &action);
@@ -96,6 +100,8 @@ private:
     enum { Nothing, MoreHot, LogOffHot, TurnOffHot } m_hotPart = Nothing;
     QList<Cascade *> m_cascades;
     QTimer m_openTimer;
+    QTimer m_switchTimer;
+    int m_switchLevel = -1;
     int m_openWanted = -1;     // the panel's item waiting to open its cascade (-2: All Programs)
     std::function<void()> m_logOff, m_turnOff, m_controlPanel;
 };

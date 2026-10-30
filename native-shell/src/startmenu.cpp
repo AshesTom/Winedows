@@ -46,6 +46,8 @@ namespace {
 const int EXPLORER_ALL_PROGRAMS = 8226, EXPLORER_LOG_OFF = 730, EXPLORER_TURN_OFF = 731;
 // shell32.dll's Run dialog, and how many commands its list keeps
 const int ACTIVATE_DELAY_MS = 100;
+// How long XP's menus wait before they change (SPI_GETMENUSHOWDELAY's default)
+const int CASCADE_DELAY_MS = 400;
 const int DIALOG_RUN = 1003, RUN_COMMAND = 12298, RUN_SEPARATE_MEMORY = 12306, RUN_BROWSE = 12288, STRING_BROWSE_TITLE = 9015, RUN_HISTORY = 26;
 const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722;
 const int SHELL_DOCUMENTS = 9227, SHELL_RECENT = 12691, SHELL_PICTURES = 9076, SHELL_MUSIC = 9105, SHELL_COMPUTER = 9216;
@@ -310,6 +312,9 @@ StartPanel::StartPanel(QPoint bottomLeft, std::function<void()> logOff, std::fun
     m_openTimer.setSingleShot(true);
     m_openTimer.setInterval(300);
     connect(&m_openTimer, &QTimer::timeout, this, [this] { openChildren(0); });
+    m_switchTimer.setSingleShot(true);
+    m_switchTimer.setInterval(CASCADE_DELAY_MS);
+    connect(&m_switchTimer, &QTimer::timeout, this, &StartPanel::switchCascade);
     build(bottomLeft);
 }
 
@@ -727,6 +732,7 @@ void StartPanel::openChildren(int level)
     const QList<MenuEntry> entries = parent->entry(parent->hot()).children();
     closeCascades(level);
     auto *cascade = new Cascade(entries, QPoint(row.right() + 3, row.y() - 3), false);
+    cascade->setOwnerRow(parent->hot());
     m_cascades.append(cascade);
     cascade->show();
     cascade->raise();
@@ -740,11 +746,27 @@ void StartPanel::track(QPoint global)
         const int entry = cascade->entryAt(global);
         if (entry == -2)
             continue;
+        // Crossing the panel to get here asked for nothing.
+        m_openTimer.stop();
+        // On its way into this one, the rows that led here stay lit, and what they had asked for
+        // meanwhile is forgotten.
+        if (m_switchLevel < level)
+            m_switchTimer.stop();
+        for (int up = level; up > 0; --up)
+            m_cascades[up - 1]->setHot(m_cascades[up]->ownerRow());
+        // Its border, which the pointer crosses going out: no row, and nothing changes.
+        if (entry == -1)
+            return;
         if (entry != cascade->hot()) {
             cascade->setHot(entry);
-            closeCascades(level + 1);
-            if (entry >= 0 && cascade->entry(entry).children)
-                openChildren(level + 1);
+            // Another row lights up at once; the cascades change a moment later, as XP's menus,
+            // so that the pointer can cross rows on its way to what is open.
+            m_switchLevel = level;
+            m_switchTimer.start();
+        } else if (m_switchLevel == level) {
+            const Cascade *open = m_cascades.value(level + 1);
+            if (open && open->ownerRow() == entry)
+                m_switchTimer.stop();
         }
         return;
     }
@@ -774,11 +796,23 @@ void StartPanel::track(QPoint global)
             wanted = hot;
         if (wanted != -1 || rect().contains(at)) {
             m_openWanted = wanted;
-            if (wanted == -1)
-                closeCascades(0);
             m_openTimer.start();
         }
     }
+}
+
+void StartPanel::switchCascade()
+{
+    Cascade *cascade = m_cascades.value(m_switchLevel);
+    if (!cascade)
+        return;
+    const int row = cascade->hot();
+    const Cascade *open = m_cascades.value(m_switchLevel + 1);
+    if (open && open->ownerRow() == row)
+        return;
+    closeCascades(m_switchLevel + 1);
+    if (row >= 0 && cascade->entry(row).children)
+        openChildren(m_switchLevel + 1);
 }
 
 void StartPanel::mouseMoveEvent(QMouseEvent *event)

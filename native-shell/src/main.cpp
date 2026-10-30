@@ -6,6 +6,7 @@
 #include "controlpanel.h"
 #include "desktop.h"
 #include "displayproperties.h"
+#include "console.h"
 #include "sounds.h"
 
 #include <QMessageBox>
@@ -100,6 +101,7 @@ int main(int argc, char **argv)
     parser.addHelpOption();
     parser.addOption({QStringLiteral("ipc"), QStringLiteral("bridge-wm's IPC directory (tray icons, Windows key)"), QStringLiteral("dir")});
     parser.addOption({QStringLiteral("frames"), QStringLiteral("draw the Linux windows' frames (without Wine's proxy.exe; needs --ipc)")});
+    parser.addOption({QStringLiteral("console"), QStringLiteral("only XP's Command Prompt, in that folder"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime, winver"), QStringLiteral("id")});
     parser.process(app);
@@ -117,6 +119,12 @@ int main(int argc, char **argv)
     if (parser.isSet(QStringLiteral("applet"))) {
         app.setQuitOnLastWindowClosed(true);
         controlpanel::open(parser.value(QStringLiteral("applet")));
+        return app.exec();
+    }
+    if (parser.isSet(QStringLiteral("console"))) {
+        app.setQuitOnLastWindowClosed(true);
+        Console console(parser.value(QStringLiteral("console")));
+        console.show();
         return app.exec();
     }
     if (parser.isSet(QStringLiteral("explore"))) {
