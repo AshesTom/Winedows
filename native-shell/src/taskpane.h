@@ -16,6 +16,7 @@ struct PaneTask
     QIcon icon;
     std::function<void()> action;    // null: plain text, as the Details group's
     bool bold = false;
+    QImage picture = {};             // the Details group's preview, above the name
 };
 
 struct PaneGroup

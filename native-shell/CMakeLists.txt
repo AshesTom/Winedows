@@ -22,6 +22,7 @@ add_executable(explorer
     src/filebrowser.cpp src/filebrowser.h
     src/fileicons.cpp src/fileicons.h
     src/fileops.cpp src/fileops.h
+    src/pictures.cpp src/pictures.h
     src/searchcompanion.cpp src/searchcompanion.h
     src/sessiondialog.cpp src/sessiondialog.h
     src/sounds.cpp src/sounds.h

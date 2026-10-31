@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // XP's folder window (the native port of its Explorer): the menus, the toolbar,
 // the address bar, the Common Tasks pane or the Folders tree, and the folder in
-// Thumbnails, Tiles, Icons, List or Details. It shows real folders and XP's
+// Filmstrip (in picture folders), Thumbnails, Tiles, Icons, List or Details. It shows real folders and XP's
 // virtual ones: My Computer, the Recycle Bin, Control Panel, search results.
 #pragma once
 
@@ -35,6 +35,7 @@ class QWebEngineView;
 class SearchCompanion;
 struct SearchQuery;
 class FolderModel;
+class FilmPreview;
 class TaskPane;
 class ControlPanelCategories;
 class SystemFolderWarning;
@@ -65,12 +66,22 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
-    enum View { Thumbnails, Tiles, Icons, List, Details };
+    // (In this order in native-explorer.conf: Filmstrip came last.)
+    enum View { Thumbnails, Tiles, Icons, List, Details, Filmstrip };
 
     void buildMenus();
     void buildToolbars();
     void buildPanes();
     void setView(View view);
+    View shownView() const;           // Filmstrip is Thumbnails outside picture folders
+    QWidget *folderPage() const;      // the page that shows a real folder in the current view
+    void placeList(bool inFilmstrip);
+    void stepFilmstrip(int step);
+    void selectFirstPicture();
+    void rotateSelected(bool clockwise);
+    void startSlideShow();
+    void setAsBackground(const QString &path);
+    QStringList selectedPictures() const;
     void setFoldersShown(bool shown);
     void showControlPanelCategory(int category);
     void updatePane();
@@ -112,6 +123,7 @@ private:
     QString m_location;
     QStringList m_back, m_forward;
     View m_view = Tiles;
+    bool m_pictureFolder = false;
     bool m_foldersShown = false, m_searchShown = false, m_noTasks = false, m_singleClick = false;
     QString m_pendingRename, m_searchFrom;
     QList<std::function<void()>> m_actions;   // of the virtual list's items
@@ -122,6 +134,9 @@ private:
     QStackedWidget *m_pages = nullptr, *m_left = nullptr;
     QListView *m_list = nullptr, *m_virtualList = nullptr;
     QTreeView *m_details = nullptr, *m_results = nullptr;
+    QWidget *m_film = nullptr;
+    FilmPreview *m_filmPreview = nullptr;
+    QAction *m_filmstripAction = nullptr;
     QTreeWidget *m_tree = nullptr;
     QStandardItemModel *m_resultsModel = nullptr;
     SearchCompanion *m_searchCompanion = nullptr;

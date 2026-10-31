@@ -5,6 +5,7 @@
 #include "controlpanel.h"
 #include "fileicons.h"
 #include "fileops.h"
+#include "pictures.h"
 #include "programs.h"
 #include "searchcompanion.h"
 #include "sounds.h"
@@ -211,6 +212,12 @@ enum { BACK = 0, FORWARD = 1, DELETE_ICON = 10, UNDO = 8, SEARCH = 17, UP = 28, 
 const int BITMAP_FLAG = 240, FLAG_SIZE = 22, FLAG_X = 9, TILE_WIDTH = 39;
 const int STRING_FILE_TASKS = 31233, STRING_NEW_FOLDER = 31236, STRING_RENAME = 31242, STRING_MOVE = 31244, STRING_COPY = 31246, STRING_DELETE = 31252;
 const int STRING_OTHER_PLACES = 31272, STRING_DETAILS = 31274, STRING_SYSTEM_TASKS = 31232, STRING_SYSTEM_INFO = 31294, STRING_ADD_REMOVE = 31327, STRING_CHANGE = 31312, STRING_EMPTY = 31331;
+const int STRING_PICTURE_TASKS = 31283, STRING_SLIDE_SHOW = 31287, STRING_BACKGROUND = 31289;
+const int STRING_LABELLED = 31363, STRING_ITEMS_SELECTED = 31364, STRING_TOTAL_SIZE = 31365, STRING_SIZE = 8978, STRING_DATE_MODIFIED = 8980, STRING_DIMENSIONS = 9005;
+// The Details group's preview, at most so wide and tall: its body's width
+const int PREVIEW_SIDE = 160;
+// The sorted column's shade in Details, on the window's white
+const QColor SORTED_COLUMN(247, 247, 247);
 const int STRING_HARD_DISKS = 9426, STRING_SWITCH_CLASSIC = 32150, STRING_SWITCH_CATEGORY = 32152, STRING_SEE_ALSO = 20868;
 
 // Item data of the virtual lists, past the roles of QFileSystemModel
@@ -447,54 +454,59 @@ public:
                 y += 14;
             }
         } else {
-            const QRect box(option.rect.x() + 10, option.rect.y() + 4, 100, 100);
-            painter->fillRect(box, Qt::white);
-            painter->setPen(selected ? palette.color(QPalette::Highlight) : QColor(201, 199, 186));
-            painter->drawRect(box.adjusted(0, 0, -1, -1));
-            QPixmap thumbnail = this->thumbnail(index);
-            if (!thumbnail.isNull()) {
-                painter->drawPixmap(box.x() + (box.width() - thumbnail.width()) / 2, box.y() + (box.height() - thumbnail.height()) / 2, thumbnail);
-            } else {
-                icon.paint(painter, box.adjusted(26, 26, -26, -26), Qt::AlignCenter);
-            }
-            const QRect text(option.rect.x() + 2, box.bottom() + 4, option.rect.width() - 4, 18);
-            if (selected)
-                painter->fillRect(text, palette.highlight());
-            painter->setPen(selected ? palette.color(QPalette::HighlightedText) : palette.color(QPalette::Text));
-            painter->drawText(text, Qt::AlignCenter | Qt::TextSingleLine, option.fontMetrics.elidedText(name, Qt::ElideRight, text.width()));
+            paintThumbnail(painter, option, index, icon, name);
         }
         painter->restore();
     }
 
 private:
-    QPixmap thumbnail(const QModelIndex &index) const
+    static constexpr int THUMB_BOX = 100, THUMB_SIDE = 96, THUMB_TOP = 4, THUMB_GAP = 4, THUMB_TEXT = 16;
+
+    // XP's Thumbnails: the picture within a white square of 96 pixels and its frame, the type's
+    // icon for other files, a folder's first pictures; the name on a line under it, highlighted
+    // only as wide as its words. Selected, the frame is the highlight, two pixels wide.
+    void paintThumbnail(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index, const QIcon &icon, const QString &name) const
     {
+        const bool selected = option.state & QStyle::State_Selected, active = option.state & QStyle::State_Active;
+        const QPalette &palette = option.palette;
+        const QColor highlight = active ? palette.color(QPalette::Active, QPalette::Highlight) : palette.color(QPalette::Inactive, QPalette::Button).darker(115);
+        const QRect box(option.rect.x() + (option.rect.width() - THUMB_BOX) / 2, option.rect.y() + THUMB_TOP, THUMB_BOX, THUMB_BOX);
+        painter->fillRect(box, Qt::white);
         const auto *model = dynamic_cast<const FolderModelImpl *>(index.model());
-        if (!model)
-            return {};
-        const QString path = model->path(index);
-        const QString key = path + QString::number(QFileInfo(path).lastModified().toSecsSinceEpoch());
-        if (m_thumbnails.contains(key))
-            return m_thumbnails[key];
-        QPixmap pixmap;
-        QImageReader reader(path);
-        // Only what the reader can scale as it decodes, and not huge files: this is the paint itself.
-        if (!QFileInfo(path).isDir() && reader.canRead() && QFileInfo(path).size() < 32 << 20) {
-            const QSize size = reader.size();
-            if (size.isValid()) {
-                reader.setScaledSize(size.scaled(QSize(92, 92), Qt::KeepAspectRatio).boundedTo(size));
-                pixmap = QPixmap::fromImage(reader.read());
-            }
+        const QString path = model ? model->path(index) : QString();
+        const bool folder = model && QFileInfo(path).isDir();
+        const QImage thumbnail = model ? pictures::Thumbnails::instance()->get(path, folder ? THUMB_SIDE - 12 : THUMB_SIDE) : QImage();
+        if (!thumbnail.isNull() && folder) {
+            // Its pictures two by two, the folder's icon over their lower left corner
+            const QRect inner = box.adjusted(8, 8, -8, -8);
+            painter->drawImage(inner.x() + (inner.width() - thumbnail.width()) / 2, inner.y() + (inner.height() - thumbnail.height()) / 2, thumbnail);
+            icon.paint(painter, QRect(box.x() + 3, box.bottom() - 34, 32, 32), Qt::AlignCenter);
+        } else if (!thumbnail.isNull()) {
+            painter->drawImage(box.x() + (box.width() - thumbnail.width()) / 2, box.y() + (box.height() - thumbnail.height()) / 2, thumbnail);
+        } else {
+            icon.paint(painter, box.adjusted(26, 26, -26, -26), Qt::AlignCenter);
         }
-        if (m_thumbnails.size() > 500)
-            m_thumbnails.clear();
-        m_thumbnails.insert(key, pixmap);
-        return pixmap;
+        if (selected) {
+            painter->fillRect(QRect(box.x(), box.y(), box.width(), 2), highlight);
+            painter->fillRect(QRect(box.x(), box.bottom() - 1, box.width(), 2), highlight);
+            painter->fillRect(QRect(box.x(), box.y(), 2, box.height()), highlight);
+            painter->fillRect(QRect(box.right() - 1, box.y(), 2, box.height()), highlight);
+        } else {
+            painter->setPen(QColor(201, 199, 186));
+            painter->drawRect(box.adjusted(0, 0, -1, -1));
+        }
+        const QFontMetrics &metrics = option.fontMetrics;
+        const QString shown = metrics.elidedText(name, Qt::ElideRight, option.rect.width() - 4);
+        const int width = metrics.horizontalAdvance(shown) + 4;
+        const QRect text(option.rect.x() + (option.rect.width() - width) / 2, box.bottom() + 1 + THUMB_GAP, width, THUMB_TEXT);
+        if (selected)
+            painter->fillRect(text, highlight);
+        painter->setPen(selected && active ? palette.color(QPalette::HighlightedText) : palette.color(QPalette::Text));
+        painter->drawText(text, Qt::AlignCenter | Qt::TextSingleLine, shown);
     }
 
     QListView *m_view;
     Mode m_mode = Plain;
-    mutable QHash<QString, QPixmap> m_thumbnails;
 };
 
 ItemDelegate *delegateOf(QListView *view)
@@ -655,6 +667,76 @@ void showItemProperties(const QStringList &paths, QWidget *parent)
 
 } // namespace
 
+// Filmstrip's large picture, over the strip: the selected picture as large as the place lets it,
+// never larger than it is; the type's icon for another file. A double click opens it.
+class FilmPreview : public QWidget
+{
+public:
+    FilmPreview(std::function<void()> open, QWidget *parent)
+        : QWidget(parent)
+        , m_open(std::move(open))
+    {
+        setAutoFillBackground(true);
+        setBackgroundRole(QPalette::Base);
+        setMinimumHeight(60);
+    }
+    void setPath(const QString &path)
+    {
+        if (path == m_path && !m_stale)
+            return;
+        m_path = path;
+        m_stale = false;
+        reload();
+    }
+    // The file changed (turned): read it again.
+    void refresh()
+    {
+        reload();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *) override
+    {
+        reload();
+    }
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        if (!m_image.isNull()) {
+            const QSizeF shown = m_image.deviceIndependentSize();
+            painter.drawImage(QRectF(QPointF((width() - shown.width()) / 2, (height() - shown.height()) / 2), shown), m_image);
+        } else if (!m_path.isEmpty()) {
+            const QRect place((width() - 48) / 2, (height() - 48) / 2, 48, 48);
+            fileicons::forFile(QFileInfo(m_path)).paint(&painter, place);
+        }
+    }
+    void mouseDoubleClickEvent(QMouseEvent *) override
+    {
+        if (!m_path.isEmpty())
+            m_open();
+    }
+
+private:
+    void reload()
+    {
+        const qreal ratio = devicePixelRatioF();
+        m_image = m_path.isEmpty() || !isVisible() ? QImage() : pictures::load(m_path, (size() - QSize(16, 16)).expandedTo(QSize(1, 1)) * ratio);
+        m_image.setDevicePixelRatio(ratio);
+        m_stale = !isVisible();
+        update();
+    }
+    void showEvent(QShowEvent *) override
+    {
+        if (m_stale)
+            reload();
+    }
+
+    std::function<void()> m_open;
+    QString m_path;
+    QImage m_image;
+    bool m_stale = false;
+};
+
 class FolderModel : public FolderModelImpl
 {
 public:
@@ -688,7 +770,7 @@ FileBrowser::FileBrowser(const QString &location)
     setAttribute(Qt::WA_DeleteOnClose);
     resize(ShellTheme::instance()->scaled(640), ShellTheme::instance()->scaled(480));
     const QSettings settings(settingsPath(), QSettings::IniFormat);
-    m_view = View(qBound(0, settings.value(QStringLiteral("view"), int(Tiles)).toInt(), int(Details)));
+    m_view = View(qBound(0, settings.value(QStringLiteral("view"), int(Tiles)).toInt(), int(Filmstrip)));
     m_foldersShown = settings.value(QStringLiteral("folders"), false).toBool();
 
     m_files = new QFileSystemModel(this);
@@ -836,6 +918,8 @@ void FileBrowser::buildPanes()
             showContextMenu(view->viewport()->mapToGlobal(at), view->indexAt(at).isValid());
         });
         connect(view, &QAbstractItemView::activated, this, &FileBrowser::activate);
+        // Thumbnails come from their thread one by one.
+        connect(pictures::Thumbnails::instance(), &pictures::Thumbnails::ready, view->viewport(), qOverload<>(&QWidget::update));
         return view;
     };
     m_list = listView(m_model);
@@ -866,6 +950,53 @@ void FileBrowser::buildPanes()
     });
     connect(m_details, &QAbstractItemView::activated, this, &FileBrowser::activate);
     m_pages->addWidget(m_details);
+    // Filmstrip: the large picture, the viewer's four buttons under it, and the folder's
+    // thumbnails on one row, the list itself moved here while this view is shown
+    m_film = new QWidget(m_pages);
+    m_film->setAutoFillBackground(true);
+    m_film->setBackgroundRole(QPalette::Base);
+    auto *filmLayout = new QVBoxLayout(m_film);
+    filmLayout->setContentsMargins(0, 0, 0, 0);
+    filmLayout->setSpacing(0);
+    m_filmPreview = new FilmPreview([this] {
+        const QStringList paths = selectedPaths();
+        if (!paths.isEmpty())
+            openPath(paths.first());
+    }, m_film);
+    filmLayout->addWidget(m_filmPreview, 1);
+    auto *filmButtons = new QHBoxLayout;
+    filmButtons->setContentsMargins(0, 4, 0, 4);
+    filmButtons->setSpacing(2);
+    filmButtons->addStretch();
+    const struct { int icon, tip; const char *fallback; QKeySequence key; std::function<void()> action; } filmTools[] = {
+        {pictures::PreviousImage, 417, "Previous Image (Left Arrow)", {}, [this] { stepFilmstrip(-1); }},
+        {pictures::NextImage, 416, "Next Image (Right Arrow)", {}, [this] { stepFilmstrip(1); }},
+        {-1, 0, nullptr, {}, {}},
+        {pictures::RotateClockwise, 500, "Rotate Clockwise (Ctrl+K)", QKeySequence(Qt::CTRL | Qt::Key_K), [this] { rotateSelected(true); }},
+        {pictures::RotateCounterclockwise, 501, "Rotate Counterclockwise (Ctrl+L)", QKeySequence(Qt::CTRL | Qt::Key_L), [this] { rotateSelected(false); }},
+    };
+    for (const auto &tool : filmTools) {
+        if (tool.icon < 0) {
+            filmButtons->addSpacing(12);
+            continue;
+        }
+        auto *button = new QToolButton(m_film);
+        button->setAutoRaise(true);
+        button->setIcon(pictures::viewerIcon(tool.icon));
+        button->setIconSize(QSize(16, 16));
+        button->setToolTip(pictures::viewerString(tool.tip, tool.fallback));
+        button->setShortcut(tool.key);
+        connect(button, &QToolButton::clicked, this, tool.action);
+        filmButtons->addWidget(button);
+    }
+    filmButtons->addStretch();
+    filmLayout->addLayout(filmButtons);
+    m_pages->addWidget(m_film);
+    // Filmstrip starts on the folder's first picture once the folder is read, as XP's does.
+    connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
+        if (path == currentFolder())
+            selectFirstPicture();
+    });
     m_virtualList = listView(m_virtual);
     m_virtualList->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_virtualList->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -904,6 +1035,10 @@ void FileBrowser::buildPanes()
 
     for (QItemSelectionModel *selection : {m_list->selectionModel(), m_virtualList->selectionModel()})
         connect(selection, &QItemSelectionModel::selectionChanged, this, [this] {
+            if (shownView() == Filmstrip) {
+                const QStringList paths = selectedPaths();
+                m_filmPreview->setPath(paths.size() == 1 ? paths.first() : QString());
+            }
             updatePane();
             updateActions();
             updateStatus();
@@ -994,7 +1129,7 @@ void FileBrowser::buildMenus()
     m_viewGroup = new QActionGroup(this);
     m_viewsMenu = new QMenu(this);
     const struct { const char *name; View mode; } modes[] = {
-        {QT_TR_NOOP("T&humbnails"), Thumbnails}, {QT_TR_NOOP("Tile&s"), Tiles}, {QT_TR_NOOP("Ico&ns"), Icons}, {QT_TR_NOOP("&List"), List}, {QT_TR_NOOP("&Details"), Details}};
+        {QT_TR_NOOP("Filmstri&p"), Filmstrip}, {QT_TR_NOOP("T&humbnails"), Thumbnails}, {QT_TR_NOOP("Tile&s"), Tiles}, {QT_TR_NOOP("Ico&ns"), Icons}, {QT_TR_NOOP("&List"), List}, {QT_TR_NOOP("&Details"), Details}};
     for (const auto &mode : modes) {
         QAction *action = m_viewGroup->addAction(tr(mode.name));
         action->setCheckable(true);
@@ -1002,7 +1137,11 @@ void FileBrowser::buildMenus()
         view->addAction(action);
         m_viewsMenu->addAction(action);
         connect(action, &QAction::triggered, this, [this, target = mode.mode] { setView(target); });
+        if (mode.mode == Filmstrip)
+            m_filmstripAction = action;
     }
+    // Only picture folders have it.
+    m_filmstripAction->setVisible(false);
     view->addSeparator();
     QMenu *arrange = view->addMenu(tr("Arrange Icons &by"));
     const struct { int string; const char *fallback; int column; } orders[] = {{8976, "Name", 0}, {8978, "Size", 1}, {8979, "Type", 2}, {8980, "Date Modified", 3}};
@@ -1225,13 +1364,130 @@ void FileBrowser::addHistoryMenu(QToolButton *button, bool back)
     button->setMenu(menu);
 }
 
+FileBrowser::View FileBrowser::shownView() const
+{
+    return m_view == Filmstrip && !m_pictureFolder ? Thumbnails : m_view;
+}
+
+QWidget *FileBrowser::folderPage() const
+{
+    switch (shownView()) {
+    case Details: return m_details;
+    case Filmstrip: return m_film;
+    default: return m_list;
+    }
+}
+
+void FileBrowser::placeList(bool inFilmstrip)
+{
+    const bool there = m_list->parentWidget() == m_film;
+    if (there == inFilmstrip)
+        return;
+    if (inFilmstrip) {
+        m_pages->removeWidget(m_list);
+        static_cast<QVBoxLayout *>(m_film->layout())->addWidget(m_list);
+        m_list->show();
+    } else {
+        m_film->layout()->removeWidget(m_list);
+        m_pages->insertWidget(0, m_list);
+        m_list->setMinimumHeight(0);
+        m_list->setMaximumHeight(QWIDGETSIZE_MAX);
+    }
+}
+
+void FileBrowser::selectFirstPicture()
+{
+    if (shownView() != Filmstrip || m_list->selectionModel()->hasSelection())
+        return;
+    const QModelIndex root = m_list->rootIndex();
+    for (int row = 0; row < m_model->rowCount(root); ++row) {
+        const QModelIndex index = m_model->index(row, 0, root);
+        if (pictures::isPicture(m_model->path(index))) {
+            m_list->setCurrentIndex(index);
+            m_list->scrollTo(index);
+            return;
+        }
+    }
+}
+
+void FileBrowser::stepFilmstrip(int step)
+{
+    const QModelIndex root = m_list->rootIndex();
+    const int rows = m_model->rowCount(root);
+    if (rows == 0)
+        return;
+    const QModelIndex current = m_list->currentIndex();
+    const int row = current.isValid() ? (current.row() + step + rows) % rows : 0;
+    const QModelIndex next = m_model->index(row, 0, root);
+    m_list->setCurrentIndex(next);
+    m_list->scrollTo(next);
+}
+
+QStringList FileBrowser::selectedPictures() const
+{
+    QStringList found;
+    for (const QString &path : selectedPaths())
+        if (pictures::isPicture(path))
+            found.append(path);
+    return found;
+}
+
+void FileBrowser::rotateSelected(bool clockwise)
+{
+    for (const QString &path : selectedPictures()) {
+        if (!pictures::rotate(path, clockwise, this))
+            break;
+        pictures::Thumbnails::instance()->forget(path);
+    }
+    m_filmPreview->refresh();
+    m_list->viewport()->update();
+    updatePane();
+}
+
+void FileBrowser::startSlideShow()
+{
+    // The selected pictures if there are several, the folder's otherwise, from the selected one
+    QStringList chosen = selectedPictures();
+    if (chosen.size() > 1) {
+        pictures::SlideShow::start(chosen);
+        return;
+    }
+    const QStringList all = pictures::picturesIn(currentFolder());
+    pictures::SlideShow::start(all, chosen.isEmpty() ? 0 : int(all.indexOf(chosen.first())));
+}
+
+void FileBrowser::setAsBackground(const QString &path)
+{
+    LookChoice choice = ShellTheme::instance()->choice();
+    choice.wallpaper = path;
+    ShellTheme::write(choice);
+}
+
 void FileBrowser::setView(View view)
 {
     m_view = view;
+    const View shown = shownView();
+    m_filmstripAction->setVisible(m_pictureFolder);
     for (QAction *action : m_viewGroup->actions())
-        action->setChecked(action->data().toInt() == int(view));
+        action->setChecked(action->data().toInt() == int(shown));
     auto *delegate = delegateOf(m_list);
-    switch (view) {
+    placeList(shown == Filmstrip);
+    m_list->setFlow(QListView::LeftToRight);
+    m_list->setMovement(QListView::Static);
+    m_list->setWrapping(true);
+    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    switch (shown) {
+    case Filmstrip:
+        // The thumbnails on one row, which scrolls sideways
+        delegate->setMode(ItemDelegate::ThumbnailMode);
+        m_list->setViewMode(QListView::IconMode);
+        m_list->setGridSize(QSize(120, 134));
+        m_list->setIconSize(QSize(96, 96));
+        m_list->setWrapping(false);
+        m_list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_list->setFixedHeight(134 + 4 + m_list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_list));
+        break;
     case Thumbnails:
         delegate->setMode(ItemDelegate::ThumbnailMode);
         m_list->setViewMode(QListView::IconMode);
@@ -1253,22 +1509,22 @@ void FileBrowser::setView(View view)
     case List:
         delegate->setMode(ItemDelegate::Plain);
         m_list->setViewMode(QListView::ListMode);
+        // (IconMode lets items be dragged about; here a drag is a file's.)
         m_list->setFlow(QListView::TopToBottom);
-        m_list->setWrapping(true);
         m_list->setGridSize(QSize(180, 18));
         m_list->setIconSize(QSize(16, 16));
         break;
     case Details:
         break;
     }
-    // IconMode lets items be dragged about; here a drag is a file's. (And a flow set for List stays.)
-    if (view != List) {
-        m_list->setFlow(QListView::LeftToRight);
-        m_list->setMovement(QListView::Static);
-        m_list->setWrapping(true);
+    if (!m_location.startsWith(QLatin1String("::")) && !places::isWeb(m_location) && !blocked())
+        m_pages->setCurrentWidget(folderPage());
+    // (Once the page is there: the selection is read from the view it shows.)
+    if (shown == Filmstrip) {
+        const QStringList paths = selectedPaths();
+        m_filmPreview->setPath(paths.size() == 1 ? paths.first() : QString());
+        selectFirstPicture();
     }
-    if (!m_location.startsWith(QLatin1String("::")) && !blocked())
-        m_pages->setCurrentWidget(view == Details ? static_cast<QWidget *>(m_details) : m_list);
     m_list->doItemsLayout();
 }
 
@@ -1451,10 +1707,16 @@ void FileBrowser::navigate(const QString &location, bool remember)
             m_warning->setDrive(target == QLatin1String("/"));
             m_pages->setCurrentWidget(m_warning);
         } else {
-            m_pages->setCurrentWidget(m_view == Details ? static_cast<QWidget *>(m_details) : m_list);
+            m_pages->setCurrentWidget(folderPage());
         }
     } else {
         showVirtual(target);
+    }
+    // Picture folders have Filmstrip, which then stays theirs.
+    const bool pictureFolder = !web && !folder.startsWith(QLatin1String("::")) && target != places::RecycleBin && pictures::isPictureFolder(folder);
+    if (pictureFolder != m_pictureFolder || (m_view == Filmstrip && !folder.startsWith(QLatin1String("::")))) {
+        m_pictureFolder = pictureFolder;
+        setView(m_view);
     }
     selectInTree(target);
     updatePane();
@@ -1742,7 +2004,20 @@ void FileBrowser::updatePane()
                 {drive ? xpfiles::shellString(31321, "Hide the contents of this drive") : xpfiles::shellString(31325, "Hide the contents of this folder"), fileicons::shell(fileicons::FolderOpen), [this] { setSystemFolderShown(false); }},
             }});
         }
-        PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), !isSystemFolder(m_location), {}};
+        // Picture folders, and pictures chosen elsewhere: the Picture Tasks first, in the main header
+        const QStringList chosenPictures = selectedPictures();
+        const bool picturesChosen = !selected.isEmpty() && chosenPictures.size() == selected.size();
+        if (m_pictureFolder || picturesChosen) {
+            PaneGroup pictureTasks{xpfiles::shellString(STRING_PICTURE_TASKS, "Picture Tasks"), true, {}};
+            if (picturesChosen || !pictures::picturesIn(m_location).isEmpty())
+                pictureTasks.tasks.append({xpfiles::shellString(STRING_SLIDE_SHOW, "View as a slide show"), pictures::viewerIcon(pictures::SlideShowButton), [this] { startSlideShow(); }});
+            if (chosenPictures.size() == 1 && selected.size() == 1)
+                pictureTasks.tasks.append({xpfiles::shellString(STRING_BACKGROUND, "Set as desktop background"), fileicons::shell(35),
+                                           [this, path = chosenPictures.first()] { setAsBackground(path); }});
+            if (!pictureTasks.tasks.isEmpty())
+                groups.append(pictureTasks);
+        }
+        PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), !isSystemFolder(m_location) && groups.isEmpty(), {}};
         if (selected.isEmpty()) {
             tasks.tasks.append({xpfiles::shellString(STRING_NEW_FOLDER, "Make a new folder"), fileicons::shell(fileicons::FolderOpen), [this] { newFolder(); }});
         } else {
@@ -1764,13 +2039,44 @@ void FileBrowser::updatePane()
         if (m_location != documents)
             others.tasks.append(place(documents));
         others.tasks.append(place(places::Computer));
+        // XP's Details: a picture's preview over its name, then "Label: value" lines
+        const auto labelled = [](int label, const char *fallback, const QString &value) {
+            return PaneTask{xpfiles::shellString(STRING_LABELLED, "%1!ls!: %2!ls!").replace(QLatin1String("%1!ls!"), xpfiles::shellString(label, fallback))
+                                .replace(QLatin1String("%2!ls!"), value), {}, {}};
+        };
         const QFileInfo shown(selected.size() == 1 ? selected.first() : m_location);
-        details.tasks.append({selected.size() > 1 ? tr("%1 items selected.").arg(selected.size()) : places::title(shown.absoluteFilePath()), {}, {}, true});
-        if (selected.size() <= 1) {
+        if (selected.size() > 1) {
+            details.tasks.append({xpfiles::shellString(STRING_ITEMS_SELECTED, "%ld items selected.").replace(QLatin1String("%ld"), QString::number(selected.size())), {}, {}, true});
+            qint64 total = 0;
+            bool folders = false;
+            for (const QString &path : selected) {
+                const QFileInfo item(path);
+                folders |= item.isDir();
+                total += item.size();
+            }
+            // Only files' sizes add up here; a folder's would have to be counted.
+            if (!folders)
+                details.tasks.append({xpfiles::shellString(STRING_TOTAL_SIZE, "Total File Size: %ls").replace(QLatin1String("%ls"), xpSize(total)), {}, {}});
+        } else {
+            const bool picture = selected.size() == 1 && pictures::isPicture(shown.absoluteFilePath());
+            if (picture) {
+                const qreal ratio = devicePixelRatioF();
+                QImage preview = pictures::load(shown.absoluteFilePath(), QSize(ShellTheme::instance()->scaled(PREVIEW_SIDE), ShellTheme::instance()->scaled(PREVIEW_SIDE)) * ratio);
+                preview.setDevicePixelRatio(ratio);
+                if (!preview.isNull())
+                    details.tasks.append({QString(), {}, {}, false, preview});
+            }
+            details.tasks.append({places::title(shown.absoluteFilePath()), {}, {}, true});
             details.tasks.append({fileicons::typeName(shown), {}, {}});
-            details.tasks.append({tr("Date Modified: %1").arg(QLocale().toString(shown.lastModified(), QLocale::ShortFormat)), {}, {}});
+            if (picture) {
+                if (const QSize size = pictures::dimensions(shown.absoluteFilePath()); size.isValid())
+                    details.tasks.append(labelled(STRING_DIMENSIONS, "Dimensions", pictures::viewerString(308, "%1!d! x %2!d!")
+                                                                                      .replace(QLatin1String("%1!d!"), QString::number(size.width()))
+                                                                                      .replace(QLatin1String("%2!d!"), QString::number(size.height()))));
+            }
+            details.tasks.append(labelled(STRING_DATE_MODIFIED, "Date Modified", QLocale().toString(shown.lastModified(), QLocale::ShortFormat)));
             if (!shown.isDir())
-                details.tasks.append({tr("Size: %1").arg(xpSize(shown.size())), {}, {}});
+                details.tasks.append(labelled(STRING_SIZE, "Size", xpSize(shown.size())));
         }
     }
     if (!others.tasks.isEmpty())
@@ -1798,6 +2104,16 @@ bool FileBrowser::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == m_splitter && (event->type() == QEvent::Resize || event->type() == QEvent::Move))
         placeEdgeLines();
+    // Under a visual style, Details shades the column it is sorted by, down to the bottom;
+    // the rows are drawn over it.
+    if (m_details && watched == m_details->viewport() && event->type() == QEvent::Paint && ShellTheme::instance()->renderer()) {
+        const int column = m_details->header()->sortIndicatorSection();
+        if (column >= 0 && column < m_model->columnCount()) {
+            QPainter painter(m_details->viewport());
+            const int x = m_details->header()->sectionViewportPosition(column);
+            painter.fillRect(QRect(x, 0, m_details->header()->sectionSize(column), m_details->viewport()->height()), SORTED_COLUMN);
+        }
+    }
     if (event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if (key->key() == Qt::Key_Delete) {
@@ -1866,6 +2182,16 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
             menu->addAction(tr("Open in New &Window"), this, [path = selected.first()] { auto *window = new FileBrowser(path); window->show(); });
         if (selected.size() == 1 && QFileInfo(selected.first()).isDir())
             menu->addAction(tr("Open Command &Prompt Here"), this, [path = selected.first()] { programs::openCommandPrompt(path); });
+        // What the Picture and Fax Viewer adds for pictures, in its words
+        if (selectedPictures().size() == selected.size()) {
+            menu->addSeparator();
+            menu->addAction(pictures::viewerString(557, "Rotate Cloc&kwise"), this, [this] { rotateSelected(true); });
+            menu->addAction(pictures::viewerString(558, "Rotate Cou&nter Clockwise"), this, [this] { rotateSelected(false); });
+            if (selected.size() == 1) {
+                menu->addSeparator();
+                menu->addAction(pictures::viewerString(560, "Set as Desktop &Background"), this, [this, path = selected.first()] { setAsBackground(path); });
+            }
+        }
         menu->addSeparator();
         menu->addAction(m_cutAction);
         menu->addAction(m_copyAction);

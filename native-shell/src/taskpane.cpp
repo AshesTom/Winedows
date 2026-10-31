@@ -20,6 +20,8 @@ const int ARROW_UP = 100, ARROW_UP_HOT = 101, ARROW_DOWN = 102, ARROW_DOWN_HOT =
 const int PRIMARY_ARROW_UP = 104, PRIMARY_ARROW_UP_HOT = 105, PRIMARY_ARROW_DOWN = 106, PRIMARY_ARROW_DOWN_HOT = 107;
 
 const int TITLE_ICON = 32;
+// Between the Details group's preview and the name under it
+const int PICTURE_GAP = 8;
 
 // Magenta is see-through in these bitmaps.
 QImage keyed(const QImage &source)
@@ -142,6 +144,18 @@ void TaskPane::layoutGroups()
             int rowY = y + padY;
             for (int t = 0; t < group.tasks.size(); ++t) {
                 const PaneTask &task = group.tasks[t];
+                if (!task.picture.isNull()) {
+                    // As wide as the group lets it, centred; never larger than it is.
+                    const QSize natural = task.picture.deviceIndependentSize().toSize();
+                    const QSize shown = natural.scaled(QSize(groupWidth - 2 * padX, groupWidth - 2 * padX), Qt::KeepAspectRatio).boundedTo(natural);
+                    Row row;
+                    row.rect = QRect(margin + (groupWidth - shown.width()) / 2, rowY, shown.width(), shown.height());
+                    row.group = g;
+                    row.task = t;
+                    m_rows.append(row);
+                    rowY += shown.height() + theme->scaled(PICTURE_GAP);
+                    continue;
+                }
                 const int textX = margin + padX + (task.icon.isNull() ? 0 : icon + iconGap);
                 const int textWidth = margin + groupWidth - padX - textX;
                 const QRect bounds = metrics.boundingRect(QRect(textX, rowY, textWidth, 1000), Qt::TextWordWrap, task.text);
@@ -207,6 +221,11 @@ void TaskPane::paintEvent(QPaintEvent *)
     const int icon = theme->scaled(ICON), iconGap = theme->scaled(ICON_GAP);
     for (const Row &row : std::as_const(m_rows)) {
         const PaneTask &task = m_groups[row.group].tasks[row.task];
+        if (!task.picture.isNull()) {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            painter.drawImage(row.rect, task.picture);
+            continue;
+        }
         const bool hot = m_hot == qMakePair(row.group, row.task) && task.action;
         int x = row.rect.x();
         if (!task.icon.isNull()) {
