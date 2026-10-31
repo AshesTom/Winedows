@@ -113,11 +113,8 @@ public:
 
         // ("Franklin Gothic": XP's font mapper finds the Medium, the one it has.)
         m_titleFont = xpfiles::themeFont(QStringLiteral("Franklin Gothic Medium, %1").arg(msginaString(STRING_TITLE_SIZE, "14")), 96);
-        m_labelFont = QFont(msginaString(STRING_LABEL_FACE, "Tahoma"));
-        m_labelFont.setPixelSize(qRound(msginaString(STRING_LABEL_SIZE, "8").toInt() * 96 / 72.0));
-        m_labelFont.setBold(true);
-        m_labelFont.setStyleStrategy(QFont::NoAntialias);
-        m_labelFont.setHintingPreference(QFont::PreferFullHinting);
+        m_labelFont = xpfiles::themeFont(QStringLiteral("%1, %2, bold")
+                                           .arg(msginaString(STRING_LABEL_FACE, "Tahoma"), msginaString(STRING_LABEL_SIZE, "8")), 96);
 
         m_fade = new QTimer(this);
         m_fade->setInterval(FADE_STEP_MS);

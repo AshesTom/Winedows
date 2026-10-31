@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "session.h"
+#include "fontpolicy.h"
 
 #include "msstyles.h"
 
@@ -119,17 +120,8 @@ QByteArray binaryValue(const Registry &reg, const QString &key, const QString &n
     return out;
 }
 
-// A LOGFONTW (92 bytes) as a Qt font, its height taken at the prefix's DPI.
-// Up to 16 pixels, XP's Standard smoothing does not smooth: whole pixels, hinted as Windows hints.
-static void drawnAsXpDoes(QFont *font, double pixels)
-{
-    if (qRound(pixels) <= 16) {
-        font->setHintingPreference(QFont::PreferFullHinting);
-        font->setStyleStrategy(QFont::NoAntialias);
-    }
-}
-
-std::optional<QFont> logFont(const QByteArray &data, int dpi)
+// A LOGFONTW (92 bytes); its height is already expressed in device pixels.
+std::optional<QFont> logFont(const QByteArray &data)
 {
     if (data.size() < 92)
         return std::nullopt;
@@ -143,11 +135,11 @@ std::optional<QFont> logFont(const QByteArray &data, int dpi)
     QFont font(face);
     // Negative: the character height in pixels; positive: the cell height.
     const double pixels = height < 0 ? -height : height * 0.85;
-    font.setPointSizeF(pixels * 72.0 / dpi);
-    drawnAsXpDoes(&font, pixels);
+    font.setPixelSize(qMax(1, qRound(pixels)));
     if (weight > 0)
         font.setWeight(QFont::Weight(qBound(1, int(weight), 1000)));
     font.setItalic(italic);
+    unsmoothedFont(font, font.pixelSize());
     return font;
 }
 
@@ -216,10 +208,13 @@ void readNativeLook(Look *look)
             parseColour(theme->sysMetric(QLatin1String(entry.metric)).value_or(QString()), &colour);
         look->colours.insert(QLatin1String(entry.registry), colour);
     }
-    QFont message(QStringLiteral("Tahoma"));
-    message.setPointSizeF(8);
-    drawnAsXpDoes(&message, 8 * look->dpi / 72.0);
-    look->messageFont = look->menuFont = look->statusFont = message;
+    const auto metricFont = [&](const char *name) {
+        return themeFont(theme ? theme->sysMetric(QLatin1String(name)).value_or(QStringLiteral("Tahoma, 8"))
+                               : QStringLiteral("Tahoma, 8"), look->dpi);
+    };
+    look->messageFont = metricFont("msgboxfont");
+    look->menuFont = metricFont("menufont");
+    look->statusFont = metricFont("statusfont");
     look->haveFonts = true;
     const QStringList rgb = values.value(QStringLiteral("background")).split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (rgb.size() == 3)
@@ -310,14 +305,6 @@ Look readLook(const QString &prefix)
     }
     look.colourName = stringValue(reg, manager, QStringLiteral("ColorName"));
     look.sizeName = stringValue(reg, manager, QStringLiteral("SizeName"));
-    readNativeLook(&look);
-    // For trying another style (qt-style/README.md): WIN4WINE_QT_MSSTYLES=PATH[:COLOR]
-    if (const QString forced = qEnvironmentVariable("WIN4WINE_QT_MSSTYLES"); !forced.isEmpty()) {
-        look.stylePath = forced.section(QLatin1Char(':'), 0, 0);
-        look.colourName = forced.section(QLatin1Char(':'), 1, 1);
-        look.themed = QFileInfo(look.stylePath).isFile();
-    }
-
     const QString colours = QStringLiteral("Control Panel\\Colors");
     for (auto it = reg.value(colours.toLower()).cbegin(); it != reg.value(colours.toLower()).cend(); ++it) {
         const QStringList rgb = stringValue(reg, colours, it.key()).split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -338,14 +325,23 @@ Look readLook(const QString &prefix)
                        .value_or(dwordValue(reg, QStringLiteral("Control Panel\\Desktop"), QStringLiteral("LogPixels")).value_or(96)));
     if (look.dpi < 48 || look.dpi > 480)
         look.dpi = 96;
-    const auto message = logFont(binaryValue(reg, metrics, QStringLiteral("MessageFont")), look.dpi);
-    const auto menu = logFont(binaryValue(reg, metrics, QStringLiteral("MenuFont")), look.dpi);
-    const auto status = logFont(binaryValue(reg, metrics, QStringLiteral("StatusFont")), look.dpi);
+    const auto message = logFont(binaryValue(reg, metrics, QStringLiteral("MessageFont")));
+    const auto menu = logFont(binaryValue(reg, metrics, QStringLiteral("MenuFont")));
+    const auto status = logFont(binaryValue(reg, metrics, QStringLiteral("StatusFont")));
     if (message) {
         look.haveFonts = true;
         look.messageFont = *message;
         look.menuFont = menu.value_or(*message);
         look.statusFont = status.value_or(*message);
+    }
+    // The native session's selected style supplies its palette and fonts
+    // after the prefix's values have been read.
+    readNativeLook(&look);
+    // For trying another style (qt-style/README.md): WIN4WINE_QT_MSSTYLES=PATH[:COLOR]
+    if (const QString forced = qEnvironmentVariable("WIN4WINE_QT_MSSTYLES"); !forced.isEmpty()) {
+        look.stylePath = forced.section(QLatin1Char(':'), 0, 0);
+        look.colourName = forced.section(QLatin1Char(':'), 1, 1);
+        look.themed = QFileInfo(look.stylePath).isFile();
     }
     return look;
 }

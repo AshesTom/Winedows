@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "desktopicons.h"
 
+#include "fileicons.h"
+
 #include "displayproperties.h"
 #include "programs.h"
 #include "theme.h"
@@ -88,17 +90,8 @@ QImage DesktopIcons::iconFor(const QString &path) const
     const QFileInfo info(path);
     if (info.isDir())
         return theme->shellIcon(ICON_FOLDER, size);
-    if (info.suffix() == QLatin1String("desktop")) {
-        if (const auto program = programs::fromFile(path)) {
-            const QIcon icon = programs::iconOf(*program);
-            if (!icon.isNull())
-                return icon.pixmap(size, size).toImage();
-        }
-    }
-    const QMimeType mime = QMimeDatabase().mimeTypeForFile(path);
-    QIcon icon = QIcon::fromTheme(mime.iconName());
-    if (icon.isNull())
-        icon = QIcon::fromTheme(mime.genericIconName());
+    // A program's own icon, XP's for its file types (as folder windows show them), else the icon theme's
+    const QIcon icon = fileicons::forFile(info);
     if (!icon.isNull())
         return icon.pixmap(size, size).toImage();
     return theme->shellIcon(ICON_DOCUMENT, size);
@@ -191,7 +184,7 @@ QStringList DesktopIcons::nameLines(const QString &name) const
 {
     // Two lines at most, the second with an ellipsis if it does not fit
     ShellTheme *theme = ShellTheme::instance();
-    const QFont font = theme->font(QStringLiteral("Tahoma, 8"));
+    const QFont font = theme->systemFont(QStringLiteral("icontitlefont"));
     const int width = theme->scaled(TEXT_WIDTH);
     QTextLayout layout(name, font);
     QTextOption option;
@@ -216,7 +209,7 @@ QStringList DesktopIcons::nameLines(const QString &name) const
 QRect DesktopIcons::textRect(const Item &item, const QStringList &lines) const
 {
     ShellTheme *theme = ShellTheme::instance();
-    QFontMetrics metrics(theme->font(QStringLiteral("Tahoma, 8")));
+    QFontMetrics metrics(theme->systemFont(QStringLiteral("icontitlefont")));
     int width = 0;
     for (const QString &line : lines)
         width = qMax(width, metrics.horizontalAdvance(line));
@@ -228,7 +221,7 @@ QRect DesktopIcons::textRect(const Item &item, const QStringList &lines) const
 void DesktopIcons::paint(QPainter &painter, const QRect &clip) const
 {
     ShellTheme *theme = ShellTheme::instance();
-    const QFont font = theme->font(QStringLiteral("Tahoma, 8"));
+    const QFont font = theme->systemFont(QStringLiteral("icontitlefont"));
     painter.setFont(font);
     const QColor highlight = theme->system(QStringLiteral("highlight"), QColor(49, 106, 197));
     QFontMetrics metrics(font);

@@ -4,6 +4,8 @@
 #include <QGuiApplication>
 #include <QHash>
 
+#include <xcb/screensaver.h>
+
 #include <cstdlib>
 #include <cstring>
 
@@ -108,6 +110,14 @@ void sendToManager(xcb_window_t window, const char *type, const QList<quint32> &
     xcb_send_event(connection(), 0, root(), XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
                    reinterpret_cast<const char *>(&event));
     xcb_flush(connection());
+}
+
+quint32 idleMilliseconds()
+{
+    auto *info = xcb_screensaver_query_info_reply(connection(), xcb_screensaver_query_info(connection(), root()), nullptr);
+    const quint32 idle = info ? info->ms_since_user_input : 0;
+    free(info);
+    return idle;
 }
 
 } // namespace x11

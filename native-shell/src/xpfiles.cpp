@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "xpfiles.h"
+#include "fontpolicy.h"
 
 #include <QCoreApplication>
 #include <QDirIterator>
@@ -9,9 +10,6 @@
 #include <QtEndian>
 
 namespace xpfiles {
-
-// For a font of no known table: what Tahoma has
-static const int DEFAULT_UNSMOOTHED = 16;
 
 static QStringList roots()
 {
@@ -42,7 +40,8 @@ QString find(const QString &name)
 
 void loadFonts()
 {
-    for (const char *name : {"tahoma.ttf", "tahomabd.ttf", "framd.ttf", "framdit.ttf", "trebuc.ttf", "trebucbd.ttf", "marlett.ttf"})
+    for (const char *name : {"tahoma.ttf", "tahomabd.ttf", "framd.ttf", "framdit.ttf", "trebuc.ttf", "trebucbd.ttf", "marlett.ttf",
+                             "arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf", "micross.ttf", "msgothic.ttc"})
         if (const QString path = find(QLatin1String(name)); !path.isEmpty())
             QFontDatabase::addApplicationFont(path);
 }
@@ -133,60 +132,9 @@ QImage icon(const w4w::PeResources &pe, const QString &group, int size)
     return QImage::fromData(file, "ICO");
 }
 
-// The largest size, in pixels, at which a font of XP's asks not to be smoothed: its own gasp
-// table, which XP's Standard smoothing follows. Tahoma up to 16, Trebuchet MS up to 11.
-static int unsmoothedUpTo(const QString &family, bool bold)
-{
-    static QHash<QString, int> known;
-    const QString key = family.toLower() + (bold ? QStringLiteral("/bold") : QString());
-    if (const auto found = known.constFind(key); found != known.constEnd())
-        return *found;
-    int limit = DEFAULT_UNSMOOTHED;
-    const QString name = family.compare(QLatin1String("Tahoma"), Qt::CaseInsensitive) == 0 ? (bold ? QStringLiteral("tahomabd.ttf") : QStringLiteral("tahoma.ttf"))
-        : family.compare(QLatin1String("Trebuchet MS"), Qt::CaseInsensitive) == 0 ? (bold ? QStringLiteral("trebucbd.ttf") : QStringLiteral("trebuc.ttf"))
-        : family.startsWith(QLatin1String("Franklin Gothic"), Qt::CaseInsensitive) ? QStringLiteral("framd.ttf") : QString();
-    QFile file(name.isEmpty() ? QString() : find(name));
-    if (file.open(QIODevice::ReadOnly)) {
-        const QByteArray data = file.readAll();
-        const auto u16 = [&](qint64 at) { return at + 2 <= data.size() ? qFromBigEndian<quint16>(data.constData() + at) : quint16(0); };
-        const int tables = u16(4);
-        for (int i = 0; i < tables; ++i) {
-            const qint64 entry = 12 + 16 * i;
-            if (entry + 16 > data.size() || data.mid(entry, 4) != "gasp")
-                continue;
-            const qint64 at = qFromBigEndian<quint32>(data.constData() + entry + 8);
-            // Ranges by their upper size; bit 2 is GASP_DOGRAY.
-            const int ranges = u16(at + 2);
-            limit = 0;
-            for (int range = 0; range < ranges; ++range) {
-                if (u16(at + 4 + 4 * range + 2) & 2)
-                    break;
-                limit = u16(at + 4 + 4 * range);
-            }
-            break;
-        }
-    }
-    known.insert(key, limit);
-    return limit;
-}
-
 QFont themeFont(const QString &spec, int dpi)
 {
-    const QStringList parts = spec.split(QLatin1Char(','));
-    QFont font(parts.value(0).trimmed());
-    const int pixels = qMax(1, qRound(parts.value(1).trimmed().toDouble() * dpi / 72.0));
-    font.setPixelSize(pixels);
-    for (int i = 2; i < parts.size(); ++i) {
-        const QString style = parts[i].trimmed().toLower();
-        if (style == QLatin1String("bold"))
-            font.setBold(true);
-        else if (style == QLatin1String("italic"))
-            font.setItalic(true);
-    }
-    // Hinted as Windows hints it at any size; smoothed in greys where the font asks for it.
-    font.setHintingPreference(QFont::PreferFullHinting);
-    font.setStyleStrategy(pixels <= unsmoothedUpTo(parts.value(0).trimmed(), font.bold()) ? QFont::NoAntialias : QFont::StyleStrategy(QFont::PreferAntialias | QFont::NoSubpixelAntialias));
-    return font;
+    return w4w::themeFont(spec, dpi);
 }
 
 } // namespace xpfiles

@@ -23,6 +23,7 @@
 #include <QStyle>
 #include <QStyleOptionTab>
 #include <QVBoxLayout>
+#include <QFont>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QtEndian>
@@ -35,6 +36,20 @@ namespace {
 // MS Shell Dlg (Tahoma 8) has dialog base units of 6 x 13 pixels at 96 DPI.
 int unitX(int value) { return (value * 6 + 2) / 4; }
 int unitY(int value) { return (value * 13 + 4) / 8; }
+
+// A template's face as XP resolves it (its FontSubstitutes): "MS Shell Dlg" is Microsoft Sans Serif,
+// unless the template asks for the shell's font (DS_SHELLFONT, DS_FIXEDSYS among its styles), or names
+// "MS Shell Dlg 2": Tahoma. The size stays the session's.
+const quint32 DS_FIXEDSYS = 0x08;
+QFont templateFont(const QString &face, quint32 style, QFont font)
+{
+    if (face.compare(QLatin1String("MS Shell Dlg 2"), Qt::CaseInsensitive) == 0
+        || (face.compare(QLatin1String("MS Shell Dlg"), Qt::CaseInsensitive) == 0 && (style & DS_FIXEDSYS)))
+        return font;
+    if (face.compare(QLatin1String("MS Shell Dlg"), Qt::CaseInsensitive) == 0)
+        font.setFamilies({QStringLiteral("Microsoft Sans Serif")});
+    return font;
+}
 
 class Reader
 {
@@ -106,7 +121,7 @@ Page build(const w4w::PeResources &pe, int id, QWidget *parent)
     page.caption = r.text();
     if (style & 0x40) {
         r.seek(r.at() + (extended ? 6 : 2));
-        r.text();
+        parent->setFont(templateFont(r.text(), style, parent->font()));
     }
     parent->setFixedSize(unitX(width), unitY(height));
     QWidget *previous = nullptr;
@@ -209,8 +224,10 @@ void greyControls(const Page &page)
 }
 
 namespace {
-// At 96 DPI, by XP's tabs: their words and 6 pixels each side, 21 tall, a row 18 above the next
-const int TAB_HEIGHT = 21, ROW_STEP = 18, TAB_PADDING = 12, PANE_MARGIN = 3;
+// At 96 DPI, by XP's tabs: their words and 6 pixels each side, 21 tall, a row 18 above the next. The
+// tabs are laid 2 pixels inside the control, the selected one 2 wider on each side (measured on XP's
+// System Properties: General from 6 to 94, the tabs beside and above it from 8).
+const int TAB_HEIGHT = 21, ROW_STEP = 18, TAB_PADDING = 12, PANE_MARGIN = 3, SELECTED_GROW = 2;
 }
 
 SheetTabs::SheetTabs(QWidget *parent)
@@ -273,7 +290,7 @@ QSize SheetTabs::sizeHint() const
 {
     const QSize page = m_pageSize;
     const int width = page.width() + 2 * PANE_MARGIN;
-    const int rows = int(rowsFor(width).size());
+    const int rows = int(rowsFor(width - 2 * SELECTED_GROW).size());
     return QSize(width, (rows - 1) * ROW_STEP + TAB_HEIGHT - 1 + page.height() + 2 * PANE_MARGIN);
 }
 
@@ -281,7 +298,8 @@ void SheetTabs::arrange()
 {
     if (m_texts.isEmpty())
         return;
-    QList<QList<int>> rows = rowsFor(width());
+    const int room = width() - 2 * SELECTED_GROW;
+    QList<QList<int>> rows = rowsFor(room);
     // The rows turn so that the selected tab's is at the bottom, by the pane.
     for (int i = 0; i < rows.size(); ++i)
         if (rows[i].contains(m_current)) {
@@ -296,8 +314,8 @@ void SheetTabs::arrange()
         for (int tab : rows[r])
             used += widthOf(tab);
         // Several rows fill the width, each tab taking its share of what is left.
-        const int spare = rows.size() > 1 ? qMax(0, width() - used) : 0;
-        int x = 0;
+        const int spare = rows.size() > 1 ? qMax(0, room - used) : 0;
+        int x = SELECTED_GROW;
         for (int i = 0; i < rows[r].size(); ++i) {
             const int tab = rows[r][i];
             const int w = widthOf(tab) + spare * (i + 1) / int(rows[r].size()) - spare * i / int(rows[r].size());
@@ -326,10 +344,10 @@ void SheetTabs::paintEvent(QPaintEvent *)
     const auto draw = [&](int i) {
         QStyleOptionTab tab;
         tab.initFrom(this);
-        tab.rect = m_rects[i];
+        tab.rect = i == m_current ? m_rects[i].adjusted(-SELECTED_GROW, 0, SELECTED_GROW, 0) : m_rects[i];
         tab.shape = QTabBar::RoundedNorth;
         tab.text = m_texts[i];
-        tab.position = m_rects[i].x() == 0 ? QStyleOptionTab::Beginning : QStyleOptionTab::Middle;
+        tab.position = m_rects[i].x() == SELECTED_GROW ? QStyleOptionTab::Beginning : QStyleOptionTab::Middle;
         tab.state &= ~(QStyle::State_MouseOver | QStyle::State_HasFocus);
         if (i == m_current)
             tab.state |= QStyle::State_Selected;
@@ -400,7 +418,11 @@ void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &
     auto *row = new QHBoxLayout;
     row->setSpacing(unitX(4));
     row->addStretch(1);
+    // The sheet's own buttons are comctl32's template 1006, "MS Shell Dlg" without DS_FIXEDSYS: Microsoft Sans
+    // Serif on XP (its tabs are Tahoma, as its pages are when they ask for the shell's font).
+    const QFont buttonFont = templateFont(QStringLiteral("MS Shell Dlg"), 0, dialog->font());
     for (QPushButton *button : buttons) {
+        button->setFont(buttonFont);
         button->setFixedSize(unitX(50), unitY(14));
         row->addWidget(button);
     }

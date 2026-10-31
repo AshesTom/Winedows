@@ -87,6 +87,8 @@ QList<Applet> applets()
     if (installed("system-config-printer"))
         add("printers", xpfiles::shellString(9319, "Printers and Faxes"), QT_TR_NOOP("Shows installed printers and fax printers."), fileicons::shell(fileicons::Printer), Hardware);
     add("users", cplString("nusrmgr.cpl", 101, "User Accounts"), QT_TR_NOOP("Change your picture on the Welcome screen and the Start menu."), cplIcon("nusrmgr.cpl", 200, 269), Users);
+    // XP SP2's Security Center: in the classic view, as it is in a category of its own on XP.
+    out.append({QStringLiteral("security"), cplString("xpsp2res.dll", 6103, "Security Center"), cplString("xpsp2res.dll", 6104, ""), cplIcon("xpsp2res.dll", 6105, 48), -1});
     if (installed("timedatectl"))
         add("datetime", cplString("timedate.cpl", 300, "Date and Time"), QT_TR_NOOP("Set the date, time, and time zone for your computer."), cplIcon("timedate.cpl", 200, 276), DateTime);
     return out;

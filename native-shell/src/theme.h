@@ -45,6 +45,7 @@ public:
     const FrameStyle &frame() const { return m_frame; }
     QColor system(const QString &name, const QColor &fallback) const;
     QFont font(const QString &spec) const;
+    QFont systemFont(const QString &role, bool bold = false) const;
     LookChoice choice() const;
     QImage defaultIcon(int size) const;
     // An icon of shell32.dll's, by its resource ID; null if there is none.
@@ -57,7 +58,7 @@ public:
     // The first start of a session without a prefix: XP's own default look.
     static void ensureDefaultLook();
     static QString lunaPath();
-    // uxtheme's continuous shadow under a text: its coverage, softened by a pixel, at OFFSET.
+    // Continuous text shadow with a padded two-pass blur and the theme's offset.
     static void drawShadowedText(QPainter &painter, const QRect &rect, int flags, const QString &text, const QColor &colour, const QColor &shadow, QPoint offset);
     // The file of the Common Tasks pane's art for a look: the style's own Shell folder, or
     // XP's for its colour. Empty for Windows Classic.

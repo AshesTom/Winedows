@@ -122,7 +122,7 @@ void TaskPane::resizeEvent(QResizeEvent *)
 void TaskPane::layoutGroups()
 {
     ShellTheme *theme = ShellTheme::instance();
-    const QFont normal = theme->font(QStringLiteral("Tahoma, 8"));
+    const QFont normal = theme->systemFont(QStringLiteral("msgboxfont"));
     const QFontMetrics metrics(normal);
     const int margin = theme->scaled(MARGIN), header = theme->scaled(HEADER);
     const int padX = theme->scaled(BODY_PADDING_X), padY = theme->scaled(BODY_PADDING_Y), gap = theme->scaled(ROW_GAP);
@@ -183,7 +183,7 @@ void TaskPane::paintEvent(QPaintEvent *)
     gradient.setColorAt(0, m_top);
     gradient.setColorAt(1, m_bottom);
     painter.fillRect(rect(), gradient);
-    const QFont normal = theme->font(QStringLiteral("Tahoma, 8")), bold = theme->font(QStringLiteral("Tahoma, 8, bold"));
+    const QFont normal = theme->systemFont(QStringLiteral("msgboxfont")), bold = theme->systemFont(QStringLiteral("msgboxfont"), true);
     for (int g = 0; g < m_groups.size(); ++g) {
         const PaneGroup &group = m_groups[g];
         const QRect header = m_headers[g], body = m_bodies[g];

@@ -4,6 +4,7 @@
 #include "fileicons.h"
 #include "filebrowser.h"
 #include "programs.h"
+#include "securitycenter.h"
 #include "xpdialog.h"
 #include "theme.h"
 
@@ -206,6 +207,8 @@ void showSystem()
     });
     xpPage("sysdm.cpl", 2000, QObject::tr("Hardware"));
     xpPage("sysdm.cpl", 115, QObject::tr("Advanced"));
+    // srrstr.dll's page for a single drive (12 is for several), between Advanced and Automatic Updates as on XP
+    xpPage("srrstr.dll", 11, QObject::tr("System Restore"));
     xpPage("wuaucpl.cpl", 912, QObject::tr("Automatic Updates"), [](const xpdialog::Page &page) {
         // A link and its plain text share the place: XP shows one of them.
         if (QWidget *link = page.controls.value(1040))
@@ -773,6 +776,8 @@ void open(const QString &id)
         showPrograms();
     else if (id == QLatin1String("network"))
         showNetwork();
+    else if (id == QLatin1String("security"))
+        securitycenter::showWindow();
     for (QWidget *widget : QApplication::topLevelWidgets())
         if (!before.contains(widget) && qobject_cast<QDialog *>(widget))
             windows.insert(id, widget);

@@ -23,6 +23,7 @@ class QListView;
 class QMenu;
 class QScrollArea;
 class QSplitter;
+class QSortFilterProxyModel;
 class QStackedWidget;
 class QStandardItemModel;
 class QStandardItem;
@@ -73,6 +74,7 @@ private:
     void buildToolbars();
     void buildPanes();
     void setView(View view);
+    void configureList(QListView *list, View view);
     View shownView() const;           // Filmstrip is Thumbnails outside picture folders
     QWidget *folderPage() const;      // the page that shows a real folder in the current view
     void placeList(bool inFilmstrip);
@@ -95,6 +97,7 @@ private:
     void activate(const QModelIndex &index);
     void openPath(const QString &path);
     void showContextMenu(QPoint global, bool onItem);
+    void showViewContextMenu(QAbstractItemView *view, QPoint at);
     void addHistoryMenu(QToolButton *button, bool back);
     QAbstractItemView *currentView() const;
     QStringList selectedPaths() const;
@@ -131,9 +134,10 @@ private:
     QFileSystemModel *m_files = nullptr;
     FolderModel *m_model = nullptr;
     QStandardItemModel *m_virtual = nullptr;
+    QSortFilterProxyModel *m_virtualFilter = nullptr;
     QStackedWidget *m_pages = nullptr, *m_left = nullptr;
     QListView *m_list = nullptr, *m_virtualList = nullptr;
-    QTreeView *m_details = nullptr, *m_results = nullptr;
+    QTreeView *m_details = nullptr, *m_results = nullptr, *m_virtualDetails = nullptr;
     QWidget *m_film = nullptr;
     FilmPreview *m_filmPreview = nullptr;
     QAction *m_filmstripAction = nullptr;

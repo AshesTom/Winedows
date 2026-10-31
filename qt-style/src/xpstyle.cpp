@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "xpstyle.h"
+#include "fontpolicy.h"
 
 #include <QAbstractScrollArea>
 #include <QApplication>
@@ -284,6 +285,8 @@ void XpStyle::polish(QApplication *application)
         QIcon::setThemeName(icons);
     // XP's fonts (Display Properties > Appearance), unless the user keeps Qt's.
     if (m_look.haveFonts && qEnvironmentVariable("WIN4WINE_QT_FONTS") != QLatin1String("0")) {
+        for (QFont *font : {&m_look.messageFont, &m_look.menuFont, &m_look.statusFont})
+            unsmoothedFont(*font, font->pixelSize());
         application->setFont(m_look.messageFont);
         application->setFont(m_look.menuFont, "QMenu");
         application->setFont(m_look.menuFont, "QMenuBar");
@@ -554,6 +557,18 @@ void XpStyle::drawPrimitive(PrimitiveElement element, const QStyleOption *option
 void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QPainter *painter,
                           const QWidget *widget) const
 {
+    if (element == CE_RubberBand && qEnvironmentVariableIsSet("WIN4WINE_NATIVE_SHELL")) {
+        // XP comctl32 listview.c: ListviewAlphaSelect uses alpha 70, with
+        // COLOR_MENUHILIGHT inside and a one-pixel COLOR_HIGHLIGHT outline.
+        QColor fill = system(QStringLiteral("menuhilight"), m_palette.color(QPalette::Highlight));
+        fill.setAlpha(70);
+        painter->save();
+        painter->fillRect(option->rect, fill);
+        painter->setPen(m_palette.color(QPalette::Highlight));
+        painter->drawRect(option->rect.adjusted(0, 0, -1, -1));
+        painter->restore();
+        return;
+    }
     // The Accurate style: XP's push buttons with text and its menu items
     // have no pictures.
     QStyleOptionButton plainButton;
@@ -590,14 +605,13 @@ void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QP
             button = *b;
             QString part = element == CE_PushButtonLabel ? QStringLiteral("pushbutton")
                 : element == CE_CheckBoxLabel ? QStringLiteral("checkbox") : QStringLiteral("radiobutton");
-            const PartState s = element == CE_PushButtonLabel ? buttonState(option, false)
+            const PartState s = element == CE_PushButtonLabel ? buttonState(option, b->features & QStyleOptionButton::DefaultButton)
                                                           : checkState(option, element == CE_RadioButtonLabel);
-            if (option->state & State_Enabled) {
-                const QColor c = partColour(kButton, part, s.name, QStringLiteral("textcolor"),
-                                            option->palette.color(QPalette::ButtonText));
-                button.palette.setColor(QPalette::ButtonText, c);
-                button.palette.setColor(QPalette::WindowText, c);
-            }
+            const QPalette::ColorGroup group = option->state & State_Enabled ? QPalette::Active : QPalette::Disabled;
+            const QColor c = partColour(kButton, part, s.name, QStringLiteral("textcolor"),
+                                        option->palette.color(group, QPalette::ButtonText));
+            button.palette.setColor(QPalette::ButtonText, c);
+            button.palette.setColor(QPalette::WindowText, c);
             o = &button;
         }
         QProxyStyle::drawControl(element, o, painter, widget);
@@ -847,9 +861,9 @@ void XpStyle::drawComplexControl(ComplexControl control, const QStyleOptionCompl
         if (const auto *box = qstyleoption_cast<const QStyleOptionGroupBox *>(option)) {
             // The title in the group box's TextColor (Luna's blue).
             QStyleOptionGroupBox copy = *box;
-            if (box->state & State_Enabled)
-                copy.textColor = partColour(kButton, QStringLiteral("groupbox"), QStringLiteral("normal"),
-                                            QStringLiteral("textcolor"), box->textColor);
+            copy.textColor = partColour(kButton, QStringLiteral("groupbox"),
+                                        box->state & State_Enabled ? QStringLiteral("normal") : QStringLiteral("disabled"),
+                                        QStringLiteral("textcolor"), box->textColor);
             QProxyStyle::drawComplexControl(control, &copy, painter, widget);
             return;
         }
@@ -1095,7 +1109,7 @@ QSize XpStyle::sizeFromContents(ContentsType type, const QStyleOption *option, c
     }
     if (s.isEmpty())
         s = QProxyStyle::sizeFromContents(type, option, size, widget);
-    if (m_look.accurate) {
+    if (m_look.accurate || qEnvironmentVariableIsSet("WIN4WINE_NATIVE_SHELL")) {
         // XP's menus (user32's mncomput.c): an item is as high as the menu
         // font, CYEDGE and 2 px; a separator half of SM_CYMENUSIZE (19); a
         // menu bar's item SM_CYMENUSIZE, its text and twice the font's
@@ -1228,6 +1242,10 @@ int XpStyle::styleHint(StyleHint hint, const QStyleOption *option, const QWidget
         return 0;   // XP hides its keyboard cues ("Hide underlined letters" is its default)
     case SH_ToolTipLabel_Opacity:
         return 255;
+    case SH_RubberBand_Mask:
+        if (qEnvironmentVariableIsSet("WIN4WINE_NATIVE_SHELL"))
+            return 0; // The whole rectangle is translucent, not a masked dotted frame.
+        break;
     case SH_Menu_MouseTracking:
     case SH_MenuBar_MouseTracking:
         return 1;

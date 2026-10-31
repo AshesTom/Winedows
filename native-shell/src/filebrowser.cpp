@@ -39,6 +39,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileSystemModel>
+#include <QGuiApplication>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -54,10 +55,14 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QProcess>
+#include <QProxyStyle>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
+#include <QSortFilterProxyModel>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -210,6 +215,8 @@ const int STRIP_NORMAL = 214, STRIP_HOT = 215;
 enum { BACK = 0, FORWARD = 1, DELETE_ICON = 10, UNDO = 8, SEARCH = 17, UP = 28, VIEWS = 32, FOLDERS = 43, MOVE_TO = 44, COPY_TO = 45 };
 // shell32.dll's flag: the first 22-pixel frame of its animation, 9 pixels into its white tile of 39 x 22
 const int BITMAP_FLAG = 240, FLAG_SIZE = 22, FLAG_X = 9, TILE_WIDTH = 39;
+// shell32.dll's 20-pixel Go arrow of the address band, and its hot picture
+const int BITMAP_GO = 230, BITMAP_GO_HOT = 231;
 const int STRING_FILE_TASKS = 31233, STRING_NEW_FOLDER = 31236, STRING_RENAME = 31242, STRING_MOVE = 31244, STRING_COPY = 31246, STRING_DELETE = 31252;
 const int STRING_OTHER_PLACES = 31272, STRING_DETAILS = 31274, STRING_SYSTEM_TASKS = 31232, STRING_SYSTEM_INFO = 31294, STRING_ADD_REMOVE = 31327, STRING_CHANGE = 31312, STRING_EMPTY = 31331;
 const int STRING_PICTURE_TASKS = 31283, STRING_SLIDE_SHOW = 31287, STRING_BACKGROUND = 31289;
@@ -221,7 +228,25 @@ const QColor SORTED_COLUMN(247, 247, 247);
 const int STRING_HARD_DISKS = 9426, STRING_SWITCH_CLASSIC = 32150, STRING_SWITCH_CATEGORY = 32152, STRING_SEE_ALSO = 20868;
 
 // Item data of the virtual lists, past the roles of QFileSystemModel
-enum { ActionRole = Qt::UserRole + 100, HeaderRole, DetailRole };
+enum { ActionRole = Qt::UserRole + 100, HeaderRole, DetailRole, PathRole };
+
+class VirtualFilter : public QSortFilterProxyModel
+{
+public:
+    using QSortFilterProxyModel::QSortFilterProxyModel;
+    void showGroups(bool groups) { if (m_groups != groups) { m_groups = groups; invalidate(); } }
+protected:
+    bool filterAcceptsRow(int row, const QModelIndex &parent) const override
+    { return m_groups || !sourceModel()->index(row, 0, parent).data(HeaderRole).toBool(); }
+    bool lessThan(const QModelIndex &left, const QModelIndex &right) const override
+    {
+        if (left.column() >= 2 && left.data(Qt::UserRole).isValid() && right.data(Qt::UserRole).isValid())
+            return left.data(Qt::UserRole).toULongLong() < right.data(Qt::UserRole).toULongLong();
+        return QSortFilterProxyModel::lessThan(left, right);
+    }
+private:
+    bool m_groups = true;
+};
 
 // The rebar's art is one picture for the menu and the toolbars together, down to the folder itself.
 void drawBand(QPainter &painter, QWidget *row, w4w::Renderer *renderer)
@@ -258,6 +283,9 @@ protected:
             // The band's art under the menu's names, not the style's flat colour; the item
             // under the pointer as the style draws it.
             drawBand(painter, this, renderer);
+            // XP's menu band underlines its letters only once Alt is pressed ("Hide underlined
+            // letters for keyboard navigation" is its default): Qt gives the bar the focus then.
+            const int cues = style()->styleHint(QStyle::SH_UnderlineShortcut, nullptr, this) || hasFocus() ? 0 : Qt::TextHideMnemonic;
             for (QAction *action : actions()) {
                 QStyleOptionMenuItem option;
                 initStyleOption(&option, action);
@@ -265,7 +293,7 @@ protected:
                 if (option.state & (QStyle::State_Selected | QStyle::State_Sunken))
                     style()->drawControl(QStyle::CE_MenuBarItem, &option, &painter, this);
                 else
-                    style()->drawItemText(&painter, option.rect, Qt::AlignCenter | Qt::TextShowMnemonic | Qt::TextSingleLine, option.palette,
+                    style()->drawItemText(&painter, option.rect, Qt::AlignCenter | Qt::TextShowMnemonic | cues | Qt::TextSingleLine, option.palette,
                                           option.state & QStyle::State_Enabled, option.text, QPalette::ButtonText);
             }
         } else {
@@ -278,6 +306,8 @@ protected:
         painter.fillRect(tile, Qt::white);
         painter.drawImage(tile.x() + FLAG_X, (row - m_flag.height()) / 2, m_flag);
     }
+    void focusInEvent(QFocusEvent *event) override { QMenuBar::focusInEvent(event); update(); }
+    void focusOutEvent(QFocusEvent *event) override { QMenuBar::focusOutEvent(event); update(); }
 
 private:
     static QColor edgeColour()
@@ -292,11 +322,36 @@ private:
     QImage m_flag;
 };
 
-// A toolbar on the visual style's rebar art, as XP's folder windows have it
+// The rebar's bands place their buttons themselves, edge to edge as comctl32's toolbar does.
+class BandStyle : public QProxyStyle
+{
+public:
+    int pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const override
+    {
+        switch (metric) {
+        case PM_ToolBarFrameWidth:
+        case PM_ToolBarItemMargin:
+        case PM_ToolBarItemSpacing:
+        case PM_ToolBarHandleExtent:
+            return 0;
+        default:
+            return QProxyStyle::pixelMetric(metric, option, widget);
+        }
+    }
+};
+
+// A toolbar on the visual style's rebar art, as XP's folder windows have it. A band above another one
+// ends with the same two lines as the menu's (the rebar's band borders).
 class RebarToolBar : public QToolBar
 {
 public:
-    using QToolBar::QToolBar;
+    RebarToolBar(const QString &title, QWidget *parent, bool border)
+        : QToolBar(title, parent), m_border(border)
+    {
+        static BandStyle *style = new BandStyle;
+        setStyle(style);
+        setContentsMargins(0, 0, 0, border ? 2 : 0);
+    }
 
 protected:
     void paintEvent(QPaintEvent *event) override
@@ -304,9 +359,151 @@ protected:
         if (w4w::Renderer *renderer = ShellTheme::instance()->renderer()) {
             QPainter painter(this);
             drawBand(painter, this, renderer);
+            if (m_border) {
+                const QColor shadow = renderer->colour(w4w::Part{QStringLiteral("rebar"), QStringLiteral("band"), {}, 0, {}}, QStringLiteral("edgeshadowcolor"))
+                                          .value_or(ShellTheme::instance()->system(QStringLiteral("btnshadow"), Qt::gray));
+                painter.fillRect(QRect(0, height() - 2, width(), 1), shadow);
+                painter.fillRect(QRect(0, height() - 1, width(), 1), Qt::white);
+            }
         } else {
             QToolBar::paintEvent(event);
         }
+    }
+
+private:
+    bool m_border;
+};
+
+// A button of the folder window's toolbars, laid out as on XP (comctl32's list toolbar, as browseui fills
+// it), measured there with Tahoma 8: the picture centred in the height; with words, the picture 3 from the
+// left, the words 4 after it and 8 after them; without, 4 on each side. Back and Forward have 13 more for
+// their arrow, and Back's picture and words are 4 further in (7 after the words), Forward's picture 8 in
+// and 6 after. Views' arrow, 5 x 3, is 2 after its picture, 4 from the right.
+class BandButton : public QToolButton
+{
+public:
+    enum Kind { Plain, Split, WholeDropDown };
+    BandButton(QWidget *parent, int height, int iconSide, Kind kind = Plain)
+        : QToolButton(parent), m_height(height), m_kind(kind)
+    {
+        setAutoRaise(true);
+        setIconSize(QSize(iconSide, iconSide));
+        if (kind == Split)
+            setPopupMode(QToolButton::MenuButtonPopup);
+        else if (kind == WholeDropDown)
+            setPopupMode(QToolButton::InstantPopup);
+    }
+    QSize sizeHint() const override
+    {
+        const int icon = iconSize().width(), words = textWidth();
+        int width;
+        if (m_kind == Split)
+            width = (words ? 7 + icon + 4 + words + 7 : 8 + icon + 6) + ARROW;
+        else if (m_kind == WholeDropDown)
+            width = 4 + icon + 2 + 5 + 4;
+        else
+            width = words ? 3 + icon + 4 + words + 8 : 4 + icon + 4;
+        return QSize(width, m_height);
+    }
+    QSize minimumSizeHint() const override { return sizeHint(); }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        // The arrow's 13 pixels open the history, as XP's split button.
+        if (m_kind == Split && event->button() == Qt::LeftButton && event->position().x() >= width() - ARROW && isEnabled()) {
+            m_arrowDown = true;
+            update();
+            showMenu();
+            m_arrowDown = false;
+            update();
+            return;
+        }
+        QToolButton::mousePressEvent(event);
+    }
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        w4w::Renderer *renderer = ShellTheme::instance()->renderer();
+        const bool enabled = isEnabled(), hot = enabled && underMouse();
+        const auto state = [&](bool down) {
+            if (!enabled)
+                return 4;
+            if (down)
+                return 3;
+            if (isChecked())
+                return hot ? 6 : 5;
+            return hot ? 2 : 1;
+        };
+        const QRect main = m_kind == Split ? QRect(0, 0, width() - ARROW, height()) : rect();
+        const int mainState = state(isDown() && !m_arrowDown);
+        const auto frame = [&](const QRect &r, const QString &part, int id) {
+            if (renderer) {
+                renderer->draw(&painter, r, w4w::Part{QStringLiteral("toolbar"), part, {}, id, {}});
+            } else if (id == 2 || id == 3 || id == 5 || id == 6) {
+                QStyleOption option;
+                option.initFrom(this);
+                option.rect = r;
+                option.state |= (id == 2 ? QStyle::State_Raised : QStyle::State_Sunken);
+                style()->drawPrimitive(QStyle::PE_PanelButtonTool, &option, &painter, this);
+            }
+        };
+        // At rest a button has no frame; Back's and Forward's arrow, a picture of the part, always shows.
+        if (mainState != 1 && mainState != 4)
+            frame(main, m_kind == Split ? QStringLiteral("splitbutton") : QStringLiteral("button"), mainState);
+        if (m_kind == Split)
+            frame(QRect(main.right() + 1, 0, ARROW, height()), QStringLiteral("splitbuttondropdown"), state(m_arrowDown));
+
+        const int icon = iconSize().width(), words = textWidth();
+        int x = words ? (m_kind == Split ? 7 : 3) : (m_kind == Split ? 8 : 4);
+        if (m_kind == Plain && !words)
+            x = (width() - icon) / 2;
+        const QIcon::Mode mode = !enabled ? QIcon::Disabled : hot ? QIcon::Active : QIcon::Normal;
+        painter.drawPixmap(x, (height() - icon) / 2, this->icon().pixmap(iconSize(), devicePixelRatio(), mode));
+        x += icon;
+        if (words) {
+            style()->drawItemText(&painter, QRect(x + 4, 0, words, height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine | Qt::TextHideMnemonic,
+                                  palette(), enabled, text(), QPalette::ButtonText);
+        }
+        if (m_kind == WholeDropDown) {
+            const QColor ink = palette().color(enabled ? QPalette::Active : QPalette::Disabled, QPalette::ButtonText);
+            const int ax = x + 2, ay = (height() - 3) / 2;
+            for (int row = 0; row < 3; ++row)
+                painter.fillRect(QRect(ax + row, ay + row, 5 - 2 * row, 1), ink);
+        }
+    }
+
+private:
+    static constexpr int ARROW = 13;
+    int textWidth() const
+    {
+        return toolButtonStyle() == Qt::ToolButtonIconOnly || text().isEmpty() ? 0 : fontMetrics().horizontalAdvance(text());
+    }
+
+    int m_height;
+    Kind m_kind;
+    bool m_arrowDown = false;
+};
+
+// A separator between the toolbar's groups: 6 wide, the style's line 2 in, as on XP
+class BandSeparator : public QWidget
+{
+public:
+    BandSeparator(QWidget *parent, int height)
+        : QWidget(parent)
+    {
+        setFixedSize(6, height);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        QStyleOption option;
+        option.initFrom(this);
+        option.state |= QStyle::State_Horizontal;
+        option.rect = rect().translated(-1, 0);   // its line 2 in, as on XP
+        style()->drawPrimitive(QStyle::PE_IndicatorToolBarSeparator, &option, &painter, this);
     }
 };
 
@@ -350,10 +547,77 @@ public:
     QString path(const QModelIndex &index) const { return files()->filePath(mapToSource(index)); }
 };
 
+// XP list/report rows: max(text height, small icon height) + SM_CYBORDER.
+int compactRowHeight(const QFontMetrics &metrics)
+{
+    return qMax(metrics.height(), ShellTheme::instance()->scaled(16)) + ShellTheme::instance()->scaled(1);
+}
+
+void paintCompactItem(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index, QAbstractItemView *view)
+{
+    const bool selected = option.state & QStyle::State_Selected;
+    const bool active = (option.state & QStyle::State_Active) && view->hasFocus();
+    const int side = ShellTheme::instance()->scaled(16);
+    const int inset = qobject_cast<QTreeView *>(view) ? ShellTheme::instance()->scaled(4) : 0;
+    const QRect iconRect(option.rect.x() + inset, option.rect.y() + (option.rect.height() - side) / 2, side, side);
+    const QRect available(iconRect.right() + 1 + 2, option.rect.y(), qMax(0, option.rect.right() - iconRect.right() - 3), option.rect.height());
+    const QString text = option.fontMetrics.elidedText(index.data().toString(), Qt::ElideRight, available.width());
+    const QRect label(available.x() - 1, available.y(), qMin(available.width() + 2, option.fontMetrics.horizontalAdvance(text) + 2), available.height());
+    const QColor background = selected ? option.palette.color(active ? QPalette::Highlight : QPalette::Button) : option.palette.color(QPalette::Base);
+    painter->save();
+    painter->setClipRect(option.rect);
+    painter->setFont(option.font);
+    if (selected) painter->fillRect(label, background);
+    const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+    icon.paint(painter, iconRect, Qt::AlignCenter, selected && active ? QIcon::Selected : QIcon::Normal);
+    painter->setPen(option.palette.color(selected && active ? QPalette::HighlightedText : QPalette::Text));
+    painter->drawText(available, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
+    if (option.state & QStyle::State_HasFocus) {
+        QStyleOptionFocusRect focus;
+        focus.QStyleOption::operator=(option);
+        focus.rect = label; focus.backgroundColor = background;
+        view->style()->drawPrimitive(QStyle::PE_FrameFocusRect, &focus, painter, view);
+    }
+    painter->restore();
+}
+
+class ExplorerDetailsView : public QTreeView
+{
+public:
+    using QTreeView::QTreeView;
+    QModelIndex indexAt(const QPoint &point) const override
+    {
+        const QModelIndex index = QTreeView::indexAt(point);
+        if (!index.isValid() || index.column() != 0) return {};
+        const QRect rect = visualRect(index);
+        const int end = rect.x() + ShellTheme::instance()->scaled(20) + 2 + fontMetrics().horizontalAdvance(index.data().toString()) + 2;
+        return point.x() < qMin(rect.right() + 1, end) ? index : QModelIndex();
+    }
+};
+
+class DetailsDelegate : public QStyledItemDelegate
+{
+public:
+    explicit DetailsDelegate(QTreeView *view) : QStyledItemDelegate(view), m_view(view) {}
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    { QSize size = QStyledItemDelegate::sizeHint(option, index); size.setHeight(compactRowHeight(option.fontMetrics)); return size; }
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        if (index.column() == 0) { paintCompactItem(painter, option, index, m_view); return; }
+        QStyleOptionViewItem plain(option);
+        plain.state &= ~(QStyle::State_Selected | QStyle::State_HasFocus | QStyle::State_MouseOver);
+        QStyledItemDelegate::paint(painter, plain, index);
+    }
+private:
+    QTreeView *m_view;
+};
+
 // How a view draws an item: XP's Tiles and Thumbnails; My Computer's group headers
 class ItemDelegate : public QStyledItemDelegate
 {
     static constexpr int ICONS_TOP = 8, ICONS_SIDE = 32, ICONS_GAP = 4, ICONS_TEXT_WIDTH = 71, ICONS_LINES = 2;
+    // XP's Tiles and group headers, measured on its My Computer
+    static constexpr int TILES_WIDTH = 218, TILES_HEIGHT = 56, GROUP_HEADER = 31, GROUP_GAP = 12, GROUP_LINE = 300;
 
     // XP's Icons: in a cell of 75 pixels the icon, 8 from the top, then the name, on two lines
     // unless it is selected. Selected, the icon is tinted and the name stands on the highlight,
@@ -361,7 +625,7 @@ class ItemDelegate : public QStyledItemDelegate
     void paintIcon(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
     {
         const bool selected = option.state & QStyle::State_Selected;
-        const bool active = option.state & QStyle::State_Active;
+        const bool active = (option.state & QStyle::State_Active) && m_view->hasFocus();
         const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
         const QRect place(option.rect.x() + (option.rect.width() - ICONS_SIDE) / 2, option.rect.y() + ICONS_TOP, ICONS_SIDE, ICONS_SIDE);
         icon.paint(painter, place, Qt::AlignCenter, selected && active ? QIcon::Selected : QIcon::Normal);
@@ -390,12 +654,40 @@ public:
     {
     }
     void setMode(Mode mode) { m_mode = mode; }
+    bool hit(const QRect &rect, const QPoint &point, const QModelIndex &index) const
+    {
+        if (index.data(HeaderRole).toBool()) return true;
+        const QFontMetrics metrics(m_view->font());
+        const QString name = index.data().toString();
+        if (m_mode == Plain)
+            return point.x() < rect.x() + ShellTheme::instance()->scaled(16) + 2 + metrics.horizontalAdvance(name) + 2;
+        if (m_mode == IconsMode) {
+            const QRect icon(rect.x() + (rect.width() - ICONS_SIDE) / 2, rect.y() + ICONS_TOP, ICONS_SIDE, ICONS_SIDE);
+            QRect text = metrics.boundingRect(QRect(rect.x() + (rect.width() - ICONS_TEXT_WIDTH) / 2, icon.bottom() + 1 + ICONS_GAP, ICONS_TEXT_WIDTH, 1000),
+                                             Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap | Qt::TextWrapAnywhere, name);
+            if (!m_view->selectionModel()->isSelected(index)) text.setHeight(qMin(text.height(), ICONS_LINES * metrics.lineSpacing()));
+            return icon.contains(point) || text.adjusted(-2, 0, 2, 0).contains(point);
+        }
+        if (m_mode == ThumbnailMode) {
+            const QRect box(rect.x() + (rect.width() - 100) / 2, rect.y() + 4, 100, 100);
+            const int width = metrics.horizontalAdvance(metrics.elidedText(name, Qt::ElideRight, rect.width() - 4)) + 4;
+            const QRect text(rect.x() + (rect.width() - width) / 2, box.bottom() + 5, width, 16);
+            return box.contains(point) || text.contains(point);
+        }
+        return true;
+    }
+
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
+        // A group's header: 31 pixels down to its first tile, and 12 more above it after another group
         if (index.data(HeaderRole).toBool())
-            return QSize(qMax(100, m_view->viewport()->width() - 20), 26);
+            return QSize(qMax(100, m_view->viewport()->width() - 20), GROUP_HEADER + (index.row() > 0 ? GROUP_GAP : 0));
+        if (m_mode == Plain)
+            return QSize(100, compactRowHeight(option.fontMetrics));
+        if (m_mode == IconsMode)
+            return QSize(75, 75);
         if (m_mode == TilesMode)
-            return QSize(252, 58);
+            return QSize(TILES_WIDTH, TILES_HEIGHT);
         if (m_mode == ThumbnailMode)
             return QSize(120, 134);
         return QStyledItemDelegate::sizeHint(option, index);
@@ -403,20 +695,25 @@ public:
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
         if (index.data(HeaderRole).toBool()) {
+            // XP's group header: its bold words 14 in, and 17 under its top a line of 300 pixels fading
+            // from the caption's gradient colour to the window's
             painter->save();
+            const QRect header = option.rect.adjusted(0, option.rect.height() - GROUP_HEADER, 0, 0);
             QFont bold = option.font;
             bold.setBold(true);
             painter->setFont(bold);
-            painter->drawText(option.rect.adjusted(6, 0, 0, -4), Qt::AlignLeft | Qt::AlignVCenter, index.data().toString());
-            QLinearGradient line(option.rect.bottomLeft(), option.rect.bottomLeft() + QPoint(option.rect.width() / 2, 0));
-            line.setColorAt(0, ShellTheme::instance()->system(QStringLiteral("highlight"), Qt::darkBlue));
-            line.setColorAt(1, Qt::white);
-            painter->fillRect(QRect(option.rect.x() + 4, option.rect.bottom() - 2, option.rect.width() - 8, 1), line);
+            painter->drawText(QRect(header.x() + 14, header.y() + 2, header.width() - 14, QFontMetrics(bold).height()), Qt::AlignLeft | Qt::AlignTop | Qt::TextSingleLine,
+                              index.data().toString());
+            const QRect rule(header.x(), header.y() + 17, qMin(GROUP_LINE, header.width()), 1);
+            QLinearGradient line(rule.topLeft(), rule.topRight());
+            line.setColorAt(0, ShellTheme::instance()->system(QStringLiteral("gradientactivecaption"), QColor(61, 149, 255)));
+            line.setColorAt(1, option.palette.color(QPalette::Base));
+            painter->fillRect(rule, line);
             painter->restore();
             return;
         }
         if (m_mode == Plain) {
-            QStyledItemDelegate::paint(painter, option, index);
+            paintCompactItem(painter, option, index, m_view);
             return;
         }
         if (m_mode == IconsMode) {
@@ -424,17 +721,18 @@ public:
             return;
         }
         const bool selected = option.state & QStyle::State_Selected;
+        const bool active = (option.state & QStyle::State_Active) && m_view->hasFocus();
         const QPalette &palette = option.palette;
         const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
         const QString name = index.data().toString();
         painter->save();
+        painter->setFont(option.font);
         if (m_mode == TilesMode) {
-            const QRect iconRect(option.rect.x() + 4, option.rect.y() + 5, 48, 48);
-            icon.paint(painter, iconRect, Qt::AlignCenter, selected ? QIcon::Selected : QIcon::Normal);
-            const QRect text = option.rect.adjusted(58, 5, -4, -5);
-            if (selected)
-                painter->fillRect(text.adjusted(-2, 0, 0, 0), palette.highlight());
-            painter->setPen(selected ? palette.color(QPalette::HighlightedText) : palette.color(QPalette::Text));
+            // XP's tile: its 48-pixel icon 16 in and 4 down, the words 69 in
+            const QRect iconRect(option.rect.x() + 16, option.rect.y() + 4, 48, 48);
+            icon.paint(painter, iconRect, Qt::AlignCenter, selected && active ? QIcon::Selected : QIcon::Normal);
+            const QRect text = option.rect.adjusted(69, 5, -4, -5);
+            painter->setPen(selected && active ? palette.color(QPalette::HighlightedText) : palette.color(QPalette::Text));
             QStringList lines{name};
             const QString detail = index.data(DetailRole).toString();
             if (!detail.isEmpty()) {
@@ -445,13 +743,25 @@ public:
                 if (!info.isDir())
                     lines << fileicons::sizeText(info.size());
             }
-            int y = text.y() + qMax(0, (text.height() - int(lines.size()) * 14) / 2);
+            const int lineHeight = option.fontMetrics.height();
+            int labelWidth = 0;
+            for (const QString &line : std::as_const(lines))
+                labelWidth = qMax(labelWidth, option.fontMetrics.horizontalAdvance(option.fontMetrics.elidedText(line, Qt::ElideRight, text.width())));
+            int y = text.y() + qMax(0, (text.height() - int(lines.size()) * lineHeight) / 2);
+            const QRect selectedLabel(text.x() - 2, y, qMin(text.width() + 2, labelWidth + 4), int(lines.size()) * lineHeight);
+            if (selected)
+                painter->fillRect(selectedLabel, palette.color(active ? QPalette::Highlight : QPalette::Button));
             for (int i = 0; i < lines.size(); ++i) {
-                if (i == 1 && !selected)
+                if (i == 1 && !(selected && active))
                     painter->setPen(QColor(128, 128, 128));
-                painter->drawText(QRect(text.x(), y, text.width(), 14), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                painter->drawText(QRect(text.x(), y, text.width(), lineHeight), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                                   option.fontMetrics.elidedText(lines[i], Qt::ElideRight, text.width()));
-                y += 14;
+                y += lineHeight;
+            }
+            if (option.state & QStyle::State_HasFocus) {
+                QStyleOptionFocusRect focus; focus.QStyleOption::operator=(option);
+                focus.rect = selectedLabel; focus.backgroundColor = palette.color(selected && active ? QPalette::Highlight : QPalette::Base);
+                m_view->style()->drawPrimitive(QStyle::PE_FrameFocusRect, &focus, painter, m_view);
             }
         } else {
             paintThumbnail(painter, option, index, icon, name);
@@ -467,9 +777,9 @@ private:
     // only as wide as its words. Selected, the frame is the highlight, two pixels wide.
     void paintThumbnail(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index, const QIcon &icon, const QString &name) const
     {
-        const bool selected = option.state & QStyle::State_Selected, active = option.state & QStyle::State_Active;
+        const bool selected = option.state & QStyle::State_Selected, active = (option.state & QStyle::State_Active) && m_view->hasFocus();
         const QPalette &palette = option.palette;
-        const QColor highlight = active ? palette.color(QPalette::Active, QPalette::Highlight) : palette.color(QPalette::Inactive, QPalette::Button).darker(115);
+        const QColor highlight = active ? palette.color(QPalette::Active, QPalette::Highlight) : palette.color(QPalette::Inactive, QPalette::Button);
         const QRect box(option.rect.x() + (option.rect.width() - THUMB_BOX) / 2, option.rect.y() + THUMB_TOP, THUMB_BOX, THUMB_BOX);
         painter->fillRect(box, Qt::white);
         const auto *model = dynamic_cast<const FolderModelImpl *>(index.model());
@@ -507,6 +817,18 @@ private:
 
     QListView *m_view;
     Mode m_mode = Plain;
+};
+
+class ExplorerListView : public QListView
+{
+public:
+    using QListView::QListView;
+    QModelIndex indexAt(const QPoint &point) const override
+    {
+        const QModelIndex index = QListView::indexAt(point);
+        if (!index.isValid()) return {};
+        return static_cast<ItemDelegate *>(itemDelegate())->hit(visualRect(index), point, index) ? index : QModelIndex();
+    }
 };
 
 ItemDelegate *delegateOf(QListView *view)
@@ -768,7 +1090,15 @@ void FileBrowser::settingsChanged()
 FileBrowser::FileBrowser(const QString &location)
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    resize(ShellTheme::instance()->scaled(640), ShellTheme::instance()->scaled(480));
+    // XP's browseui opens a folder it has no saved place for at 800 x 600 (its bag's WinPos on a
+    // 1024 x 768 screen: 44,58 to 844,658), frame included; less on a smaller screen.
+    {
+        const QRect work = QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen()->availableGeometry() : QRect(0, 0, 1024, 738);
+        const FrameStyle &frame = ShellTheme::instance()->frame();
+        const int width = qMin(ShellTheme::instance()->scaled(800), work.width()) - 2 * frame.border;
+        const int height = qMin(ShellTheme::instance()->scaled(600), work.height()) - frame.top - frame.border;
+        resize(width, height);
+    }
     const QSettings settings(settingsPath(), QSettings::IniFormat);
     m_view = View(qBound(0, settings.value(QStringLiteral("view"), int(Tiles)).toInt(), int(Filmstrip)));
     m_foldersShown = settings.value(QStringLiteral("folders"), false).toBool();
@@ -781,6 +1111,7 @@ FileBrowser::FileBrowser(const QString &location)
     m_model = new FolderModel(this);
     m_model->setSourceModel(m_files);
     m_virtual = new QStandardItemModel(this);
+    m_virtual->setHorizontalHeaderLabels({tr("Name"), tr("Type"), tr("Total Size"), tr("Free Space")});
     m_searchTimer = new QTimer(this);
     connect(m_searchTimer, &QTimer::timeout, this, &FileBrowser::continueSearch);
 
@@ -902,12 +1233,13 @@ void FileBrowser::buildPanes()
     // The folder itself
     m_pages = new QStackedWidget(m_splitter);
     const auto listView = [this](QAbstractItemModel *model) {
-        auto *view = new QListView(m_pages);
+        auto *view = new ExplorerListView(m_pages);
         view->setModel(model);
         view->setItemDelegate(new ItemDelegate(view, view));
         view->setResizeMode(QListView::Adjust);
         view->setUniformItemSizes(false);
         view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        view->setSelectionRectVisible(true);
         view->setContextMenuPolicy(Qt::CustomContextMenu);
         view->setFrameShape(QFrame::NoFrame);
         view->setWordWrap(true);
@@ -915,7 +1247,7 @@ void FileBrowser::buildPanes()
         view->viewport()->installEventFilter(this);
         view->installEventFilter(this);
         connect(view, &QAbstractItemView::customContextMenuRequested, this, [this, view](QPoint at) {
-            showContextMenu(view->viewport()->mapToGlobal(at), view->indexAt(at).isValid());
+            showViewContextMenu(view, at);
         });
         connect(view, &QAbstractItemView::activated, this, &FileBrowser::activate);
         // Thumbnails come from their thread one by one.
@@ -928,8 +1260,12 @@ void FileBrowser::buildPanes()
     m_list->setDropIndicatorShown(true);
     m_list->setDragDropMode(QAbstractItemView::DragDrop);
     m_pages->addWidget(m_list);
-    m_details = new QTreeView(m_pages);
+    m_details = new ExplorerDetailsView(m_pages);
     m_details->setModel(m_model);
+    m_details->setSelectionModel(m_list->selectionModel());
+    m_details->setItemDelegate(new DetailsDelegate(m_details));
+    m_details->setIconSize(QSize(16, 16));
+    m_details->setUniformRowHeights(true);
     m_details->setRootIsDecorated(false);
     m_details->setItemsExpandable(false);
     m_details->setSortingEnabled(true);
@@ -944,9 +1280,10 @@ void FileBrowser::buildPanes()
     m_details->viewport()->installEventFilter(this);
     m_details->installEventFilter(this);
     m_details->header()->setSectionsMovable(false);
+    m_details->header()->setFixedHeight(m_details->fontMetrics().height() + 4);
     m_details->setColumnWidth(0, 220);
     connect(m_details, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) {
-        showContextMenu(m_details->viewport()->mapToGlobal(at), m_details->indexAt(at).isValid());
+        showViewContextMenu(m_details, at);
     });
     connect(m_details, &QAbstractItemView::activated, this, &FileBrowser::activate);
     m_pages->addWidget(m_details);
@@ -997,10 +1334,35 @@ void FileBrowser::buildPanes()
         if (path == currentFolder())
             selectFirstPicture();
     });
-    m_virtualList = listView(m_virtual);
+    m_virtualFilter = new VirtualFilter(this);
+    m_virtualFilter->setSourceModel(m_virtual);
+    m_virtualList = listView(m_virtualFilter);
     m_virtualList->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_virtualList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_virtualList->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_pages->addWidget(m_virtualList);
+    m_virtualDetails = new ExplorerDetailsView(m_pages);
+    m_virtualDetails->setModel(m_virtualFilter);
+    m_virtualDetails->setSelectionModel(m_virtualList->selectionModel());
+    m_virtualDetails->setItemDelegate(new DetailsDelegate(m_virtualDetails));
+    m_virtualDetails->setRootIsDecorated(false);
+    m_virtualDetails->setItemsExpandable(false);
+    m_virtualDetails->setUniformRowHeights(true);
+    m_virtualDetails->setIconSize(QSize(16, 16));
+    m_virtualDetails->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_virtualDetails->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_virtualDetails->setFrameShape(QFrame::NoFrame);
+    m_virtualDetails->viewport()->installEventFilter(this);
+    m_virtualDetails->installEventFilter(this);
+    m_virtualDetails->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_virtualDetails->header()->setFixedHeight(m_virtualDetails->fontMetrics().height() + 4);
+    m_virtualDetails->setColumnWidth(0, 200);
+    m_virtualDetails->setColumnWidth(1, 100);
+    m_virtualDetails->setColumnWidth(2, 90);
+    m_virtualDetails->setSortingEnabled(true);
+    m_virtualDetails->sortByColumn(0, Qt::AscendingOrder);
+    connect(m_virtualDetails, &QAbstractItemView::activated, this, &FileBrowser::activate);
+    connect(m_virtualDetails, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) { showViewContextMenu(m_virtualDetails, at); });
+    m_pages->addWidget(m_virtualDetails);
     m_categoryPage = new ControlPanelCategories([this](int category) { navigate(places::ControlPanel + QLatin1Char('/') + QString::number(category)); }, this);
     m_categoryArea = new QScrollArea(m_pages);
     m_categoryArea->setFrameShape(QFrame::NoFrame);
@@ -1021,7 +1383,7 @@ void FileBrowser::buildPanes()
     m_results->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_results->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_results, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) {
-        showContextMenu(m_results->viewport()->mapToGlobal(at), m_results->indexAt(at).isValid());
+        showViewContextMenu(m_results, at);
     });
     connect(m_results, &QAbstractItemView::activated, this, [this](const QModelIndex &index) {
         openPath(m_resultsModel->index(index.row(), 0).data(Qt::UserRole).toString());
@@ -1067,7 +1429,10 @@ void FileBrowser::buildPanes()
     m_splitter->installEventFilter(this);
     connect(ShellTheme::instance(), &ShellTheme::changed, this, &FileBrowser::placeEdgeLines);
     placeEdgeLines();
-    connect(m_files, &QFileSystemModel::directoryLoaded, this, &FileBrowser::updateStatus);
+    connect(m_files, &QFileSystemModel::directoryLoaded, this, [this] {
+        if (m_view == List) configureList(m_list, List);
+        updateStatus();
+    });
 }
 
 void FileBrowser::buildMenus()
@@ -1226,20 +1591,21 @@ QMenu *FileBrowser::buildFavoritesMenu()
 
 void FileBrowser::buildToolbars()
 {
-    auto *toolbar = new RebarToolBar(tr("Standard Buttons"), this);
+    // XP's buttons are the band's 38 pixels tall, the first 2 from its left
+    const int BUTTON_HEIGHT = 38;
+    auto *toolbar = new RebarToolBar(tr("Standard Buttons"), this, true);
     addToolBar(toolbar);
     toolbar->setMovable(false);
-    toolbar->setContentsMargins(4, 0, 0, 0);
     toolbar->setIconSize(QSize(24, 24));
-    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    auto *lead = new QWidget(toolbar);
+    lead->setFixedSize(2, BUTTON_HEIGHT);
+    toolbar->addWidget(lead);
     const auto historyButton = [&](int icon, const QString &text, bool back) {
-        auto *button = new QToolButton(toolbar);
+        auto *button = new BandButton(toolbar, BUTTON_HEIGHT, 24, BandButton::Split);
         button->setIcon(stripIcon(icon));
         button->setText(text);
         button->setToolTip(text);
-        button->setAutoRaise(true);
         button->setToolButtonStyle(back ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
-        button->setPopupMode(QToolButton::MenuButtonPopup);
         addHistoryMenu(button, back);
         connect(button, &QToolButton::clicked, this, [this, back] {
             QStringList &from = back ? m_back : m_forward;
@@ -1254,7 +1620,14 @@ void FileBrowser::buildToolbars()
     };
     m_backButton = historyButton(BACK, tr("Back"), true);
     m_forwardButton = historyButton(FORWARD, tr("Forward"), false);
-    m_upAction = toolbar->addAction(stripIcon(UP), tr("Up"), this, [this] {
+    const auto actionButton = [&](QAction *action, bool words) {
+        auto *button = new BandButton(toolbar, BUTTON_HEIGHT, 24);
+        button->setToolButtonStyle(words ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
+        button->setDefaultAction(action);
+        toolbar->addWidget(button);
+    };
+    m_upAction = new QAction(stripIcon(UP), tr("Up"), this);
+    connect(m_upAction, &QAction::triggered, this, [this] {
         if (m_location.startsWith(places::ControlPanel + QLatin1Char('/'))) {
             navigate(places::ControlPanel);
             return;
@@ -1274,25 +1647,19 @@ void FileBrowser::buildToolbars()
         const QFileInfo info(m_location);
         navigate(info.isRoot() ? places::Computer : info.absolutePath());
     });
-    toolbar->addSeparator();
-    const auto withText = [&](QAction *action) {
-        toolbar->addAction(action);
-        if (auto *button = qobject_cast<QToolButton *>(toolbar->widgetForAction(action)))
-            button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    };
-    withText(m_searchAction);
-    withText(m_foldersAction);
-    toolbar->addSeparator();
-    auto *views = new QToolButton(toolbar);
+    actionButton(m_upAction, false);
+    toolbar->addWidget(new BandSeparator(toolbar, BUTTON_HEIGHT));
+    actionButton(m_searchAction, true);
+    actionButton(m_foldersAction, true);
+    toolbar->addWidget(new BandSeparator(toolbar, BUTTON_HEIGHT));
+    auto *views = new BandButton(toolbar, BUTTON_HEIGHT, 24, BandButton::WholeDropDown);
     views->setIcon(stripIcon(VIEWS));
     views->setToolTip(tr("Views"));
-    views->setAutoRaise(true);
     views->setMenu(m_viewsMenu);
-    views->setPopupMode(QToolButton::InstantPopup);
     toolbar->addWidget(views);
 
     addToolBarBreak();
-    auto *addressBar = new RebarToolBar(tr("Address Bar"), this);
+    auto *addressBar = new RebarToolBar(tr("Address Bar"), this, false);
     addToolBar(addressBar);
     addressBar->setMovable(false);
     toolbar->toggleViewAction()->setText(tr("&Standard Buttons"));
@@ -1300,9 +1667,12 @@ void FileBrowser::buildToolbars()
     m_toolbarsMenu->addAction(toolbar->toggleViewAction());
     m_toolbarsMenu->addAction(addressBar->toggleViewAction());
     // One widget for the whole row: a toolbar folds away a stretching child of its own.
+    // On XP the row is its combo box's 22 pixels; Go is 2 after it and 7 from the edge.
+    const int ROW_HEIGHT = 22;
     auto *row = new QWidget(addressBar);
+    row->setFixedHeight(ROW_HEIGHT);
     auto *rowLayout = new QHBoxLayout(row);
-    rowLayout->setContentsMargins(4, 1, 2, 1);
+    rowLayout->setContentsMargins(4, 0, 7, 0);
     rowLayout->setSpacing(4);
     auto *addressLabel = new QLabel(tr("Address"), row);
     addressLabel->setForegroundRole(QPalette::PlaceholderText);
@@ -1313,14 +1683,24 @@ void FileBrowser::buildToolbars()
     m_address->setInsertPolicy(QComboBox::NoInsert);
     m_address->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_address->setMinimumContentsLength(10);
+    m_address->setFixedHeight(ROW_HEIGHT);
     rowLayout->addWidget(m_address, 1);
-    auto *goButton = new QToolButton(row);
-    goButton->setAutoRaise(true);
+    rowLayout->addSpacing(2 - rowLayout->spacing());
+    auto *goButton = new BandButton(row, ROW_HEIGHT, 20);
     goButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    goButton->setIconSize(QSize(16, 16));
     rowLayout->addWidget(goButton);
     addressBar->addWidget(row);
-    auto *go = new QAction(fileicons::shell(fileicons::Go), tr("Go"), this);
+    // XP's Go is shell32.dll's 20-pixel bitmap, not its 16-pixel icon
+    QIcon goIcon = fileicons::shell(fileicons::Go);
+    if (const auto shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")))) {
+        const QImage normal = xpfiles::bitmap(*shell32, BITMAP_GO), hot = xpfiles::bitmap(*shell32, BITMAP_GO_HOT);
+        if (!normal.isNull()) {
+            goIcon = QIcon(QPixmap::fromImage(normal));
+            if (!hot.isNull())
+                goIcon.addPixmap(QPixmap::fromImage(hot), QIcon::Active);
+        }
+    }
+    auto *go = new QAction(goIcon, tr("Go"), this);
     goButton->setDefaultAction(go);
     connect(go, &QAction::triggered, this, [this] {
         const QString text = m_address->currentText().trimmed();
@@ -1463,6 +1843,67 @@ void FileBrowser::setAsBackground(const QString &path)
     ShellTheme::write(choice);
 }
 
+static int listColumnWidth(QListView *list)
+{
+    int width = ShellTheme::instance()->scaled(64);
+    const QFontMetrics metrics(list->font());
+    for (int row = 0; row < list->model()->rowCount(list->rootIndex()); ++row)
+        width = qMax(width, metrics.horizontalAdvance(list->model()->index(row, 0, list->rootIndex()).data().toString()) + ShellTheme::instance()->scaled(24));
+    return qMin(width, list->screen()->geometry().width());
+}
+
+void FileBrowser::configureList(QListView *list, View shown)
+{
+    auto *delegate = delegateOf(list);
+    list->setFlow(QListView::LeftToRight);
+    list->setMovement(QListView::Static);
+    list->setWrapping(true);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    switch (shown) {
+    case Filmstrip:
+        // The thumbnails on one row, which scrolls sideways
+        delegate->setMode(ItemDelegate::ThumbnailMode);
+        list->setViewMode(QListView::IconMode);
+        list->setGridSize(QSize(120, 134));
+        list->setIconSize(QSize(96, 96));
+        list->setWrapping(false);
+        list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        list->setFixedHeight(134 + 4 + list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, list));
+        break;
+    case Thumbnails:
+        delegate->setMode(ItemDelegate::ThumbnailMode);
+        list->setViewMode(QListView::IconMode);
+        list->setGridSize(QSize(120, 134));
+        list->setIconSize(QSize(96, 96));
+        break;
+    case Tiles:
+        delegate->setMode(ItemDelegate::TilesMode);
+        list->setViewMode(QListView::IconMode);
+        list->setGridSize(QSize(218, 56));
+        list->setIconSize(QSize(48, 48));
+        break;
+    case Icons:
+        delegate->setMode(ItemDelegate::IconsMode);
+        list->setViewMode(QListView::IconMode);
+        list->setGridSize(QSize(75, 75));
+        list->setIconSize(QSize(32, 32));
+        break;
+    case List: {
+        delegate->setMode(ItemDelegate::Plain);
+        list->setViewMode(QListView::ListMode);
+        // (IconMode lets items be dragged about; here a drag is a file's.)
+        list->setFlow(QListView::TopToBottom);
+        int width = listColumnWidth(list);
+        list->setGridSize(QSize(width, compactRowHeight(list->fontMetrics())));
+        list->setIconSize(QSize(16, 16));
+        break;
+    }
+    case Details:
+        break;
+    }
+}
+
 void FileBrowser::setView(View view)
 {
     m_view = view;
@@ -1470,52 +1911,18 @@ void FileBrowser::setView(View view)
     m_filmstripAction->setVisible(m_pictureFolder);
     for (QAction *action : m_viewGroup->actions())
         action->setChecked(action->data().toInt() == int(shown));
-    auto *delegate = delegateOf(m_list);
     placeList(shown == Filmstrip);
-    m_list->setFlow(QListView::LeftToRight);
-    m_list->setMovement(QListView::Static);
-    m_list->setWrapping(true);
-    m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    switch (shown) {
-    case Filmstrip:
-        // The thumbnails on one row, which scrolls sideways
-        delegate->setMode(ItemDelegate::ThumbnailMode);
-        m_list->setViewMode(QListView::IconMode);
-        m_list->setGridSize(QSize(120, 134));
-        m_list->setIconSize(QSize(96, 96));
-        m_list->setWrapping(false);
-        m_list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_list->setFixedHeight(134 + 4 + m_list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_list));
-        break;
-    case Thumbnails:
-        delegate->setMode(ItemDelegate::ThumbnailMode);
-        m_list->setViewMode(QListView::IconMode);
-        m_list->setGridSize(QSize(120, 134));
-        m_list->setIconSize(QSize(96, 96));
-        break;
-    case Tiles:
-        delegate->setMode(ItemDelegate::TilesMode);
-        m_list->setViewMode(QListView::IconMode);
-        m_list->setGridSize(QSize(256, 62));
-        m_list->setIconSize(QSize(48, 48));
-        break;
-    case Icons:
-        delegate->setMode(ItemDelegate::IconsMode);
-        m_list->setViewMode(QListView::IconMode);
-        m_list->setGridSize(QSize(75, 75));
-        m_list->setIconSize(QSize(32, 32));
-        break;
-    case List:
-        delegate->setMode(ItemDelegate::Plain);
-        m_list->setViewMode(QListView::ListMode);
-        // (IconMode lets items be dragged about; here a drag is a file's.)
-        m_list->setFlow(QListView::TopToBottom);
-        m_list->setGridSize(QSize(180, 18));
-        m_list->setIconSize(QSize(16, 16));
-        break;
-    case Details:
-        break;
+    configureList(m_list, shown);
+    if (m_location == places::Computer || (m_location == places::ControlPanel && m_pages->currentWidget() != m_categoryArea)) {
+        static_cast<VirtualFilter *>(m_virtualFilter)->showGroups(shown != List && shown != Details);
+        m_virtualFilter->sort(shown == List || shown == Details ? m_virtualDetails->header()->sortIndicatorSection() : -1,
+                              m_virtualDetails->header()->sortIndicatorOrder());
+        configureList(m_virtualList, shown);
+        if (shown == Tiles || shown == Icons || shown == Thumbnails) {
+            m_virtualList->setGridSize(QSize());
+            m_virtualList->setSpacing(0);
+        }
+        m_pages->setCurrentWidget(shown == Details ? static_cast<QWidget *>(m_virtualDetails) : m_virtualList);
     }
     if (!m_location.startsWith(QLatin1String("::")) && !places::isWeb(m_location) && !blocked())
         m_pages->setCurrentWidget(folderPage());
@@ -1637,6 +2044,8 @@ QAbstractItemView *FileBrowser::currentView() const
         return m_details;
     if (m_pages->currentWidget() == m_virtualList)
         return m_virtualList;
+    if (m_pages->currentWidget() == m_virtualDetails)
+        return m_virtualDetails;
     return m_list;
 }
 
@@ -1651,7 +2060,7 @@ QStringList FileBrowser::selectedPaths() const
     }
     QStringList paths;
     QAbstractItemView *view = currentView();
-    if (view == m_virtualList)
+    if (view == m_virtualList || view == m_virtualDetails)
         return paths;
     const QModelIndexList rows = view->selectionModel()->selectedIndexes();
     for (const QModelIndex &index : rows)
@@ -1732,7 +2141,8 @@ void FileBrowser::addVirtual(const QString &text, const QIcon &icon, std::functi
         item->setData(detail, DetailRole);
     item->setData(QVariant::fromValue(m_actions.size()), ActionRole);
     m_actions.append(std::move(action));
-    m_virtual->appendRow(item);
+    QList<QStandardItem *> row{item, new QStandardItem(detail.section(QLatin1Char('\n'), 0, 0))};
+    m_virtual->appendRow(row);
 }
 
 void FileBrowser::addVirtualHeader(const QString &text)
@@ -1748,6 +2158,7 @@ void FileBrowser::fillComputer()
     addVirtualHeader(xpfiles::shellString(9425, "Files Stored on This Computer"));
     const auto folder = [this](int icon, const QString &name, const QString &path) {
         addVirtual(name, fileicons::shell(icon), [this, path] { navigate(path); }, tr("File Folder"));
+        m_virtual->item(m_virtual->rowCount() - 1)->setData(path, PathRole);
     };
     folder(fileicons::Documents, xpfiles::shellString(9227, "My Documents"), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
     folder(fileicons::Folder, QFileInfo(QDir::homePath()).fileName(), QDir::homePath());
@@ -1773,6 +2184,14 @@ void FileBrowser::fillComputer()
         const QString name = drive.displayName().isEmpty() || drive.displayName() == path ? xpfiles::shellString(9402, "Local Disk") : drive.displayName();
         addVirtual(QStringLiteral("%1 (%2)").arg(name, path), fileicons::shell(fileicons::Drive), [this, path] { navigate(path); },
                    tr("%1 free of %2").arg(xpSize(drive.bytesAvailable()), xpSize(drive.bytesTotal())));
+        const int row = m_virtual->rowCount() - 1;
+        m_virtual->item(row)->setData(path, PathRole);
+        m_virtual->setItem(row, 1, new QStandardItem(xpfiles::shellString(9402, "Local Disk")));
+        m_virtual->setItem(row, 2, new QStandardItem(xpSize(drive.bytesTotal())));
+        m_virtual->setItem(row, 3, new QStandardItem(xpSize(drive.bytesAvailable())));
+        m_virtual->item(row, 2)->setData(qulonglong(drive.bytesTotal()), Qt::UserRole);
+        m_virtual->item(row, 3)->setData(qulonglong(drive.bytesAvailable()), Qt::UserRole);
+        for (int column : {2, 3}) m_virtual->item(row, column)->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
     }
     if (!removable.isEmpty()) {
         addVirtualHeader(tr("Devices with Removable Storage"));
@@ -1780,6 +2199,14 @@ void FileBrowser::fillComputer()
             const QString path = drive.rootPath();
             addVirtual(drive.displayName(), fileicons::shell(fileicons::Removable), [this, path] { navigate(path); },
                        tr("%1 free of %2").arg(xpSize(drive.bytesAvailable()), xpSize(drive.bytesTotal())));
+            const int row = m_virtual->rowCount() - 1;
+            m_virtual->item(row)->setData(path, PathRole);
+            m_virtual->setItem(row, 1, new QStandardItem(tr("Removable Disk")));
+            m_virtual->setItem(row, 2, new QStandardItem(xpSize(drive.bytesTotal())));
+            m_virtual->setItem(row, 3, new QStandardItem(xpSize(drive.bytesAvailable())));
+            m_virtual->item(row, 2)->setData(qulonglong(drive.bytesTotal()), Qt::UserRole);
+            m_virtual->item(row, 3)->setData(qulonglong(drive.bytesAvailable()), Qt::UserRole);
+            for (int column : {2, 3}) m_virtual->item(row, column)->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
         }
     }
 }
@@ -1800,16 +2227,18 @@ void FileBrowser::showVirtual(const QString &location)
             showSearchBar(true);
         return;
     }
-    m_virtual->clear();
+    m_virtual->removeRows(0, m_virtual->rowCount());
+    const int columns = location == places::Computer ? 4 : 2;
+    const bool changedColumns = m_virtual->columnCount() != columns;
+    m_virtual->setColumnCount(columns);
+    m_virtual->setHorizontalHeaderLabels(location == places::Computer ? QStringList{tr("Name"), tr("Type"), tr("Total Size"), tr("Free Space")}
+                                                                     : QStringList{tr("Name"), tr("Comments")});
+    if (changedColumns) {
+        m_virtualDetails->setColumnWidth(0, 200);
+        m_virtualDetails->setColumnWidth(1, 100);
+        for (int column = 2; column < columns; ++column) m_virtualDetails->setColumnWidth(column, 90);
+    }
     m_actions.clear();
-    auto *delegate = delegateOf(m_virtualList);
-    m_virtualList->setViewMode(QListView::IconMode);
-    m_virtualList->setMovement(QListView::Static);
-    m_virtualList->setWrapping(true);
-    m_virtualList->setGridSize(QSize());
-    m_virtualList->setSpacing(2);
-    m_virtualList->setIconSize(QSize(48, 48));
-    delegate->setMode(ItemDelegate::TilesMode);
     if (location == places::Computer) {
         fillComputer();
     } else if (location.startsWith(places::ControlPanel + QLatin1Char('/'))) {
@@ -1826,6 +2255,7 @@ void FileBrowser::showVirtual(const QString &location)
         fillControlPanel();
     }
     m_pages->setCurrentWidget(m_virtualList);
+    setView(m_view);
     m_virtualList->doItemsLayout();
 }
 
@@ -1865,7 +2295,7 @@ void FileBrowser::openPath(const QString &path)
 
 void FileBrowser::activate(const QModelIndex &index)
 {
-    if (index.model() == m_virtual) {
+    if (index.model() == m_virtual || index.model() == m_virtualFilter) {
         const QVariant slot = index.data(ActionRole);
         if (slot.isValid() && slot.toInt() < m_actions.size() && m_actions[slot.toInt()]) {
             const auto action = m_actions[slot.toInt()];
@@ -1926,8 +2356,8 @@ void FileBrowser::updatePane()
     PaneGroup details{xpfiles::shellString(STRING_DETAILS, "Details"), false, {}};
     if (m_location == places::Computer) {
         groups.append({xpfiles::shellString(STRING_SYSTEM_TASKS, "System Tasks"), true, {
-            {xpfiles::shellString(STRING_SYSTEM_INFO, "View system information"), fileicons::shell(fileicons::Computer), [] { controlpanel::open(QStringLiteral("system")); }},
-            {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::Application), [] { controlpanel::open(QStringLiteral("programs")); }},
+            {xpfiles::shellString(STRING_SYSTEM_INFO, "View system information"), fileicons::shell(fileicons::SystemInfo), [] { controlpanel::open(QStringLiteral("system")); }},
+            {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::AddRemove), [] { controlpanel::open(QStringLiteral("programs")); }},
             {xpfiles::shellString(STRING_CHANGE, "Change a setting"), fileicons::shell(fileicons::ControlPanel), [this] { navigate(places::ControlPanel); }},
         }});
         others.tasks = {place(documents), place(places::ControlPanel)};
@@ -1985,8 +2415,8 @@ void FileBrowser::updatePane()
     } else if (isSystemFolder(m_location) && blocked()) {
         const bool drive = m_location == QLatin1String("/");
         groups.append({xpfiles::shellString(STRING_SYSTEM_TASKS, "System Tasks"), true, {
-            {drive ? xpfiles::shellString(31319, "Show the contents of this drive") : xpfiles::shellString(31323, "Show the contents of this folder"), fileicons::shell(fileicons::FolderOpen), [this] { setSystemFolderShown(true); }},
-            {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::Application), [] { controlpanel::open(QStringLiteral("programs")); }},
+            {drive ? xpfiles::shellString(31319, "Show the contents of this drive") : xpfiles::shellString(31323, "Show the contents of this folder"), fileicons::shell(fileicons::ShowContents), [this] { setSystemFolderShown(true); }},
+            {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::AddRemove), [] { controlpanel::open(QStringLiteral("programs")); }},
             {tr("Search for files or folders"), fileicons::shell(fileicons::Search), [this] { showSearchBar(true); }},
         }});
         others.tasks = {place(places::Computer), place(documents)};
@@ -2001,7 +2431,7 @@ void FileBrowser::updatePane()
         if (isSystemFolder(m_location)) {
             const bool drive = m_location == QLatin1String("/");
             groups.append({xpfiles::shellString(STRING_SYSTEM_TASKS, "System Tasks"), true, {
-                {drive ? xpfiles::shellString(31321, "Hide the contents of this drive") : xpfiles::shellString(31325, "Hide the contents of this folder"), fileicons::shell(fileicons::FolderOpen), [this] { setSystemFolderShown(false); }},
+                {drive ? xpfiles::shellString(31321, "Hide the contents of this drive") : xpfiles::shellString(31325, "Hide the contents of this folder"), fileicons::shell(fileicons::ShowContents), [this] { setSystemFolderShown(false); }},
             }});
         }
         // Picture folders, and pictures chosen elsewhere: the Picture Tasks first, in the main header
@@ -2019,7 +2449,7 @@ void FileBrowser::updatePane()
         }
         PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), !isSystemFolder(m_location) && groups.isEmpty(), {}};
         if (selected.isEmpty()) {
-            tasks.tasks.append({xpfiles::shellString(STRING_NEW_FOLDER, "Make a new folder"), fileicons::shell(fileicons::FolderOpen), [this] { newFolder(); }});
+            tasks.tasks.append({xpfiles::shellString(STRING_NEW_FOLDER, "Make a new folder"), fileicons::shell(fileicons::NewFolder), [this] { newFolder(); }});
         } else {
             // XP's words for what is selected: a file, a folder or several items
             const bool several = selected.size() > 1, folder = !several && QFileInfo(selected.first()).isDir();
@@ -2027,10 +2457,10 @@ void FileBrowser::updatePane()
                 return several ? xpfiles::shellString(manyId, manyText) : folder ? xpfiles::shellString(folderId, folderText) : xpfiles::shellString(fileId, fileText);
             };
             if (!several)
-                tasks.tasks.append({folder ? xpfiles::shellString(31254, "Rename this folder") : xpfiles::shellString(STRING_RENAME, "Rename this file"), fileicons::shell(fileicons::Document), [this] { renameSelected(); }});
-            tasks.tasks.append({words(STRING_MOVE, "Move this file", 31256, "Move this folder", 31264, "Move the selected items"), stripIcon(MOVE_TO), [this] { moveOrCopyTo(true); }});
-            tasks.tasks.append({words(STRING_COPY, "Copy this file", 31258, "Copy this folder", 31266, "Copy the selected items"), stripIcon(COPY_TO), [this] { moveOrCopyTo(false); }});
-            tasks.tasks.append({words(STRING_DELETE, "Delete this file", 31262, "Delete this folder", 31270, "Delete the selected items"), stripIcon(DELETE_ICON), [this] { deleteSelected(false); }});
+                tasks.tasks.append({folder ? xpfiles::shellString(31254, "Rename this folder") : xpfiles::shellString(STRING_RENAME, "Rename this file"), fileicons::shell(fileicons::RenameTask), [this] { renameSelected(); }});
+            tasks.tasks.append({words(STRING_MOVE, "Move this file", 31256, "Move this folder", 31264, "Move the selected items"), fileicons::shell(fileicons::MoveTask), [this] { moveOrCopyTo(true); }});
+            tasks.tasks.append({words(STRING_COPY, "Copy this file", 31258, "Copy this folder", 31266, "Copy the selected items"), fileicons::shell(fileicons::CopyTask), [this] { moveOrCopyTo(false); }});
+            tasks.tasks.append({words(STRING_DELETE, "Delete this file", 31262, "Delete this folder", 31270, "Delete the selected items"), fileicons::shell(fileicons::DeleteTask), [this] { deleteSelected(false); }});
         }
         groups.append(tasks);
         const QFileInfo info(m_location);
@@ -2106,12 +2536,14 @@ bool FileBrowser::eventFilter(QObject *watched, QEvent *event)
         placeEdgeLines();
     // Under a visual style, Details shades the column it is sorted by, down to the bottom;
     // the rows are drawn over it.
-    if (m_details && watched == m_details->viewport() && event->type() == QEvent::Paint && ShellTheme::instance()->renderer()) {
-        const int column = m_details->header()->sortIndicatorSection();
-        if (column >= 0 && column < m_model->columnCount()) {
-            QPainter painter(m_details->viewport());
-            const int x = m_details->header()->sectionViewportPosition(column);
-            painter.fillRect(QRect(x, 0, m_details->header()->sectionSize(column), m_details->viewport()->height()), SORTED_COLUMN);
+    QTreeView *report = m_details && watched == m_details->viewport() ? m_details
+                      : m_virtualDetails && watched == m_virtualDetails->viewport() ? m_virtualDetails : nullptr;
+    if (report && event->type() == QEvent::Paint && ShellTheme::instance()->renderer()) {
+        const int column = report->header()->sortIndicatorSection();
+        if (column >= 0 && column < report->model()->columnCount()) {
+            QPainter painter(report->viewport());
+            const int x = report->header()->sectionViewportPosition(column);
+            painter.fillRect(QRect(x, 0, report->header()->sectionSize(column), report->viewport()->height()), SORTED_COLUMN);
         }
     }
     if (event->type() == QEvent::KeyPress) {
@@ -2159,12 +2591,36 @@ bool FileBrowser::eventFilter(QObject *watched, QEvent *event)
     return QMainWindow::eventFilter(watched, event);
 }
 
+void FileBrowser::showViewContextMenu(QAbstractItemView *view, QPoint at)
+{
+    QModelIndex index = at.x() < 0 || at.y() < 0 ? view->currentIndex() : view->indexAt(at);
+    const bool onItem = index.isValid() && (index.flags() & Qt::ItemIsSelectable);
+    if (onItem) {
+        index = index.siblingAtColumn(0);
+        const auto command = view->selectionModel()->isSelected(index) ? QItemSelectionModel::NoUpdate : QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows;
+        view->selectionModel()->setCurrentIndex(index, command);
+        if (at.x() < 0 || at.y() < 0) at = view->visualRect(index).center();
+    } else {
+        view->clearSelection();
+    }
+    showContextMenu(view->viewport()->mapToGlobal(at), onItem);
+}
+
 void FileBrowser::showContextMenu(QPoint global, bool onItem)
 {
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     const QString folder = currentFolder();
-    if (onItem && m_location == places::RecycleBin) {
+    if (onItem && (currentView() == m_virtualList || currentView() == m_virtualDetails)) {
+        const QModelIndex index = currentView()->currentIndex().siblingAtColumn(0);
+        auto *open = menu->addAction(tr("&Open"), this, [this, index] { activate(index); });
+        menu->setDefaultAction(open);
+        const QString path = index.data(PathRole).toString();
+        if (!path.isEmpty()) {
+            menu->addSeparator();
+            menu->addAction(tr("P&roperties"), this, [this, path] { showItemProperties({path}, this); });
+        }
+    } else if (onItem && m_location == places::RecycleBin) {
         menu->addAction(tr("R&estore"), this, [this] { fileops::restoreFromTrash(selectedPaths(), this); });
         menu->addSeparator();
         menu->addAction(tr("&Delete"), this, [this] { deleteSelected(true); });
@@ -2214,7 +2670,12 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
         menu->addSeparator();
         menu->addAction(m_propertiesAction);
     } else {
+        menu->addMenu(m_viewsMenu)->setText(tr("&View"));
         menu->addAction(tr("R&efresh"), this, [this] { navigate(m_location, false); });
+        if (m_location == places::Computer) {
+            menu->addSeparator();
+            menu->addAction(tr("P&roperties"), this, [] { controlpanel::open(QStringLiteral("system")); });
+        }
     }
     menu->popup(global);
 }

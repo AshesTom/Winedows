@@ -12,7 +12,9 @@
 #include <QMessageBox>
 #include "filebrowser.h"
 #include "frames.h"
+#include "notifications.h"
 #include "programs.h"
+#include "securitycenter.h"
 #include "taskbar.h"
 #include "theme.h"
 #include "tray.h"
@@ -92,6 +94,7 @@ int main(int argc, char **argv)
     qputenv("QT_QPA_PLATFORMTHEME", "generic");
     // (For the web pages of a folder window, set before the application exists.)
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("explorer"));
     app.setQuitOnLastWindowClosed(false);
@@ -103,7 +106,7 @@ int main(int argc, char **argv)
     parser.addOption({QStringLiteral("frames"), QStringLiteral("draw the Linux windows' frames (without Wine's proxy.exe; needs --ipc)")});
     parser.addOption({QStringLiteral("console"), QStringLiteral("only XP's Command Prompt, in that folder"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
-    parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime, winver"), QStringLiteral("id")});
+    parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime, security, winver"), QStringLiteral("id")});
     parser.process(app);
 
     xpfiles::loadFonts();
@@ -113,7 +116,11 @@ int main(int argc, char **argv)
     }
     ShellTheme::ensureDefaultLook();
     ShellTheme *theme = ShellTheme::instance();
-    QApplication::setFont(theme->font(QStringLiteral("Tahoma, 8")));
+    const auto applyFont = [theme] {
+        QApplication::setFont(theme->systemFont(QStringLiteral("msgboxfont")));
+    };
+    applyFont();
+    QObject::connect(theme, &ShellTheme::changed, &app, applyFont);
     programs::useIconTheme();
     QObject::connect(theme, &ShellTheme::changed, &app, [] { programs::useIconTheme(); });
     if (parser.isSet(QStringLiteral("applet"))) {
@@ -142,6 +149,8 @@ int main(int argc, char **argv)
     const QString ipc = parser.value(QStringLiteral("ipc"));
     Tray tray(ipc, iconSize);
     Taskbar taskbar(&windows, &tray);
+    NotificationServer notifications(&tray);
+    securitycenter::Alerts securityAlerts(&tray);
     std::unique_ptr<FrameManager> frames;
     if (parser.isSet(QStringLiteral("frames")) && !ipc.isEmpty())
         frames = std::make_unique<FrameManager>(ipc);

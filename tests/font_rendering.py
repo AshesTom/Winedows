@@ -52,7 +52,8 @@ class FontRendering(unittest.TestCase):
                         writes.append(command[command.index('/d') + 1])
                     return subprocess.CompletedProcess(command, 0)
 
-                with patch.object(create.subprocess, 'run', side_effect=fake_run):
+                with patch.object(create.subprocess, 'run', side_effect=fake_run), \
+                     patch.object(create.media, 'language', return_value='en'):
                     create.create(assets, dest, base, str(wine))
                 self.assertEqual(writes, ['N'] if existing is None else [])
 

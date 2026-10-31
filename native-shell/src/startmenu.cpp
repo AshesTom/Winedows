@@ -52,16 +52,21 @@ const int DIALOG_RUN = 1003, RUN_COMMAND = 12298, RUN_SEPARATE_MEMORY = 12306, R
 const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722;
 const int SHELL_DOCUMENTS = 9227, SHELL_RECENT = 12691, SHELL_PICTURES = 9076, SHELL_MUSIC = 9105, SHELL_COMPUTER = 9216;
 const int SHELL_CONTROL_PANEL = 4161, SHELL_PRINTERS = 9319;
+// explorer.exe's Connect To. Set Program Access and Defaults is a shortcut of All Users' Start Menu,
+// whose English file name explorer.exe holds; its picture is moricons.dll's icon 114.
+const int EXPLORER_CONNECT = 8233, ICON_CONNECT = 175, MORICONS_SPAD = 114;
 // shell32.dll's icons
 const int ICON_DOCUMENTS = 235, ICON_RECENT = 21, ICON_PICTURES = 236, ICON_MUSIC = 237, ICON_COMPUTER = 16;
 const int ICON_CONTROL_PANEL = 22, ICON_PRINTERS = 138, ICON_HELP = 24, ICON_SEARCH = 23, ICON_RUN = 25;
 const int ICON_LOG_OFF = 45, ICON_TURN_OFF = 28, ICON_PROGRAMS = 20, ICON_DOCUMENT = 1;
 
-// The Start panel at 96 DPI, from the style's DefaultPaneSize and XP's menu
-const int PANEL_WIDTH = 380, COLUMN = 190, USER_HEIGHT = 64, LOGOFF_HEIGHT = 40, MORE_HEIGHT = 30, MORE_GAP = 6, BODY_MIN = 336;
-const int PLACE_HEIGHT = 30, PLACE_ICON = 24, LEFT_BIG = 39, LEFT_SMALL = 40;
+// The Start panel at 96 DPI, from the style's DefaultPaneSize and XP's own panel, measured: both columns
+// start 7 under the user pane, a line between places is 5 into its 8 pixels, the body ends 7 under the
+// last place, and All Programs has 36 pixels under its line.
+const int COLUMN = 190, USER_HEIGHT = 64, LOGOFF_HEIGHT = 40, MORE_HEIGHT = 36, MORE_GAP = 11, BODY_MIN = 336;
+const int PLACE_HEIGHT = 30, PLACE_ICON = 24, LEFT_BIG = 40, LEFT_SMALL = 40, COLUMN_TOP = 7, PLACE_LINE = 5, BODY_END = 7;
 // XP's left column: six recent programs, and a line above All Programs
-const int RECENT_PROGRAMS = 6, LEFT_TOP = 5, LEFT_LINE = 7;
+const int RECENT_PROGRAMS = 6, LEFT_TOP = COLUMN_TOP, LEFT_LINE = 7;
 const int CASCADE_ROW = 23, CASCADE_ICON = 16;
 
 Part panelPart(const char *name)
@@ -215,11 +220,11 @@ Cascade::Cascade(const QList<MenuEntry> &entries, QPoint corner, bool upward)
     setAttribute(Qt::WA_DeleteOnClose, false);
     setFocusPolicy(Qt::NoFocus);
     ShellTheme *theme = ShellTheme::instance();
-    QFontMetrics metrics(theme->font(QStringLiteral("Tahoma, 8")));
+    QFontMetrics metrics(theme->systemFont(QStringLiteral("menufont")));
     int textWidth = 80;
     for (const MenuEntry &entry : entries)
         textWidth = qMax(textWidth, metrics.horizontalAdvance(entry.text));
-    const int row = theme->scaled(CASCADE_ROW);
+    const int row = qMax(theme->scaled(CASCADE_ROW), metrics.height() + theme->scaled(4));
     int width = theme->scaled(10 + CASCADE_ICON + 8 + 22) + textWidth;
     const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
     width = qMin(width, screen.width() / 2);
@@ -268,7 +273,7 @@ void Cascade::paintEvent(QPaintEvent *)
         painter.fillRect(rect(), theme->system(QStringLiteral("menu"), Qt::lightGray));
         theme->raised(painter, rect());
     }
-    painter.setFont(theme->font(QStringLiteral("Tahoma, 8")));
+    painter.setFont(theme->systemFont(QStringLiteral("menufont")));
     const int icon = theme->scaled(CASCADE_ICON);
     for (int i = 0; i < m_entries.size(); ++i) {
         const QRect r = m_rects[i];
@@ -299,6 +304,28 @@ void Cascade::paintEvent(QPaintEvent *)
             painter.restore();
         }
     }
+}
+
+// Connect To's cascade: the network's connections (nmcli's), then Show all connections
+static QList<MenuEntry> connections()
+{
+    QList<MenuEntry> entries;
+    QProcess nmcli;
+    nmcli.start(QStringLiteral("nmcli"), {QStringLiteral("-t"), QStringLiteral("-f"), QStringLiteral("NAME,TYPE"), QStringLiteral("connection"), QStringLiteral("show")});
+    nmcli.waitForFinished(2000);
+    const QIcon icon(QPixmap::fromImage(ShellTheme::instance()->shellIcon(ICON_CONNECT, ShellTheme::instance()->scaled(16))));
+    for (const QString &line : QString::fromUtf8(nmcli.readAllStandardOutput()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        // NAME:TYPE, a colon in the name written "\:"
+        const qsizetype colon = line.lastIndexOf(QLatin1Char(':'));
+        const QString name = line.left(colon).replace(QLatin1String("\\:"), QLatin1String(":")), type = line.mid(colon + 1);
+        if (type == QLatin1String("loopback") || type == QLatin1String("bridge"))
+            continue;
+        entries.append({name, icon, [name] { QProcess::startDetached(QStringLiteral("nmcli"), {QStringLiteral("connection"), QStringLiteral("up"), name}); }, {}, false});
+    }
+    if (!entries.isEmpty())
+        entries.append({{}, {}, {}, {}, true});
+    entries.append({QObject::tr("Show all connections"), icon, [] { applets::open(QStringLiteral("network")); }, {}, false});
+    return entries;
 }
 
 StartPanel::StartPanel(QPoint bottomLeft, std::function<void()> logOff, std::function<void()> turnOff, std::function<void()> controlPanel)
@@ -355,24 +382,46 @@ void StartPanel::addPlace(int &y, int iconId, const QString &text, bool bold, st
     y += height;
 }
 
-// "All Programs" and its arrow, together in the middle of the column
+// "All Programs" and its arrow (the style's picture at its own size, as XP draws it), together in the
+// middle of the column, under its line
 QRect StartPanel::moreArrow() const
 {
     ShellTheme *theme = ShellTheme::instance();
-    const int side = theme->scaled(19), gap = theme->scaled(MORE_GAP);
-    const int text = QFontMetrics(theme->font(QStringLiteral("Tahoma, 8, bold"))).horizontalAdvance(m_moreText);
-    return QRect(m_more.x() + (m_more.width() - text - gap - side) / 2 + text + gap, m_more.y() + (m_more.height() - side) / 2, side, side);
+    QSize size(theme->scaled(19), theme->scaled(19));
+    if (w4w::Renderer *renderer = theme->renderer())
+        if (const QSize art = renderer->trueSize(panelPart("moreprogramsarrow")); !art.isEmpty())
+            size = art;
+    const int gap = theme->scaled(MORE_GAP);
+    const int text = QFontMetrics(theme->systemFont(QStringLiteral("menufont"), true)).horizontalAdvance(QString(m_moreText).remove(QLatin1Char('&')));
+    const QRect band = moreBand();
+    return QRect(band.x() + (band.width() - text - gap - size.width() + 1) / 2 + text + gap, band.y() + (band.height() - size.height() + 1) / 2,
+                 size.width(), size.height());
+}
+
+// The part of All Programs' rectangle under its line
+QRect StartPanel::moreBand() const
+{
+    return m_more.adjusted(0, ShellTheme::instance()->scaled(1), 0, 0);
 }
 
 void StartPanel::build(QPoint bottomLeft)
 {
     ShellTheme *theme = ShellTheme::instance();
-    const int width = theme->scaled(PANEL_WIDTH), column = theme->scaled(COLUMN);
+    // Keep XP's normal columns; grow them for large fonts and translated labels.
+    const QFontMetrics placeMetrics(theme->systemFont(QStringLiteral("menufont"), true));
+    int column = theme->scaled(COLUMN);
+    for (const QString &label : {shellString(SHELL_DOCUMENTS, "My Documents"), shellString(SHELL_RECENT, "My Recent Documents"),
+                                shellString(SHELL_PICTURES, "My Pictures"), shellString(SHELL_MUSIC, "My Music"),
+                                shellString(SHELL_COMPUTER, "My Computer"), shellString(SHELL_CONTROL_PANEL, "Control Panel"),
+                                shellString(SHELL_PRINTERS, "Printers and Faxes"), explorerString(EXPLORER_HELP, "Help and Support")})
+        column = qMax(column, placeMetrics.horizontalAdvance(QString(label).remove(QLatin1Char('&'))) + theme->scaled(PLACE_ICON + 32));
+    const int width = 2 * column;
     const int userHeight = theme->scaled(USER_HEIGHT), logoffHeight = theme->scaled(LOGOFF_HEIGHT);
     const int moreHeight = theme->scaled(MORE_HEIGHT);
     m_userName = userName();
     m_picture = userPicture(theme->scaled(48));
-    m_moreText = explorerString(EXPLORER_ALL_PROGRAMS, "All Programs").remove(QLatin1Char('&'));
+    // XP underlines its letter (All &Programs) even when opened with the mouse
+    m_moreText = explorerString(EXPLORER_ALL_PROGRAMS, "All &Programs");
     m_logOffText = explorerString(EXPLORER_LOG_OFF, "Log Off").remove(QLatin1Char('&')).remove(QLatin1String("..."));
     m_turnOffText = explorerString(EXPLORER_TURN_OFF, "Turn Off Computer").remove(QLatin1Char('&')).remove(QLatin1String("..."));
     m_logOffIcon = theme->shellIcon(ICON_LOG_OFF, theme->scaled(24));
@@ -380,7 +429,7 @@ void StartPanel::build(QPoint bottomLeft)
 
     // The places first: they decide the height
     m_right = QRect(column, userHeight, width - column, 0);
-    int y = userHeight + theme->scaled(9);
+    int y = userHeight + theme->scaled(COLUMN_TOP);
     const auto opens = [](const QString &path) { return [path] { programs::open(path); }; };
     addPlace(y, ICON_DOCUMENTS, shellString(SHELL_DOCUMENTS, "My Documents"), true, opens(xdgDir(QStandardPaths::DocumentsLocation)));
     addPlace(y, ICON_RECENT, shellString(SHELL_RECENT, "My Recent Documents"), true, {}, true);
@@ -390,14 +439,22 @@ void StartPanel::build(QPoint bottomLeft)
     addPlace(y, ICON_COMPUTER, shellString(SHELL_COMPUTER, "My Computer"), true, opens(QStringLiteral("file:///")));
     Item separator;
     separator.separator = true;
-    separator.rect = QRect(m_right.x() + theme->scaled(10), y + theme->scaled(3), m_right.width() - theme->scaled(20), theme->scaled(2));
+    separator.rect = QRect(m_right.x() + theme->scaled(10), y + theme->scaled(PLACE_LINE), m_right.width() - theme->scaled(20), theme->scaled(2));
     m_items.append(separator);
     y += theme->scaled(8);
     addPlace(y, ICON_CONTROL_PANEL, shellString(SHELL_CONTROL_PANEL, "Control Panel"), false, m_controlPanel);
+    // XP's next two: the programs' defaults (Add or Remove Programs here), and the network's connections
+    addPlace(y, 0, tr("Set Program Access and Defaults"), false, [] { applets::open(QStringLiteral("programs")); });
+    const auto moricons = xpfiles::resources(xpfiles::find(QStringLiteral("moricons.dll")));
+    m_items.last().icon = moricons ? xpfiles::icon(*moricons, MORICONS_SPAD, theme->scaled(PLACE_ICON)) : QImage();
+    if (!QStandardPaths::findExecutable(QStringLiteral("nmcli")).isEmpty()) {
+        addPlace(y, ICON_CONNECT, explorerString(EXPLORER_CONNECT, "Connect To"), false, {}, true);
+        m_items.last().children = [] { return connections(); };
+    }
     const bool printers = !QStandardPaths::findExecutable(QStringLiteral("system-config-printer")).isEmpty();
     addPlace(y, ICON_PRINTERS, shellString(SHELL_PRINTERS, "Printers and Faxes"), false,
              printers ? std::function<void()>([] { QProcess::startDetached(QStringLiteral("system-config-printer"), {}); }) : std::function<void()>());
-    separator.rect.moveTop(y + theme->scaled(3));
+    separator.rect.moveTop(y + theme->scaled(PLACE_LINE));
     m_items.append(separator);
     y += theme->scaled(8);
     addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "Help and Support"), false, {});
@@ -406,7 +463,7 @@ void StartPanel::build(QPoint bottomLeft)
     const auto browser = programs::defaultBrowser(), mail = programs::defaultMail();
     const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0);
     const int leftHeight = theme->scaled(LEFT_TOP + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + RECENT_PROGRAMS * LEFT_SMALL + LEFT_LINE) + moreHeight;
-    const int bodyHeight = std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(5), leftHeight});
+    const int bodyHeight = std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(BODY_END), leftHeight});
     m_right.setHeight(bodyHeight);
 
     m_user = QRect(0, 0, width, userHeight);
@@ -440,17 +497,18 @@ void StartPanel::build(QPoint bottomLeft)
     }
     Item moreLine;
     moreLine.separator = true;
-    moreLine.rect = QRect(m_left.x() + theme->scaled(10), m_more.y() - theme->scaled(4), m_left.width() - theme->scaled(20), theme->scaled(2));
+    moreLine.rect = QRect(m_left.x() + theme->scaled(12), m_more.y(), m_left.width() - theme->scaled(20), theme->scaled(2));
     m_items.append(moreLine);
 
-    // The bottom's buttons, right-aligned as XP's
-    QFontMetrics metrics(theme->font(QStringLiteral("Tahoma, 8")));
+    // The bottom's buttons, right-aligned as XP's: each its icon, 4 pixels and its words, 10 from the edge
+    // and 11 apart
+    QFontMetrics metrics(theme->systemFont(QStringLiteral("menufont")));
     const int icon = theme->scaled(24), gap = theme->scaled(4);
-    const int turnOffWidth = icon + gap + metrics.horizontalAdvance(m_turnOffText) + theme->scaled(4);
-    const int logOffWidth = icon + gap + metrics.horizontalAdvance(m_logOffText) + theme->scaled(4);
+    const int turnOffWidth = icon + gap + metrics.horizontalAdvance(m_turnOffText);
+    const int logOffWidth = icon + gap + metrics.horizontalAdvance(m_logOffText);
     const int buttonY = m_logoff.y() + (logoffHeight - icon) / 2;
     m_turnOffButton = QRect(width - theme->scaled(10) - turnOffWidth, buttonY, turnOffWidth, icon);
-    m_logOffButton = QRect(m_turnOffButton.x() - theme->scaled(10) - logOffWidth, buttonY, logOffWidth, icon);
+    m_logOffButton = QRect(m_turnOffButton.x() - theme->scaled(11) - logOffWidth, buttonY, logOffWidth, icon);
 
     const int height = userHeight + bodyHeight + logoffHeight;
     setGeometry(QRect(bottomLeft - QPoint(0, height), QSize(width, height)));
@@ -522,7 +580,7 @@ void StartPanel::paintEvent(QPaintEvent *)
     }
 
     // The items
-    const QFont normal = theme->font(QStringLiteral("Tahoma, 8")), bold = theme->font(QStringLiteral("Tahoma, 8, bold"));
+    const QFont normal = theme->systemFont(QStringLiteral("menufont")), bold = theme->systemFont(QStringLiteral("menufont"), true);
     const QColor leftText = renderer ? renderer->colour(panelPart("proglist"), QStringLiteral("textcolor")).value_or(Qt::black) : QColor(Qt::black);
     const QColor rightText = renderer ? renderer->colour(panelPart("placeslist"), QStringLiteral("textcolor")).value_or(Qt::black) : QColor(Qt::black);
     const QColor leftHot = renderer ? renderer->colour(panelPart("proglist"), QStringLiteral("hottracking")).value_or(highlight) : highlight;
@@ -550,11 +608,18 @@ void StartPanel::paintEvent(QPaintEvent *)
             colour = theme->system(QStringLiteral("graytext"), Qt::gray);
         painter.setPen(colour);
         painter.setFont(item.bold ? bold : normal);
-        if (item.subtitle.isEmpty()) {
+        if (item.subtitle.isEmpty() && !onLeft) {
+            // A place's words are a pixel above the middle, as on XP; too long for the column, they take two lines.
+            const QRect words(textX, item.rect.y() - theme->scaled(1), textEnd - textX, item.rect.height());
+            if (painter.fontMetrics().horizontalAdvance(item.text) > words.width())
+                painter.drawText(words.translated(0, theme->scaled(1)), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, item.text);
+            else
+                painter.drawText(words, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, item.text);
+        } else if (item.subtitle.isEmpty()) {
             painter.drawText(QRect(textX, item.rect.y(), textEnd - textX, item.rect.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                              painter.fontMetrics().elidedText(item.text, Qt::ElideRight, textEnd - textX));
         } else {
-            const int line = theme->scaled(14), top = item.rect.y() + (item.rect.height() - 2 * line) / 2;
+            const int line = qMax(theme->scaled(14), QFontMetrics(normal).height()), top = item.rect.y() + (item.rect.height() - 2 * line) / 2;
             painter.drawText(QRect(textX, top, textEnd - textX, line), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, item.text);
             painter.setFont(normal);
             painter.setPen(hot ? QColor(Qt::white) : QColor(128, 128, 128));
@@ -577,13 +642,14 @@ void StartPanel::paintEvent(QPaintEvent *)
     const bool moreHot = m_hotPart == MoreHot;
     const QRect arrow = moreArrow();
     painter.setFont(bold);
-    const QRect moreText(m_more.x(), m_more.y(), arrow.x() - m_more.x() - theme->scaled(MORE_GAP), m_more.height());
+    const QRect band = moreBand();
+    const QRect moreText(band.x(), band.y(), arrow.x() - band.x() - theme->scaled(MORE_GAP), band.height());
     if (moreHot) {
         const QRect band(m_more.x() + theme->scaled(8), m_more.y() + theme->scaled(3), m_more.width() - theme->scaled(10), m_more.height() - theme->scaled(6));
         painter.fillRect(band, leftHot);
     }
     painter.setPen(moreHot ? QColor(Qt::white) : leftText);
-    painter.drawText(moreText, Qt::AlignRight | Qt::AlignVCenter | Qt::TextSingleLine, m_moreText);
+    painter.drawText(moreText, Qt::AlignRight | Qt::AlignVCenter | Qt::TextSingleLine | Qt::TextShowMnemonic, m_moreText);
     if (renderer) {
         renderer->draw(&painter, arrow, panelPart("moreprogramsarrow"));
     } else {

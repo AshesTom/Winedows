@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "tray.h"
 
+#include "balloon.h"
 #include "ipcfile.h"
 #include "systemicons.h"
 
@@ -21,6 +22,7 @@ static QByteArray readFile(const QString &path)
 Tray::Tray(const QString &ipc, int iconSize)
     : m_ipc(ipc)
     , m_system(new SystemIcons(iconSize, this))
+    , m_balloons(new Balloons(this))
 {
     connect(m_system, &SystemIcons::changed, this, &Tray::showAll);
     showAll();
@@ -31,9 +33,11 @@ Tray::Tray(const QString &ipc, int iconSize)
         size.write(QByteArray::number(iconSize) + '\n');
     m_watcher.addPath(ipc);
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &Tray::directoryChanged);
-    // Only the Windows keys pressed from now on count.
+    // Only the Windows keys pressed from now on count, and the balloons asked for from now on.
     m_shellKeys = readFile(m_ipc.filePath(QStringLiteral("shellkeys.tsv"))).split(' ').value(0).toInt();
     read();
+    for (const TrayIcon &icon : std::as_const(m_icons))
+        m_balloonSerials.insert(icon.id, readFile(m_ipc.filePath(QStringLiteral("balloon-%1.tsv").arg(icon.id))).split('\t').value(0).toLongLong());
 }
 
 void Tray::directoryChanged()
@@ -49,6 +53,7 @@ void Tray::directoryChanged()
     }
     read();
     showMenus();
+    readBalloons();
 }
 
 void Tray::read()
@@ -79,8 +84,56 @@ void Tray::read()
 // The applications' icons, then XP's own next to the clock
 void Tray::showAll()
 {
-    m_shown = m_icons + m_system->icons();
+    m_shown = m_icons;
+    for (const OwnIcons &own : std::as_const(m_own))
+        m_shown += own.icons;
+    m_shown += m_system->icons();
     Q_EMIT changed();
+}
+
+void Tray::setOwnIcons(QObject *owner, const QList<TrayIcon> &icons, ClickHandler click)
+{
+    auto it = std::find_if(m_own.begin(), m_own.end(), [owner](const OwnIcons &own) { return own.owner == owner; });
+    if (it == m_own.end()) {
+        m_own.append({owner, icons, std::move(click)});
+        connect(owner, &QObject::destroyed, this, [this, owner] {
+            m_own.removeIf([owner](const OwnIcons &own) { return own.owner == owner; });
+            showAll();
+        });
+    } else {
+        it->icons = icons;
+        it->click = std::move(click);
+    }
+    showAll();
+}
+
+// balloon-ID.tsv of tray.py: "SERIAL TAB TIMEOUT TAB TITLE TAB TEXT", the text's line breaks as \n;
+// a newer serial without a text takes the balloon back.
+void Tray::readBalloons()
+{
+    for (const TrayIcon &icon : std::as_const(m_icons)) {
+        const QList<QByteArray> fields = readFile(m_ipc.filePath(QStringLiteral("balloon-%1.tsv").arg(icon.id))).split('\t');
+        const qint64 serial = fields.value(0).toLongLong();
+        if (serial <= m_balloonSerials.value(icon.id))
+            continue;
+        m_balloonSerials.insert(icon.id, serial);
+        if (const quint64 shown = m_balloonsShown.take(icon.id))
+            m_balloons->cancel(shown);
+        const QString text = QString::fromUtf8(fields.value(3)).trimmed().replace(QLatin1String("\\n"), QLatin1String("\n"));
+        if (text.isEmpty())
+            continue;
+        BalloonTip tip;
+        tip.icon = icon.id;
+        tip.title = QString::fromUtf8(fields.value(2));
+        tip.text = text;
+        tip.timeout = fields.value(1).toInt();
+        const quint32 id = icon.id;
+        tip.closed = [this, id, serial](BalloonTip::Reason) {
+            if (m_balloonSerials.value(id) == serial)
+                m_balloonsShown.remove(id);
+        };
+        m_balloonsShown.insert(icon.id, m_balloons->show(tip));
+    }
 }
 
 void Tray::command(const QByteArray &line)
@@ -94,6 +147,9 @@ void Tray::click(quint32 id, const char *op, QPoint at)
 {
     if (m_system->click(id, op, at))
         return;
+    for (const OwnIcons &own : std::as_const(m_own))
+        if (own.click && own.click(id, op, at))
+            return;
     m_menuPoint = at;
     command(QByteArray(op) + ' ' + QByteArray::number(id) + ' ' + QByteArray::number(at.x()) + ' ' + QByteArray::number(at.y()));
 }

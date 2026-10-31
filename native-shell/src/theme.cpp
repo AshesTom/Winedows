@@ -59,26 +59,52 @@ ShellTheme::ShellTheme()
 
 void ShellTheme::drawShadowedText(QPainter &painter, const QRect &rect, int flags, const QString &text, const QColor &colour, const QColor &shadow, QPoint offset)
 {
-    QImage mask(rect.size() + QSize(6, 6), QImage::Format_ARGB32_Premultiplied);
+    constexpr int padding = 5;
+    QImage mask(rect.size() + QSize(2 * padding, 2 * padding), QImage::Format_ARGB32_Premultiplied);
     mask.fill(Qt::transparent);
     {
         QPainter textPainter(&mask);
         textPainter.setFont(painter.font());
-        textPainter.setPen(shadow);
-        textPainter.drawText(QRect(QPoint(0, 0), rect.size()), flags, text);
+        textPainter.setPen(colour);
+        textPainter.drawText(QRect(QPoint(padding, padding), rect.size()), flags, text);
+    }
+    // Pad the text mask before averaging columns x+1..x+4; truncate the
+    // horizontal coverage before the vertical pass.
+    QImage horizontal(mask.size(), QImage::Format_Grayscale8);
+    horizontal.fill(0);
+    for (int y = 0; y < mask.height(); ++y) {
+        uchar *line = horizontal.scanLine(y);
+        // Leave the final five columns unfiltered (italic overhang can
+        // reach this padding when the label is right-aligned).
+        for (int x = 0; x < mask.width(); ++x)
+            line[x] = (mask.pixel(x, y) & 0x00ffffff) ? 255 : 0;
+        for (int x = 0; x < mask.width() - 5; ++x) {
+            unsigned sum = 0;
+            for (int dx = 1; dx <= 4; ++dx)
+                if (mask.pixel(x + dx, y) & 0x00ffffff)
+                    sum += 255;
+            line[x] = sum >> 2;
+        }
     }
     QImage soft(mask.size(), QImage::Format_ARGB32_Premultiplied);
     soft.fill(Qt::transparent);
     {
-        QPainter softPainter(&soft);
-        for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx) {
-                softPainter.setOpacity(dx == 0 && dy == 0 ? 0.5 : dx == 0 || dy == 0 ? 0.125 : 0.0);
-                softPainter.setCompositionMode(QPainter::CompositionMode_Plus);
-                softPainter.drawImage(QPoint(dx, dy), mask);
+        // Average this row with the four rows above it. Divide by four and
+        // saturate to keep the continuous shadow's full coverage.
+        for (int y = 5; y < mask.height(); ++y) {
+            for (int x = 0; x < mask.width(); ++x) {
+                unsigned alpha = 0;
+                for (int dy = 0; dy < 5; ++dy)
+                    alpha += horizontal.constScanLine(y - dy)[x];
+                alpha = qMin(255u, alpha >> 2);
+                if (alpha) {
+                    const auto tint = [alpha](int channel) { return ((channel * alpha + 128) >> 8) + 1; };
+                    soft.setPixel(x, y, qRgba(tint(shadow.red()), tint(shadow.green()), tint(shadow.blue()), alpha));
+                }
             }
+        }
     }
-    painter.drawImage(rect.topLeft() + offset, soft);
+    painter.drawImage(rect.topLeft() + offset - QPoint(4, 8), soft);
     painter.setPen(colour);
     painter.drawText(rect, flags, text);
 }
@@ -206,7 +232,8 @@ void ShellTheme::reload()
         wanted.size = look.sizeName;
     m_frame = frameStyleFor(wanted, m_dpi);
     m_system.clear();
-    for (const char *name : {"background", "window", "btnface", "highlight", "highlighttext", "menu", "graytext", "btnshadow", "dkshadow3d", "light3d", "btnhighlight"}) {
+    for (const char *name : {"background", "window", "btnface", "highlight", "highlighttext", "menu", "graytext", "btnshadow", "dkshadow3d", "light3d", "btnhighlight",
+                             "gradientactivecaption"}) {
         QColor colour = classicColours().value(QLatin1String(name));
         if (m_frame.renderer)
             w4w::parseColour(m_frame.renderer->theme().sysMetric(QLatin1String(name)).value_or(QString()), &colour);
@@ -225,6 +252,16 @@ QFont ShellTheme::font(const QString &spec) const
 {
     return xpfiles::themeFont(spec, m_dpi);
 }
+
+QFont ShellTheme::systemFont(const QString &role, bool bold) const
+{
+    QString spec = m_frame.renderer ? m_frame.renderer->theme().sysMetric(role).value_or(QStringLiteral("Tahoma, 8"))
+                                   : QStringLiteral("Tahoma, 8");
+    if (bold)
+        spec += QStringLiteral(", bold");
+    return font(spec);
+}
+
 
 QImage ShellTheme::shellIcon(int id, int size) const
 {

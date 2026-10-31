@@ -26,7 +26,7 @@ from xpres import Resources  # noqa: E402
 RT_ICON, RT_GROUP_ICON, RT_BITMAP = 3, 14, 2
 NAME = 'win4wine-xp-icons'
 # Bumped when the theme's icons or names change: the session makes it again.
-VERSION = '1'
+VERSION = '2'
 SIZES = (16, 24, 32, 48)
 # The themes whose icons stand in for those XP has not, the first installed first.
 INHERITS = ('breeze', 'Adwaita', 'hicolor')
@@ -67,9 +67,11 @@ ICONS = {
     ('system32/shell32.dll', 45): ('actions', ('system-log-out',)),
     ('system32/shell32.dll', 47): ('places', ('start-here',)),
     ('system32/shell32.dll', 48): ('actions', ('system-lock-screen',)),
-    ('system32/shell32.dll', 151): ('mimetypes', ('text-x-script', 'application-x-shellscript')),
+    # XP's file types (their DefaultIcon in its registry): inifile 151, txtfile 152, batfile 153, dllfile 154
+    ('system32/shell32.dll', 151): ('mimetypes', ('text-x-ini',)),
     ('system32/shell32.dll', 152): ('mimetypes', ('text-x-generic', 'text-plain', 'text-x-log')),
-    ('system32/shell32.dll', 153): ('mimetypes', ('application-x-sharedlib',)),
+    ('system32/shell32.dll', 153): ('mimetypes', ('text-x-script', 'application-x-shellscript')),
+    ('system32/shell32.dll', 154): ('mimetypes', ('application-x-sharedlib',)),
     ('system32/shell32.dll', 156): ('mimetypes', ('font-x-generic', 'application-x-font-ttf', 'font-ttf')),
     ('system32/shell32.dll', 237): ('places', ('folder-music', 'folder-sound')),
     ('system32/shell32.dll', 259): ('places', ('user-home', 'folder-home')),
@@ -92,12 +94,15 @@ ICONS = {
     ('resources/user32.dll', 102): ('status', ('dialog-question',)),
     ('resources/user32.dll', 103): ('status', ('dialog-error',)),
     ('resources/user32.dll', 104): ('status', ('dialog-information',)),
-    ('shell/shimgvw.dll', 1): ('mimetypes', ('image-x-generic', 'image-png', 'image-jpeg', 'image-gif', 'image-bmp',
-                                             'image-tiff', 'image-x-bmp')),
-    ('wmp/wmploc.dll', 472): ('mimetypes', ('audio-x-generic', 'audio-mpeg', 'audio-x-wav', 'audio-x-vorbis+ogg',
-                                            'audio-flac', 'audio-x-flac')),
-    ('wmp/wmploc.dll', 473): ('mimetypes', ('video-x-generic', 'video-mp4', 'video-x-matroska', 'video-webm',
-                                            'video-x-msvideo')),
+    # shimgvw.dll's icons by XP's DefaultIcon indexes: Paint.Picture 1, pngfile and giffile 2, jpegfile 3, TIFImage 4
+    ('shell/shimgvw.dll', 2): ('mimetypes', ('image-bmp', 'image-x-bmp')),
+    ('shell/shimgvw.dll', 3): ('mimetypes', ('image-x-generic', 'image-png', 'image-gif', 'image-x-wmf', 'image-x-emf')),
+    ('shell/shimgvw.dll', 4): ('mimetypes', ('image-jpeg',)),
+    ('shell/shimgvw.dll', 5): ('mimetypes', ('image-tiff',)),
+    # mp3file, soundrec, WMAFile, avifile, mpegfile and WMVFile all have wmplayer.exe's icon 120
+    ('wmp/wmplayer.exe', 120): ('mimetypes', ('audio-x-generic', 'audio-mpeg', 'audio-x-wav', 'audio-x-vorbis+ogg',
+                                              'audio-flac', 'audio-x-flac', 'video-x-generic', 'video-mp4',
+                                              'video-x-matroska', 'video-webm', 'video-x-msvideo')),
     ('wmp/wmploc.dll', 102): ('apps', ('multimedia-player', 'applications-multimedia')),
     ('filetypes/zipfldr.dll', 101): ('mimetypes', ('application-zip', 'package-x-generic', 'application-x-archive',
                                                    'application-x-compressed-tar', 'application-x-7z-compressed',

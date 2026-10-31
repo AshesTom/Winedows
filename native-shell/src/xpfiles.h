@@ -32,10 +32,8 @@ QImage icon(const w4w::PeResources &pe, int group, int size);
 QImage icon(const w4w::PeResources &pe, const QString &group, int size);
 std::optional<w4w::PeResources> resources(const QString &path);
 
-// A "Tahoma, 8, Bold" of a style, its size in points at DPI, hinted as Windows
-// hints it, and smoothed only at the sizes where the font's gasp table asks
-// for it, as XP's Standard smoothing does (Tahoma above 16 pixels, Trebuchet
-// MS above 11).
+// A theme's family, point size and style, fully hinted and monochrome at
+// every size: XP with font smoothing disabled.
 QFont themeFont(const QString &spec, int dpi);
 
 } // namespace xpfiles

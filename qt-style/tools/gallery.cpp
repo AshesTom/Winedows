@@ -205,8 +205,8 @@ static QImage statesSheet(QStyle *style)
 
 int main(int argc, char **argv)
 {
-    QApplication::setStyle(new w4w::XpStyle);
     QApplication app(argc, argv);
+    QApplication::setStyle(new w4w::XpStyle);
     QString out;
     const QStringList args = app.arguments();
     if (const int i = args.indexOf(QStringLiteral("--states")); i >= 0 && i + 1 < args.size())

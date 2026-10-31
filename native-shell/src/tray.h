@@ -9,7 +9,9 @@
 #include <QImage>
 #include <QList>
 #include <QObject>
+#include <functional>
 
+class Balloons;
 class QMenu;
 class SystemIcons;
 
@@ -28,6 +30,11 @@ public:
     Tray(const QString &ipc, int iconSize);
     const QList<TrayIcon> &icons() const { return m_shown; }
     void click(quint32 id, const char *op, QPoint at);
+    Balloons *balloons() const { return m_balloons; }
+    // Icons of the shell's own services (the Security Center, the notifications), after the
+    // applications' and before XP's system icons. CLICK says whether it took a click.
+    using ClickHandler = std::function<bool(quint32 id, const char *op, QPoint at)>;
+    void setOwnIcons(QObject *owner, const QList<TrayIcon> &icons, ClickHandler click);
 
 Q_SIGNALS:
     void changed();
@@ -43,11 +50,18 @@ private:
     void showMenu(quint32 id, const QStringList &lines);
     void command(const QByteArray &line);
     void showAll();
+    void readBalloons();
 
+    struct OwnIcons { QObject *owner; QList<TrayIcon> icons; ClickHandler click; };
     QDir m_ipc;
     QFileSystemWatcher m_watcher;
     QList<TrayIcon> m_icons, m_shown;
+    QList<OwnIcons> m_own;
     SystemIcons *m_system = nullptr;
+    Balloons *m_balloons = nullptr;
+    // The applications' balloons by their icons: the last serial of balloon-ID.tsv, and the balloon shown for it
+    QHash<quint32, qint64> m_balloonSerials;
+    QHash<quint32, quint64> m_balloonsShown;
     QHash<quint32, int> m_menusShown;
     QByteArray m_list;
     int m_shellKeys = 0, m_commands = 0;

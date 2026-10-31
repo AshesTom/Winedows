@@ -13,6 +13,9 @@ Files (all atomically renamed in the IPC directory):
   or N (needs attention); passive items are left out.
   XEmbed icons share the IDs; their menus are the applications' own.
 - tray-ID.argb: W4I1 icon at the size the proxy asks for in tray-size.
+- balloon-ID.tsv: "SERIAL TAB TIMEOUT TAB TITLE TAB TEXT", an XEmbed icon's
+  balloon message (_NET_SYSTEM_TRAY_BEGIN_MESSAGE), its line breaks as \\n;
+  a newer serial with no text takes it back (CANCEL_MESSAGE).
 - menu-ID.tsv: "SEQ" then "depth TAB item TAB flags TAB label" per entry;
   flags are any of s (separator), d (disabled), c (checked), r (radio).
 - from the proxy, *.tray: "activate ID X Y", "secondary ID X Y",
@@ -51,6 +54,10 @@ WATCHER_XML = '''<node><interface name="org.kde.StatusNotifierWatcher">
 MAX_ITEMS = 64
 MAX_MENU = 256
 SYSTEM_TRAY_REQUEST_DOCK = 0
+SYSTEM_TRAY_BEGIN_MESSAGE = 1
+SYSTEM_TRAY_CANCEL_MESSAGE = 2
+# A balloon message's text, at most (the specification sets no bound)
+MAX_MESSAGE = 4096
 XEMBED_EMBEDDED_NOTIFY = 0
 XEMBED_MAPPED = 1
 # A window of the default depth has no alpha. It is shown on this colour,
@@ -268,6 +275,9 @@ class Embedded:
         self.frame.map()
         self.mapped = None
         self.title = ''
+        # The balloon message being received: [id, timeout, length, bytes], and the one shown
+        self.message = None
+        self.shown_message = None
         self.info()
         self.name()
 
@@ -285,10 +295,37 @@ class Embedded:
             except error.XError:
                 pass
         self.frame.destroy()
-        try:
-            (self.tray.host.ipc / f'tray-{self.id}.argb').unlink()
-        except FileNotFoundError:
-            pass
+        for name in (f'tray-{self.id}.argb', f'balloon-{self.id}.tsv'):
+            try:
+                (self.tray.host.ipc / name).unlink()
+            except FileNotFoundError:
+                pass
+
+    def begin_message(self, timeout, length, ident):
+        self.message = [ident, timeout, min(length, MAX_MESSAGE), b''] if length > 0 else None
+
+    def message_data(self, data):
+        if not self.message:
+            return
+        ident, timeout, length, text = self.message
+        text += bytes(data)[:length - len(text)]
+        self.message[3] = text
+        if len(text) >= length:
+            self.message = None
+            self.shown_message = ident
+            self.write_balloon(timeout, text.decode('utf-8', 'replace'))
+
+    def cancel_message(self, ident):
+        if self.shown_message == ident:
+            self.shown_message = None
+            self.write_balloon(0, '')
+
+    def write_balloon(self, timeout, text):
+        """XEmbed balloons have no title; the shell shows the text alone."""
+        text = text.replace('\t', ' ').replace('\r', '').strip('\0').replace('\n', '\\n')
+        self.tray.host.balloons += 1
+        write_atomic(self.tray.host.ipc / f'balloon-{self.id}.tsv',
+                     f'{self.tray.host.balloons}\t{timeout}\t\t{text}\n'.encode())
 
     def info(self):
         prop = self.window.get_full_property(self.tray.atom('_XEMBED_INFO'), X.AnyPropertyType)
@@ -499,6 +536,17 @@ class XEmbedTray:
         if e.type == X.ClientMessage and e.window == self.window:
             if e.client_type == self.atom('_NET_SYSTEM_TRAY_OPCODE') and e.data[1][1] == SYSTEM_TRAY_REQUEST_DOCK:
                 self.dock(e.data[1][2])
+        elif e.type == X.ClientMessage and e.window.id in self.icons:
+            # Balloon messages name the icon's window and come to the tray's.
+            icon = self.icons[e.window.id]
+            if e.client_type == self.atom('_NET_SYSTEM_TRAY_OPCODE') and e.data[0] == 32:
+                op, data = e.data[1][1], e.data[1]
+                if op == SYSTEM_TRAY_BEGIN_MESSAGE:
+                    icon.begin_message(data[2], data[3], data[4])
+                elif op == SYSTEM_TRAY_CANCEL_MESSAGE:
+                    icon.cancel_message(data[2])
+            elif e.client_type == self.atom('_NET_SYSTEM_TRAY_MESSAGE_DATA') and e.data[0] == 8:
+                icon.message_data(e.data[1])
         elif e.type == self.damage_event:
             icon = self.icons.get(e.drawable.id if hasattr(e.drawable, 'id') else e.drawable)
             if icon:
@@ -567,6 +615,8 @@ class Host:
         self.desktop = None
         self.ids = 0
         self.tsv = None
+        # Balloon files' serials: newer than any of an earlier tray host's in this directory
+        self.balloons = int(time.time())
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION)
         self.loop = GLib.MainLoop()
         self.monitor = Gio.File.new_for_path(str(ipc)).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)

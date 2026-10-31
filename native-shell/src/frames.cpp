@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "frames.h"
+#include "fontpolicy.h"
 
 #include "ipcfile.h"
 #include "x11.h"
@@ -76,7 +77,8 @@ QRect frameButtonRect(FrameButton button, const QRect &rect, const FrameStyle &s
         const int step = button == FrameButton::Close ? 2 : button == FrameButton::Maximize ? 2 + width + 2 : 2 + 2 * width + 2;
         return QRect(rect.right() + 1 - style.border - step - width + 2, rect.y() + style.border + 1, width, height);
     }
-    const int side = style.top - 9;
+    // SM_CYSIZE - 4: the caption bar's buttons, the same with either frame
+    const int side = style.top - style.border - 5;
     QSize offset(-25, 5);
     w4w::parseSize(style.renderer->property(windowPart(buttonName(button, maximized), 1), QStringLiteral("offset")).value_or(QString()), &offset);
     // A maximized frame's edges are off the screen; its buttons stay 2 pixels inside it.
@@ -90,9 +92,15 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
     const QRect caption(rect.x(), rect.y(), rect.width(), top);
     QFont font = style.captionFont;
     const FrameButton buttons[] = {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize, FrameButton::Help};
-    const int titleEnd = frameButtonRect(FrameButton::Minimize, rect, style, look.maximized).left() - 4;
-    const int titleX = look.icon.isNull() ? ICON_X : ICON_X + ICON_SIZE + TITLE_GAP;
-    const QRect titleRect(rect.x() + titleX, rect.y(), qMax(0, titleEnd - rect.x() - titleX), top);
+    int titleEnd = rect.right() - border - 4;
+    for (FrameButton button : buttons)
+        if (shown(button, look))
+            titleEnd = qMin(titleEnd, frameButtonRect(button, rect, style, look.maximized).left() - 4);
+    // Without an icon (a dialog) XP starts the title 4 inside the frame, and 2 pixels lower than with one
+    // (its System Properties and message boxes, against the folder windows)
+    const int titleX = look.icon.isNull() ? border + 4 : ICON_X + ICON_SIZE + TITLE_GAP;
+    const int titleDrop = look.icon.isNull() ? 2 : 0;
+    const QRect titleRect(rect.x() + titleX, rect.y() + titleDrop, qMax(0, titleEnd - rect.x() - titleX), top);
     const QString title = QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleRect.width());
     painter.setFont(font);
 
@@ -154,6 +162,7 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
                      QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleEnd - bar.x() - classicTitleX));
     QFont glyphs(QStringLiteral("Marlett"));
     glyphs.setPixelSize(bar.height() - 7);
+    w4w::unsmoothedFont(glyphs, glyphs.pixelSize());
     for (FrameButton button : buttons) {
         if (!shown(button, look))
             continue;
@@ -218,17 +227,28 @@ FrameWindow::FrameWindow(FrameManager *manager, quint32 client, const QString &t
     x11::setProperty32(winId(), "_WIN4WINE_HWND", XCB_ATOM_CARDINAL, {quint32(winId())});
 }
 
+// XP's frame: a window that cannot be sized has the dialog frame, SM_CXFIXEDFRAME's 3 pixels
+// instead of the sizing border's 4, its caption bar the same height
+FrameStyle FrameWindow::style() const
+{
+    FrameStyle style = ShellTheme::instance()->frame();
+    if (m_fixedSize) {
+        const int fixed = ShellTheme::instance()->scaled(3);
+        style.top -= style.border - fixed;
+        style.border = fixed;
+    }
+    return style;
+}
+
 void FrameWindow::readHints()
 {
     // WM_NORMAL_HINTS: flags, 4 unused, the minimum size, the maximum size
     const QList<quint32> hints = x11::property32(m_client, XCB_ATOM_WM_NORMAL_HINTS);
-    const FrameStyle &style = ShellTheme::instance()->frame();
+    m_fixedSize = hints.size() >= 9 && (hints[0] & 16) && (hints[0] & 32) && hints[5] == hints[7] && hints[6] == hints[8];
+    const FrameStyle style = this->style();
     m_minimum = QSize(qMax(112, 2 * style.border + 1), style.top + style.border + 1);
-    if (hints.size() >= 9) {
-        if (hints[0] & 16)
-            m_minimum = m_minimum.expandedTo(QSize(int(hints[5]) + 2 * style.border, int(hints[6]) + style.top + style.border));
-        m_fixedSize = (hints[0] & 16) && (hints[0] & 32) && hints[5] == hints[7] && hints[6] == hints[8];
-    }
+    if (hints.size() >= 9 && (hints[0] & 16))
+        m_minimum = m_minimum.expandedTo(QSize(int(hints[5]) + 2 * style.border, int(hints[6]) + style.top + style.border));
     // XP's dialogs have only Close, and "?" when they ask for it (Qt's WindowContextHelpButtonHint).
     bool dialog = false;
     for (quint32 type : x11::property32(m_client, x11::atom("_NET_WM_WINDOW_TYPE")))
@@ -263,7 +283,7 @@ void FrameWindow::setMaximized(bool maximized)
     if (maximized == m_look.maximized)
         return;
     m_look.maximized = maximized;
-    setMask(frameShape(size(), ShellTheme::instance()->frame(), m_look.maximized));
+    setMask(frameShape(size(), style(), m_look.maximized));
     update();
 }
 
@@ -276,7 +296,7 @@ void FrameWindow::setIcon(const QImage &icon)
 void FrameWindow::themeChanged()
 {
     readHints();
-    setMask(frameShape(size(), ShellTheme::instance()->frame(), m_look.maximized));
+    setMask(frameShape(size(), style(), m_look.maximized));
     update();
 }
 
@@ -284,7 +304,7 @@ void FrameWindow::place(const QRect &client)
 {
     if (busy())
         return;
-    const FrameStyle &style = ShellTheme::instance()->frame();
+    const FrameStyle style = this->style();
     const QRect wanted = client.adjusted(-style.border, -style.top, style.border, style.border);
     if (wanted != geometry())
         setGeometry(wanted);
@@ -293,17 +313,17 @@ void FrameWindow::place(const QRect &client)
 void FrameWindow::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
-    drawFrame(painter, rect(), ShellTheme::instance()->frame(), m_look);
+    drawFrame(painter, rect(), style(), m_look);
 }
 
 void FrameWindow::resizeEvent(QResizeEvent *)
 {
-    setMask(frameShape(size(), ShellTheme::instance()->frame(), m_look.maximized));
+    setMask(frameShape(size(), style(), m_look.maximized));
 }
 
 FrameButton FrameWindow::buttonAt(QPoint at) const
 {
-    const FrameStyle &style = ShellTheme::instance()->frame();
+    const FrameStyle style = this->style();
     for (FrameButton button : {FrameButton::Close, FrameButton::Maximize, FrameButton::Minimize, FrameButton::Help}) {
         if (!shown(button, m_look))
             continue;
@@ -320,7 +340,7 @@ int FrameWindow::edgesAt(QPoint at) const
 {
     if (m_look.maximized || m_fixedSize)
         return 0;
-    const int border = ShellTheme::instance()->frame().border;
+    const int border = style().border;
     // The corners are 16 pixels along the frame, as XP's.
     const int corner = ShellTheme::instance()->scaled(16);
     int edges = 0;
@@ -413,7 +433,7 @@ void FrameWindow::mousePressEvent(QMouseEvent *event)
         update();
     } else if (m_edges) {
         m_drag = Drag::Left;
-    } else if (!m_look.maximized && at.y() < ShellTheme::instance()->frame().top) {
+    } else if (!m_look.maximized && at.y() < style().top) {
         m_drag = Drag::Move;
     }
 }
@@ -449,7 +469,7 @@ void FrameWindow::mouseReleaseEvent(QMouseEvent *event)
         }
     } else if (drag != Drag::None) {
         // The WM followed each step; this is for what it could not, as proxy.exe does.
-        const FrameStyle &style = ShellTheme::instance()->frame();
+        const FrameStyle style = this->style();
         m_manager->geometryCommand(m_client, geometry().adjusted(style.border, style.top, -style.border, -style.border));
     }
 }
@@ -462,7 +482,7 @@ void FrameWindow::mouseDoubleClickEvent(QMouseEvent *event)
     const FrameButton button = buttonAt(at);
     if (button == FrameButton::System) {
         m_manager->command("close", m_client);
-    } else if (button == FrameButton::None && !edgesAt(at) && m_look.canMaximize && at.y() < ShellTheme::instance()->frame().top) {
+    } else if (button == FrameButton::None && !edgesAt(at) && m_look.canMaximize && at.y() < style().top) {
         m_manager->command(m_look.maximized ? "restore" : "maximize", m_client);
     } else {
         mousePressEvent(event);
@@ -625,9 +645,9 @@ void FrameManager::readIcons()
 
 void FrameManager::framesChanged()
 {
-    const FrameStyle &style = ShellTheme::instance()->frame();
     QByteArray text;
     for (auto it = m_frames.cbegin(); it != m_frames.cend(); ++it) {
+        const FrameStyle style = it.value()->style();
         // Frame, client, the frame's four sides, maximized, minimized and how far a maximized frame goes off the screen
         text += QByteArray::number(quint32(it.value()->winId()), 16) + ' ' + QByteArray::number(it.key(), 16);
         for (int value : {style.border, style.border, style.top, style.border, int(it.value()->maximized()), 0, style.border, style.border})

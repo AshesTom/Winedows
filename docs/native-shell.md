@@ -153,3 +153,61 @@ because its menu is open.
 | Window frame | 4 on three sides, 30 on top (the style's CaptionBarHeight + 5); buttons `side = top - 9` at the style's Offset; system icon at (6, 8). Maximized: the client at the work area's top + 26, the frame's borders off the screen |
 | Start panel | 380 wide; user pane 64, bottom pane 40, the columns 190 each and at least 336 tall; places every 30 with 24-pixel icons; cascade rows 23 |
 | Desktop icons | Cells of 75 x 75 |
+
+Measured on XP's own browseui, comctl32 6.0.2600.5512, shell32 and sysdm.cpl, which the Wine prefix
+loads natively for `xp-explorer.exe` (its AppDefaults DllOverrides), captured losslessly at 1024 x 768:
+
+| Rectangle | Value |
+|---|---|
+| Folder window | 800 x 600 when nothing is saved (its bag's `WinPos1024x768`: 44,58 to 844,658) |
+| Toolbar band | 38 tall, then the band border's two lines; first button 2 in. With words: 3, picture 24, 4, words, 8. Without: 4, 24, 4. Back: 7, 24, 4, words, 7, then 13 for its arrow; Forward: 8, 24, 6, then 13. Views: 4, 24, 2, a 5 x 3 arrow, 4. Separators 6 wide, the line 2 in |
+| Address band | 22 tall, the combo box filling it; Go (shell32's bitmap 230, hot 231, 20 x 20) 2 after it, 7 from the edge |
+| Tiles, groups | Tiles 218 x 56, icon 16 in and 4 down, words 69 in; a group's words 14 in, its line 17 down, 300 long from GradientActiveCaption to white; 31 to the first tile, 12 between groups |
+| Start panel | Both columns 7 under the user pane; places' separators 5 into their 8; the body ends 7 under the last place; All Programs 36 under its line, the arrow at its own size 11 after the words (P underlined); Log Off and Turn Off are picture, 4, words, 11 apart and 10 from the edge. Set Program Access and Defaults (moricons.dll icon 114, on two lines) and Connect To (shell32 icon 175, explorer.exe string 8233) |
+| Property sheet tabs | Laid 2 inside the control, the selected one 2 wider each side; System Properties has srrstr.dll's System Restore page (dialog 11), so its tabs make XP's 4 + 3 rows |
+
+### Font rendering without smoothing
+
+The native shell and Qt widgets share `qt-style/src/fontpolicy.h`: full hinting,
+no kerning and monochrome glyphs at every UI size, including large headings.
+The themed Start button alone uses grayscale antialiasing for its Franklin
+Gothic label. Other text stays monochrome; subpixel antialiasing is disabled.
+
+XP source references (under `Source/XPSP1/NT` in the reference checkout):
+- `windows/core/ntgdi/gre/lfntobj.cxx`, around line 191: `FE_AA_ON` and the
+  requested quality gate `FO_GRAY16`; `NONANTIALIASED_QUALITY` excludes smoothing.
+- `windows/core/ntuser/kernel/rare.c`, around line 1924: `SPI_SETFONTSMOOTHING`
+  toggles `FE_AA_ON` independently of the smoothing type.
+- `shell/cpls/plus/store.cpp`, around line 390: the Effects dialog saves the
+  smoothing type and its enabled state separately. Standard smoothing and
+  smoothing disabled are different settings.
+
+Appearance's Normal, Large and Extra Large sizes supply menu, message, status
+and desktop icon fonts. The Start panel grows for larger labels. Registry
+LOGFONT heights remain device pixels when the prefix DPI differs from the host.
+`tests/native-fonts.cpp` checks that small labels and large headings have binary
+pixel coverage, with no grayscale edges or colour fringes. Build and run
+instructions are at the top of that file.
+
+### Explorer layout verification
+
+`tests/native-explorer-layout.py OUTPUT_DIR FIXTURE_DIR --verify` links a UI
+probe against the native-shell build. Run it on an isolated X11 display with
+`WIN4WINE_NATIVE_SHELL=wineless`, the extracted assets in `WIN4WINE_ASSETS`, and
+`.local/qt-style` in `QT_PLUGIN_PATH`. Its settings are isolated in a temporary
+configuration directory. It captures actual widgets and draws their outer
+frame with the shell's own `drawFrame` function.
+
+At 96 DPI with Tahoma 8, List and Details rows are 17 pixels and the report
+header is 17 pixels. List columns grow to fit names. Selection paints the name
+instead of the whole report row; losing keyboard focus uses the inactive
+selection colours. Blank icon-cell margins and blank label space are not item
+hits. The native selection marquee uses XP's alpha 70 and highlight outline.
+My Computer supports Tiles, Icons, List and Details; its report includes type,
+total capacity and free space, with numeric capacity sorting. Classic Control
+Panel uses Name and Comments instead. View changes preserve item selection.
+
+The probe checks menu targeting, multiple selection, native menu row heights,
+report geometry, virtual-folder views, the marquee pixels, and caption space
+when min/max buttons are absent. The formulas are compared to XP's
+`comctl32/v6/listview.c`, `lvlist.c`, `lvrept.c`, `lvtile.c` and `header.c`.

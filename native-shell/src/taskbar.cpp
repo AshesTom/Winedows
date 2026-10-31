@@ -3,6 +3,7 @@
 
 #include <QTimer>
 
+#include "balloon.h"
 #include "filebrowser.h"
 #include "sessiondialog.h"
 #include "sounds.h"
@@ -105,6 +106,13 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         relayout();
         update();
     });
+    m_tray->balloons()->setLocator([this](quint32 id) {
+        const QList<TrayIcon> &icons = m_tray->icons();
+        for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
+            if (icons[i].id == id && isVisible())
+                return QRect(mapToGlobal(m_trayIconRects[i].topLeft()), m_trayIconRects[i].size());
+        return QRect();
+    });
     connect(m_tray, &Tray::startRequested, this, &Taskbar::showStartMenu);
     connect(m_tray, &Tray::hotkey, this, [](int key) {
         // XP's hotkeys with the Windows key, by their virtual keys
@@ -133,9 +141,11 @@ void Taskbar::themeChanged()
         return theme()->font(spec);
     };
     m_startFont = renderer ? font(START_BUTTON, "Franklin Gothic Medium, 14, italic") : theme()->font(QStringLiteral("Tahoma, 8, bold"));
+    if (renderer)
+        m_startFont.setStyleStrategy(QFont::StyleStrategy(QFont::PreferAntialias | QFont::NoSubpixelAntialias));
     m_taskFont = font(TASK_TOOLBAR, "Tahoma, 8");
+    // The pressed (active) button's text is not bold on XP either.
     m_activeTaskFont = m_taskFont;
-    m_activeTaskFont.setBold(true);
     m_clockFont = font(CLOCK, "Tahoma, 8");
     placeOnScreen();
     update();
@@ -221,6 +231,7 @@ void Taskbar::relayout()
             rect = QRect(bandStart + i * buttonWidth, theme()->scaled(4), buttonWidth - theme()->scaled(3), height() - theme()->scaled(6));
         m_taskRects.append(rect.right() < m_trayRect.x() ? rect : QRect());
     }
+    m_tray->balloons()->iconsChanged();
 }
 
 void Taskbar::drawShadowedText(QPainter &painter, const QRect &rect, const QString &text)

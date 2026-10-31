@@ -8,14 +8,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets DBus)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-xkb)
+pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-xkb xcb-screensaver)
 
 add_executable(explorer
     src/main.cpp
     src/acs.cpp src/acs.h
     src/applets.cpp src/applets.h
+    src/balloon.cpp src/balloon.h
     src/console.cpp src/console.h
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
@@ -34,7 +35,9 @@ add_executable(explorer
     src/startmenu.cpp src/startmenu.h
     src/theme.cpp src/theme.h
     src/xpdialog.cpp src/xpdialog.h
+    src/notifications.cpp src/notifications.h
     src/programs.cpp src/programs.h
+    src/securitycenter.cpp src/securitycenter.h src/securitywindow.cpp
     src/systemicons.cpp src/systemicons.h
     src/taskbar.cpp src/taskbar.h
     src/tray.cpp src/tray.h
@@ -45,7 +48,7 @@ add_executable(explorer
     ../qt-style/src/msstyles.cpp ../qt-style/src/msstyles.h
     ../qt-style/src/session.cpp ../qt-style/src/session.h)
 target_include_directories(explorer PRIVATE ../qt-style/src)
-target_link_libraries(explorer PRIVATE Qt6::Widgets PkgConfig::XCB)
+target_link_libraries(explorer PRIVATE Qt6::Widgets Qt6::DBus PkgConfig::XCB)
 target_compile_options(explorer PRIVATE -Wall -Wextra)
 # Web pages inside a folder window, as XP has; without the module they open in the desktop's browser.
 find_package(Qt6 QUIET COMPONENTS WebEngineWidgets)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // The Control Panel's applets, as Linux dialogs: System, Date and Time, Sounds,
-// Mouse, Keyboard, User Accounts, Folder Options, Add or Remove Programs, Network.
+// Mouse, Keyboard, User Accounts, Folder Options, Add or Remove Programs, Network,
+// Security Center.
 #pragma once
 
 #include <QString>

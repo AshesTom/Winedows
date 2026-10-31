@@ -42,20 +42,24 @@ FILES = {
 ICON_FILES = {
     'mydocs.dll': 'system32', 'desk.cpl': 'cpl', 'msiexec.exe': 'filetypes', 'zipfldr.dll': 'filetypes',
     'iexplore.exe': 'ie', 'main.cpl': 'keyboard', 'user32.dll': 'resources', 'shimgvw.dll': 'shell',
-    'netshell.dll': 'tray', 'sndvol32.exe': 'tray', 'wmploc.dll': 'wmp',
+    'netshell.dll': 'tray', 'sndvol32.exe': 'tray', 'wmploc.dll': 'wmp', 'wmplayer.exe': 'wmp',
     # The folder windows' flag, the Common Tasks pane in each colour scheme, and the Control Panel's applets
     'browseui.dll': 'system32', 'blue_ss.dll': 'themes/Luna/Shell/NormalColor', 'home_ss.dll': 'themes/Luna/Shell/Homestead',
     'metal_ss.dll': 'themes/Luna/Shell/Metallic', 'timedate.cpl': 'cpl', 'mmsys.cpl': 'cpl', 'sysdm.cpl': 'cpl',
     'nusrmgr.cpl': 'cpl', 'appwiz.cpl': 'cpl', 'ncpa.cpl': 'cpl',
+    # The Start menu's Set Program Access and Defaults picture
+    'moricons.dll': 'system32',
     # XP's Welcome, log off and Turn Off screens (greeter/welcome.py)
     'logonui.exe': 'system32', 'msgina.dll': 'system32', 'winlogon.exe': 'system32', 'msgothic.ttc': 'fonts',
     **dict.fromkeys(('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf', 'micross.ttf'), 'fonts'),
     # XP's Command Prompt (session/xp_cmd.py): its raster font and its icon
     'vgaoem.fon': 'fonts', 'cmd.exe': 'system32',
     # System Properties' other pages
-    'netid.dll': 'cpl', 'wuaucpl.cpl': 'cpl', 'remotepg.dll': 'cpl',
+    'netid.dll': 'cpl', 'wuaucpl.cpl': 'cpl', 'remotepg.dll': 'cpl', 'srrstr.dll': 'cpl',
     # The Search Companion: its icons and words, its steps, and its character
     'srchui.dll': 'srchasst', 'rover.acs': 'srchasst/chars',
+    # The Security Center: its notification icon and balloon, and its window
+    'wscntfy.exe': 'security', 'xpsp2res.dll': 'security', 'wscui.cpl': 'security', 'inetcpl.cpl': 'security',
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
                      'lcldocs.xml', 'lclmm.xml', 'lclmode.xml', 'lclrfine.xml', 'lclsrch.xml'), 'srchasst/mui'),
 }

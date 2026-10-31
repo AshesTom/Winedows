@@ -43,6 +43,7 @@ public:
     const QString &title() const { return m_look.title; }
     bool maximized() const { return m_look.maximized; }
     bool busy() const { return m_drag != Drag::None; }
+    FrameStyle style() const;
     void setTitle(const QString &title);
     void setActive(bool active);
     void setMaximized(bool maximized);
