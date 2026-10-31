@@ -31,6 +31,7 @@ add_executable(explorer
     src/desktopicons.cpp src/desktopicons.h
     src/displayproperties.cpp src/displayproperties.h
     src/frames.cpp src/frames.h
+    src/captionanimation.cpp src/captionanimation.h
     src/ipcfile.h
     src/startmenu.cpp src/startmenu.h
     src/theme.cpp src/theme.h

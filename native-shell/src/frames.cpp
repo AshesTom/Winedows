@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "frames.h"
+
+#include "captionanimation.h"
 #include "fontpolicy.h"
 
 #include "ipcfile.h"
@@ -582,12 +584,23 @@ void FrameManager::readWindows()
         }
         frame->setTitle(title);
         frame->setActive(fields[2] == "1");
+        // XP's caption flies to the taskbar once the window is gone, and back before it is there again.
+        const bool hidden = fields[1] == "1";
+        if (m_hidden.contains(client) && m_hidden.value(client) != hidden && m_buttonRect) {
+            const QRect button = m_buttonRect(client);
+            if (hidden)
+                captionanimation::run(frame->geometry(), button, frame->title(), frame->icon());
+            else
+                captionanimation::run(button, frame->geometry(), frame->title(), frame->icon());
+        }
+        m_hidden.insert(client, hidden);
     }
     for (auto it = m_frames.begin(); it != m_frames.end();) {
         if (seen.contains(it.key())) {
             ++it;
         } else {
             m_iconTimes.remove(it.key());
+            m_hidden.remove(it.key());
             delete it.value();
             it = m_frames.erase(it);
         }
@@ -611,11 +624,16 @@ void FrameManager::readGeometry()
         if (!frame)
             continue;
         const bool maximized = fields[5] == "1";
-        if (frame->maximized() != maximized) {
+        const QRect before = frame->geometry();
+        const bool toggled = frame->maximized() != maximized;
+        if (toggled) {
             frame->setMaximized(maximized);
             changed = true;
         }
         frame->place(QRect(fields[1].toInt(), fields[2].toInt(), fields[3].toInt(), fields[4].toInt()));
+        // Maximizing and restoring: the caption from the old place to the new
+        if (toggled && frame->isVisible())
+            captionanimation::run(before, frame->geometry(), frame->title(), frame->icon());
     }
     if (changed)
         framesChanged();

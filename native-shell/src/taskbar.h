@@ -23,6 +23,8 @@ class Taskbar : public QWidget
 public:
     Taskbar(WindowList *windows, Tray *tray);
     void placeOnScreen();
+    // A window's button on the screen; null when it has none shown
+    QRect buttonRect(quint32 window) const;
 
 public Q_SLOTS:
     void showStartMenu();

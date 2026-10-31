@@ -26,10 +26,11 @@ QString explorerString(int id, const char *fallback);
 // RT_STRING and RT_BITMAP of a PE file's resources.
 QString string(const w4w::PeResources &pe, int id);
 QImage bitmap(const w4w::PeResources &pe, int id);
-// The image of icon group GROUP closest to SIZE at the most colours; null if there is none.
-QImage icon(const w4w::PeResources &pe, int group, int size);
+// The image of icon group GROUP closest to SIZE at the most colours (up to MAX_BITS per pixel);
+// null if there is none.
+QImage icon(const w4w::PeResources &pe, int group, int size, int maxBits = 32);
 // The same for a group by its name, as a number or as some files name them (IDI_APPICON).
-QImage icon(const w4w::PeResources &pe, const QString &group, int size);
+QImage icon(const w4w::PeResources &pe, const QString &group, int size, int maxBits = 32);
 std::optional<w4w::PeResources> resources(const QString &path);
 
 // A theme's family, point size and style, fully hinted and monochrome at

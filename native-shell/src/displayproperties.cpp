@@ -450,10 +450,10 @@ QWidget *DisplayProperties::themesPage()
             m_choice.tile = false;
             m_choice.background = QColor(0, 78, 152);
         } else if (kind == QLatin1String("classic")) {
-            // XP's Windows Classic theme has no picture.
+            // XP's Windows Classic theme has no picture; its scheme is Windows Standard.
             m_choice.style.clear();
-            m_choice.colour = QStringLiteral("NormalColor");
-            m_choice.size = QStringLiteral("NormalSize");
+            m_choice.colour = QStringLiteral("Windows Standard");
+            m_choice.size = text(STRING_NORMAL, "Normal");
             m_choice.wallpaper.clear();
             m_choice.background = QColor(58, 110, 165);
         } else if (kind.endsWith(QLatin1String(".msstyles"))) {
@@ -580,22 +580,44 @@ QWidget *DisplayProperties::appearancePage()
         m_size = new QComboBox(page);
     if (!m_appearancePreview)
         m_appearancePreview = new ThemePreview(page);
-    connect(m_style, &QComboBox::activated, this, [this] {
+    // A classic scheme also gives the desktop its colour, as on XP
+    const auto takeScheme = [this] {
+        if (const ClassicScheme *scheme = m_choice.style.isEmpty() ? ShellTheme::classicScheme(m_choice) : nullptr)
+            for (const auto &[name, colour] : scheme->colours)
+                if (name == QLatin1String("background"))
+                    m_choice.background = colour;
+    };
+    connect(m_style, &QComboBox::activated, this, [this, takeScheme] {
         m_choice.style = m_style->currentData().toString();
         const StyleInfo info = styleInfo(m_choice.style);
         if (!info.colours.isEmpty())
             m_choice.colour = info.colours.first().first;
         if (!info.sizes.isEmpty())
             m_choice.size = info.sizes.first().first;
+        if (m_choice.style.isEmpty()) {
+            // XP turns to the scheme its Windows Classic theme has: Windows Standard
+            m_choice.colour = QStringLiteral("Windows Standard");
+            m_choice.size = text(STRING_NORMAL, "Normal");
+            takeScheme();
+        }
         fillAppearance();
         changed();
     });
-    connect(m_colour, &QComboBox::activated, this, [this] {
+    connect(m_colour, &QComboBox::activated, this, [this, takeScheme] {
         m_choice.colour = m_colour->currentData().toString();
+        if (m_choice.style.isEmpty()) {
+            // The same size if the scheme has it, else its first
+            if (!ShellTheme::classicScheme(m_choice) || ShellTheme::classicScheme(m_choice)->size != m_choice.size)
+                if (const ClassicScheme *scheme = ShellTheme::classicScheme({QString(), m_choice.colour, QString()}))
+                    m_choice.size = scheme->size;
+            takeScheme();
+            fillAppearance();
+        }
         changed();
     });
-    connect(m_size, &QComboBox::activated, this, [this] {
+    connect(m_size, &QComboBox::activated, this, [this, takeScheme] {
         m_choice.size = m_size->currentData().toString();
+        takeScheme();
         changed();
     });
     return page;
@@ -772,7 +794,21 @@ void DisplayProperties::fillAppearance()
     m_style->setCurrentIndex(qMax(0, m_style->findData(m_choice.style)));
     m_colour->clear();
     m_size->clear();
-    if (m_choice.style.isEmpty()) {
+    if (m_choice.style.isEmpty() && !ShellTheme::classicSchemes().isEmpty()) {
+        // XP's colour schemes, and the sizes of the chosen one (Normal, Large, Extra Large, as it has them)
+        const ClassicScheme *current = ShellTheme::classicScheme(m_choice);
+        for (const ClassicScheme &scheme : ShellTheme::classicSchemes())
+            if (m_colour->findData(scheme.name) < 0)
+                m_colour->addItem(scheme.name, scheme.name);
+        for (int id : {STRING_NORMAL, STRING_NORMAL + 1, STRING_NORMAL + 2})
+            for (const ClassicScheme &scheme : ShellTheme::classicSchemes())
+                if (current && scheme.name == current->name && scheme.size == text(id, ""))
+                    m_size->addItem(scheme.size, scheme.size);
+        if (current) {
+            m_choice.colour = current->name;
+            m_choice.size = current->size;
+        }
+    } else if (m_choice.style.isEmpty()) {
         m_colour->addItem(text(STRING_WINDOWS_CLASSIC, "Windows Classic"), QStringLiteral("NormalColor"));
         m_size->addItem(text(STRING_NORMAL, "Normal"), QStringLiteral("NormalSize"));
     } else {

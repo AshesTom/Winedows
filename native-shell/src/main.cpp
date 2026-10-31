@@ -154,6 +154,8 @@ int main(int argc, char **argv)
     std::unique_ptr<FrameManager> frames;
     if (parser.isSet(QStringLiteral("frames")) && !ipc.isEmpty())
         frames = std::make_unique<FrameManager>(ipc);
+    if (frames)
+        frames->setButtonRect([&taskbar](quint32 window) { return taskbar.buttonRect(window); });
 
     WindowsKey windowsKey(&taskbar);
     app.installEventFilter(&windowsKey);

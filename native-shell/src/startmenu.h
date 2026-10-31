@@ -82,6 +82,8 @@ private:
     void build(QPoint bottomLeft);
     QRect moreArrow() const;
     QRect moreBand() const;
+    void paintClassic(QPainter &painter);
+    static void etch(QPainter &painter, const QRect &rect);
     void addLeft(int &y, const QString &text, const QString &subtitle, const QIcon &icon, std::function<void()> action, bool big);
     void addPlace(int &y, int iconId, const QString &text, bool bold, std::function<void()> action, bool arrow = false);
     void paintPane(QPainter &painter, const char *part, const QRect &rect, const QColor &fallback);

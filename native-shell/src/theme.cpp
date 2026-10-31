@@ -8,6 +8,7 @@
 #include "xpfiles.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QPainter>
@@ -111,8 +112,12 @@ void ShellTheme::drawShadowedText(QPainter &painter, const QRect &rect, int flag
 
 QString ShellTheme::shellStylePath(const LookChoice &look)
 {
-    if (look.style.isEmpty())
-        return QString();
+    // Without a visual style XP's shell32 takes system32's shellstyle.dll, the same file as Luna's blue
+    // (its task pane stays blue under Windows Classic).
+    if (look.style.isEmpty()) {
+        const QString system = xpfiles::find(QStringLiteral("shellstyle.dll"));
+        return system.isEmpty() ? xpfiles::find(QStringLiteral("blue_ss.dll")) : system;
+    }
     // Beside a style that is not Luna: Shell\\NormalColor\\shellstyle.dll
     if (look.style != lunaPath()) {
         QDirIterator it(QFileInfo(look.style).absolutePath() + QStringLiteral("/Shell"), {QStringLiteral("shellstyle.dll")}, QDir::Files, QDirIterator::Subdirectories);
@@ -128,6 +133,45 @@ QString ShellTheme::shellStylePath(const LookChoice &look)
     }
     return xpfiles::find(look.colour == QLatin1String("Metallic") ? QStringLiteral("metal_ss.dll")
                          : look.colour == QLatin1String("HomeStead") ? QStringLiteral("home_ss.dll") : QStringLiteral("blue_ss.dll"));
+}
+
+const QList<ClassicScheme> &ShellTheme::classicSchemes()
+{
+    static const QList<ClassicScheme> schemes = [] {
+        QList<ClassicScheme> out;
+        QFile file(xpfiles::find(QStringLiteral("schemes.conf")));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            return out;
+        for (const QString &raw : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'))) {
+            const QString line = raw.trimmed();
+            if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']'))) {
+                const QString title = line.mid(1, line.size() - 2);
+                out.append({title.section(QStringLiteral(" | "), 0, 0), title.section(QStringLiteral(" | "), 1), {}});
+            } else if (const qsizetype equals = line.indexOf(QLatin1Char('=')); equals > 0 && !out.isEmpty()) {
+                const QStringList rgb = line.mid(equals + 1).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                if (rgb.size() == 3)
+                    out.last().colours.append({line.left(equals), QColor(rgb[0].toInt(), rgb[1].toInt(), rgb[2].toInt())});
+            }
+        }
+        return out;
+    }();
+    return schemes;
+}
+
+const ClassicScheme *ShellTheme::classicScheme(const LookChoice &choice)
+{
+    const QList<ClassicScheme> &schemes = classicSchemes();
+    const auto find = [&](const QString &name, const QString &size) -> const ClassicScheme * {
+        for (const ClassicScheme &scheme : schemes)
+            if (scheme.name == name && (size.isEmpty() || scheme.size == size))
+                return &scheme;
+        return nullptr;
+    };
+    if (const ClassicScheme *scheme = find(choice.colour, choice.size))
+        return scheme;
+    if (const ClassicScheme *scheme = find(choice.colour, QString()))
+        return scheme;
+    return schemes.isEmpty() ? nullptr : find(QStringLiteral("Windows Standard"), QString());
 }
 
 QString ShellTheme::lunaPath()
@@ -169,6 +213,11 @@ void ShellTheme::write(const LookChoice &choice)
                              .arg(choice.background.green())
                              .arg(choice.background.blue());
     file.write(text.toUtf8());
+    // Windows Classic: its scheme's colours beside its name, for every program that reads this file
+    if (choice.style.isEmpty())
+        if (const ClassicScheme *scheme = classicScheme(choice))
+            for (const auto &[name, colour] : scheme->colours)
+                file.write(QStringLiteral("classic.%1=%2 %3 %4\n").arg(name).arg(colour.red()).arg(colour.green()).arg(colour.blue()).toUtf8());
     file.commit();
 }
 
@@ -196,17 +245,24 @@ FrameStyle ShellTheme::frameStyleFor(const LookChoice &choice, int dpi)
         theme = w4w::Theme::load(choice.style, choice.colour, choice.size);
     if (theme)
         style.renderer = std::make_shared<w4w::Renderer>(theme, dpi);
-    style.activeCaption = metric(theme, "activecaption");
-    style.activeGradient = metric(theme, "gradientactivecaption");
-    style.inactiveCaption = metric(theme, "inactivecaption");
-    style.inactiveGradient = metric(theme, "gradientinactivecaption");
-    style.activeText = metric(theme, "captiontext");
-    style.inactiveText = metric(theme, "inactivecaptiontext");
-    style.face = metric(theme, "btnface");
-    style.highlight = metric(theme, "highlight");
-    style.shadow = metric(theme, "btnshadow");
-    style.darkShadow = metric(theme, "dkshadow3d");
-    style.light = metric(theme, "btnhighlight");
+    // Windows Classic: the chosen scheme's colours
+    QHash<QString, QColor> scheme;
+    if (!theme)
+        if (const ClassicScheme *chosen = classicScheme(choice))
+            for (const auto &[name, colour] : chosen->colours)
+                scheme.insert(name, colour);
+    const auto colour = [&](const char *name) { return scheme.value(QLatin1String(name), metric(theme, name)); };
+    style.activeCaption = colour("activecaption");
+    style.activeGradient = colour("gradientactivecaption");
+    style.inactiveCaption = colour("inactivecaption");
+    style.inactiveGradient = colour("gradientinactivecaption");
+    style.activeText = colour("captiontext");
+    style.inactiveText = colour("inactivecaptiontext");
+    style.face = colour("btnface");
+    style.highlight = colour("highlight");
+    style.shadow = colour("btnshadow");
+    style.darkShadow = colour("dkshadow3d");
+    style.light = colour("btnhighlight");
     if (theme) {
         style.captionFont = xpfiles::themeFont(theme->sysMetric(QStringLiteral("captionfont")).value_or(QStringLiteral("Trebuchet MS, 10, bold")), dpi);
         // The art's rows over the caption: 30 with the normal size's 25.
@@ -241,6 +297,31 @@ void ShellTheme::reload()
     }
     for (auto it = look.colours.cbegin(); it != look.colours.cend(); ++it)
         m_system.insert(it.key(), it.value());
+    // The session's colours by their registry names, under the names this shell asks for
+    const std::pair<const char *, const char *> names[] = {
+        {"buttonface", "btnface"}, {"hilight", "highlight"}, {"hilighttext", "highlighttext"}, {"buttonshadow", "btnshadow"},
+        {"buttondkshadow", "dkshadow3d"}, {"buttonlight", "light3d"}, {"buttonhilight", "btnhighlight"},
+        {"activetitle", "activecaption"}, {"gradientactivetitle", "gradientactivecaption"}, {"inactivetitle", "inactivecaption"},
+        {"gradientinactivetitle", "gradientinactivecaption"}, {"titletext", "captiontext"}, {"inactivetitletext", "inactivecaptiontext"},
+        {"buttontext", "btntext"}, {"infowindow", "infobk"},
+    };
+    for (const auto &[registry, metric] : names)
+        if (look.colours.contains(QLatin1String(registry)))
+            m_system.insert(QLatin1String(metric), look.colours.value(QLatin1String(registry)));
+    if (!m_frame.renderer) {
+        // Windows Classic's frames in the scheme's colours
+        m_frame.activeCaption = system(QStringLiteral("activecaption"), m_frame.activeCaption);
+        m_frame.activeGradient = system(QStringLiteral("gradientactivecaption"), m_frame.activeGradient);
+        m_frame.inactiveCaption = system(QStringLiteral("inactivecaption"), m_frame.inactiveCaption);
+        m_frame.inactiveGradient = system(QStringLiteral("gradientinactivecaption"), m_frame.inactiveGradient);
+        m_frame.activeText = system(QStringLiteral("captiontext"), m_frame.activeText);
+        m_frame.inactiveText = system(QStringLiteral("inactivecaptiontext"), m_frame.inactiveText);
+        m_frame.face = system(QStringLiteral("btnface"), m_frame.face);
+        m_frame.highlight = system(QStringLiteral("highlight"), m_frame.highlight);
+        m_frame.shadow = system(QStringLiteral("btnshadow"), m_frame.shadow);
+        m_frame.darkShadow = system(QStringLiteral("dkshadow3d"), m_frame.darkShadow);
+        m_frame.light = system(QStringLiteral("btnhighlight"), m_frame.light);
+    }
 }
 
 QColor ShellTheme::system(const QString &name, const QColor &fallback) const

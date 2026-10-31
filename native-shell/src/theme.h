@@ -33,6 +33,14 @@ struct LookChoice
     QColor background = QColor(0, 78, 152);
 };
 
+// A colour scheme of Windows Classic in one of its sizes, as XP's Appearance page lists it (schemes.conf,
+// made by native-shell/extract.py from the user's HIVEDEF.INF and themeui.dll)
+struct ClassicScheme
+{
+    QString name, size;
+    QList<QPair<QString, QColor>> colours;   // by the style's names of the system colours, in XP's order
+};
+
 class ShellTheme : public QObject
 {
     Q_OBJECT
@@ -58,6 +66,11 @@ public:
     // The first start of a session without a prefix: XP's own default look.
     static void ensureDefaultLook();
     static QString lunaPath();
+    // XP's Classic schemes, in its order; empty without the extracted file.
+    static const QList<ClassicScheme> &classicSchemes();
+    // The scheme a classic choice names (Windows Classic's colour and size names fall back to Windows
+    // Standard, Normal, the Windows Classic theme's); null if there is none.
+    static const ClassicScheme *classicScheme(const LookChoice &choice);
     // Continuous text shadow with a padded two-pass blur and the theme's offset.
     static void drawShadowedText(QPainter &painter, const QRect &rect, int flags, const QString &text, const QColor &colour, const QColor &shadow, QPoint offset);
     // The file of the Common Tasks pane's art for a look: the style's own Shell folder, or

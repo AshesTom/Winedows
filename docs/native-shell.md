@@ -165,6 +165,16 @@ loads natively for `xp-explorer.exe` (its AppDefaults DllOverrides), captured lo
 | Tiles, groups | Tiles 218 x 56, icon 16 in and 4 down, words 69 in; a group's words 14 in, its line 17 down, 300 long from GradientActiveCaption to white; 31 to the first tile, 12 between groups |
 | Start panel | Both columns 7 under the user pane; places' separators 5 into their 8; the body ends 7 under the last place; All Programs 36 under its line, the arrow at its own size 11 after the words (P underlined); Log Off and Turn Off are picture, 4, words, 11 apart and 10 from the edge. Set Program Access and Defaults (moricons.dll icon 114, on two lines) and Connect To (shell32 icon 175, explorer.exe string 8233) |
 | Property sheet tabs | Laid 2 inside the control, the selected one 2 wider each side; System Properties has srrstr.dll's System Restore page (dialog 11), so its tabs make XP's 4 + 3 rows |
+| Start button | Luna's "Franklin Gothic Medium, 14, italic", emboldened by half a pixel (XP's word has a fifth more ink than the plain face, in its width), a pixel above the middle |
+| Classic Start panel | 380 x the body, on the Start button's top left corner (2 in, over the bar's top 4 rows): a raised edge of 2; the caption's gradient 3 in and 40 tall, the name in bold italic and no picture; both columns in the face colour, an etched line between them at 193; the places 2 under the header, 4 further in than Luna's; All Programs 32 tall in plain words with the menus' arrow 13 after them; the bottom bar 37 tall under an etched line, Log Off's and Turn Off's pictures the 16-colour ones at the VGA palette's half strength (olive, maroon) |
+| Caption animation | Minimizing, maximizing and restoring, as user32's DrawAnimatedRects(IDANI_CAPTION): 250 ms (CMS_ANIMATION), a strip one pixel shorter than SM_CYCAPTION in the classic active caption's gradient with the small icon 2 in and the title 2 after it, moving between the top left corners and stretching between the widths inside the frames' borders, to and from the taskbar button. XP has none for closing. `WIN4WINE_NO_ANIMATION` turns it off |
+
+Windows Classic's colour schemes are XP's: `native-shell/extract.py` turns the user's `HIVEDEF.INF` and `themeui.dll`
+into `schemes.conf` as XP's themeui does at first logon (`prefix/xp_schemes.py`), 22 schemes in their sizes with
+their 31 colours. Display Properties lists them under Windows Classic style, and Apply writes the chosen one's
+colours into `native-look.conf` as `classic.<colour>`, which the shell, Qt and GTK programs read. The Windows Classic
+theme is Windows Standard, as XP's. Under Windows Classic the Common Tasks pane stays blue: without a visual style
+XP's shell32 takes system32's `shellstyle.dll`, the same file as Luna's `blue_ss.dll`.
 
 ### Font rendering without smoothing
 

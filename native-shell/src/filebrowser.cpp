@@ -276,10 +276,14 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override
     {
+        // Windows Classic's menu bar is Qt's own; it opens its own painter, before this one is.
+        w4w::Renderer *renderer = ShellTheme::instance()->renderer();
+        if (!renderer)
+            QMenuBar::paintEvent(event);
         QPainter painter(this);
         const QColor shadow = edgeColour();
         const int row = height() - 2;
-        if (w4w::Renderer *renderer = ShellTheme::instance()->renderer()) {
+        if (renderer) {
             // The band's art under the menu's names, not the style's flat colour; the item
             // under the pointer as the style draws it.
             drawBand(painter, this, renderer);
@@ -296,8 +300,6 @@ protected:
                     style()->drawItemText(&painter, option.rect, Qt::AlignCenter | Qt::TextShowMnemonic | cues | Qt::TextSingleLine, option.palette,
                                           option.state & QStyle::State_Enabled, option.text, QPalette::ButtonText);
             }
-        } else {
-            QMenuBar::paintEvent(event);
         }
         painter.fillRect(QRect(0, row, width(), 1), shadow);
         painter.fillRect(QRect(0, row + 1, width(), 1), Qt::white);
@@ -356,17 +358,20 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override
     {
-        if (w4w::Renderer *renderer = ShellTheme::instance()->renderer()) {
-            QPainter painter(this);
-            drawBand(painter, this, renderer);
-            if (m_border) {
-                const QColor shadow = renderer->colour(w4w::Part{QStringLiteral("rebar"), QStringLiteral("band"), {}, 0, {}}, QStringLiteral("edgeshadowcolor"))
-                                          .value_or(ShellTheme::instance()->system(QStringLiteral("btnshadow"), Qt::gray));
-                painter.fillRect(QRect(0, height() - 2, width(), 1), shadow);
-                painter.fillRect(QRect(0, height() - 1, width(), 1), Qt::white);
-            }
-        } else {
+        w4w::Renderer *renderer = ShellTheme::instance()->renderer();
+        // (Qt's own toolbar under Windows Classic opens its own painter first.)
+        if (!renderer)
             QToolBar::paintEvent(event);
+        QPainter painter(this);
+        if (renderer)
+            drawBand(painter, this, renderer);
+        if (m_border) {
+            ShellTheme *theme = ShellTheme::instance();
+            const QColor shadow = renderer ? renderer->colour(w4w::Part{QStringLiteral("rebar"), QStringLiteral("band"), {}, 0, {}}, QStringLiteral("edgeshadowcolor"))
+                                                 .value_or(theme->system(QStringLiteral("btnshadow"), Qt::gray))
+                                           : theme->system(QStringLiteral("btnshadow"), Qt::gray);
+            painter.fillRect(QRect(0, height() - 2, width(), 1), shadow);
+            painter.fillRect(QRect(0, height() - 1, width(), 1), theme->system(QStringLiteral("btnhighlight"), Qt::white));
         }
     }
 
@@ -451,8 +456,16 @@ protected:
         // At rest a button has no frame; Back's and Forward's arrow, a picture of the part, always shows.
         if (mainState != 1 && mainState != 4)
             frame(main, m_kind == Split ? QStringLiteral("splitbutton") : QStringLiteral("button"), mainState);
-        if (m_kind == Split)
-            frame(QRect(main.right() + 1, 0, ARROW, height()), QStringLiteral("splitbuttondropdown"), state(m_arrowDown));
+        if (m_kind == Split) {
+            const QRect part(main.right() + 1, 0, ARROW, height());
+            frame(part, QStringLiteral("splitbuttondropdown"), state(m_arrowDown));
+            // Windows Classic has no picture of the arrow: comctl32's own, 5 x 3
+            if (!renderer) {
+                const QColor ink = palette().color(enabled ? QPalette::Active : QPalette::Disabled, QPalette::ButtonText);
+                for (int row = 0; row < 3; ++row)
+                    painter.fillRect(QRect(part.x() + 4 + row, (height() - 3) / 2 + row, 5 - 2 * row, 1), ink);
+            }
+        }
 
         const int icon = iconSize().width(), words = textWidth();
         int x = words ? (m_kind == Split ? 7 : 3) : (m_kind == Split ? 8 : 4);
@@ -1676,7 +1689,14 @@ void FileBrowser::buildToolbars()
     rowLayout->setSpacing(4);
     auto *addressLabel = new QLabel(tr("Address"), row);
     addressLabel->setForegroundRole(QPalette::PlaceholderText);
-    addressLabel->setPalette([&] { QPalette palette = addressLabel->palette(); palette.setColor(QPalette::PlaceholderText, ShellTheme::instance()->system(QStringLiteral("graytext"), QColor(128, 128, 128))); return palette; }());
+    // Grey on Luna's band, the buttons' text under Windows Classic (as XP's)
+    addressLabel->setPalette([&] {
+        QPalette palette = addressLabel->palette();
+        ShellTheme *theme = ShellTheme::instance();
+        palette.setColor(QPalette::PlaceholderText, theme->renderer() ? theme->system(QStringLiteral("graytext"), QColor(128, 128, 128))
+                                                                      : theme->system(QStringLiteral("btntext"), Qt::black));
+        return palette;
+    }());
     rowLayout->addWidget(addressLabel);
     m_address = new QComboBox(row);
     m_address->setEditable(true);

@@ -141,8 +141,9 @@ void Taskbar::themeChanged()
         return theme()->font(spec);
     };
     m_startFont = renderer ? font(START_BUTTON, "Franklin Gothic Medium, 14, italic") : theme()->font(QStringLiteral("Tahoma, 8, bold"));
-    if (renderer)
+    if (renderer) {
         m_startFont.setStyleStrategy(QFont::StyleStrategy(QFont::PreferAntialias | QFont::NoSubpixelAntialias));
+    }
     m_taskFont = font(TASK_TOOLBAR, "Tahoma, 8");
     // The pressed (active) button's text is not bold on XP either.
     m_activeTaskFont = m_taskFont;
@@ -234,6 +235,15 @@ void Taskbar::relayout()
     m_tray->balloons()->iconsChanged();
 }
 
+QRect Taskbar::buttonRect(quint32 window) const
+{
+    const QList<Task> &tasks = m_windows->tasks();
+    for (int i = 0; i < tasks.size() && i < m_taskRects.size(); ++i)
+        if (tasks[i].window == window && !m_taskRects[i].isNull())
+            return QRect(mapToGlobal(m_taskRects[i].topLeft()), m_taskRects[i].size());
+    return QRect();
+}
+
 void Taskbar::drawShadowedText(QPainter &painter, const QRect &rect, const QString &text)
 {
     w4w::Renderer *renderer = theme()->renderer();
@@ -245,6 +255,12 @@ void Taskbar::drawShadowedText(QPainter &painter, const QRect &rect, const QStri
     const QColor colour = renderer->colour(START_BUTTON, QStringLiteral("textcolor")).value_or(Qt::white);
 
     ShellTheme::drawShadowedText(painter, rect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text, colour, shadow, offset);
+    // XP's "start" is the face emboldened by half a pixel (a fifth more ink than the plain face, in its
+    // width): the words again a pixel to the right, at three quarters of their strength.
+    painter.save();
+    painter.setOpacity(0.75);
+    painter.drawText(rect.translated(1, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
+    painter.restore();
 }
 
 void Taskbar::drawStart(QPainter &painter)
@@ -270,7 +286,8 @@ void Taskbar::drawStart(QPainter &painter)
     const QRect content = renderer->contentRect(part, m_startRect);
     painter.drawImage(content.x(), (height() - m_flag.height()) / 2, m_flag);
     painter.setFont(m_startFont);
-    drawShadowedText(painter, QRect(content.x() + m_flag.width() + theme()->scaled(START_TEXT_X), 0, content.width() - m_flag.width(), height()), m_startText);
+    // (A pixel above the middle, as XP's)
+    drawShadowedText(painter, QRect(content.x() + m_flag.width() + theme()->scaled(START_TEXT_X), -1, content.width() - m_flag.width(), height()), m_startText);
 }
 
 void Taskbar::drawTask(QPainter &painter, int index)
@@ -491,7 +508,9 @@ void Taskbar::showStartMenu()
         m_startPanel->close();
         return;
     }
-    auto *panel = new StartPanel(mapToGlobal(QPoint(0, 0)), [this] {
+    // On XP's Luna taskbar the panel stands on the bar's top; under Windows Classic, on the Start button's
+    // top left corner (2 in, over the bar's top 4 rows).
+    auto *panel = new StartPanel(mapToGlobal(theme()->renderer() ? QPoint(0, 0) : m_startRect.topLeft()), [this] {
         if (sessiondialog::askLogOff())
             endSession("logoff");
     }, [this] { turnOff(); },

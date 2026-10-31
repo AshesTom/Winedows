@@ -5,6 +5,8 @@
 // moving each with the other, so bridge-wm/wm.py is the same for both.
 #pragma once
 
+#include <functional>
+
 #include "theme.h"
 
 #include <QDateTime>
@@ -41,6 +43,7 @@ public:
     FrameWindow(FrameManager *manager, quint32 client, const QString &title);
     quint32 client() const { return m_client; }
     const QString &title() const { return m_look.title; }
+    const QImage &icon() const { return m_look.icon; }
     bool maximized() const { return m_look.maximized; }
     bool busy() const { return m_drag != Drag::None; }
     FrameStyle style() const;
@@ -87,6 +90,8 @@ public:
     void command(const char *op, quint32 client);
     void geometryCommand(quint32 client, const QRect &rect);
     void framesChanged();
+    // Where a client's taskbar button is on the screen, for the caption's flight when it is minimized
+    void setButtonRect(std::function<QRect(quint32)> buttonRect) { m_buttonRect = std::move(buttonRect); }
 
 private:
     void sync();
@@ -97,6 +102,8 @@ private:
     QDir m_ipc;
     QFileSystemWatcher m_watcher;
     QHash<quint32, FrameWindow *> m_frames;
+    QHash<quint32, bool> m_hidden;
+    std::function<QRect(quint32)> m_buttonRect;
     QHash<quint32, QDateTime> m_iconTimes;
     QByteArray m_windows, m_geometry, m_written;
     int m_commands = 0;

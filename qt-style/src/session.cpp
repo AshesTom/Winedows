@@ -189,23 +189,29 @@ void readNativeLook(Look *look)
     look->wallpaperStyle = values.value(QStringLiteral("wallpaper_style")).toInt();
     look->tileWallpaper = values.value(QStringLiteral("tile_wallpaper")).toInt() != 0;
     // Without a prefix the system colours and fonts are the style's own, or Windows Classic's.
+    // Windows Classic's scheme is Windows Standard's unless Display Properties wrote another's colours beside its
+    // name ("classic.<the style's name of the colour>", from XP's HIVEDEF.INF).
     const struct { const char *registry; int r, g, b; const char *metric; } colours[] = {
-        {"window", 255, 255, 255, "window"}, {"windowtext", 0, 0, 0, nullptr}, {"windowframe", 0, 0, 0, nullptr},
-        {"buttonface", 212, 208, 200, "btnface"}, {"buttontext", 0, 0, 0, nullptr}, {"buttonhilight", 255, 255, 255, "btnhighlight"},
+        {"window", 255, 255, 255, "window"}, {"windowtext", 0, 0, 0, "windowtext"}, {"windowframe", 0, 0, 0, "windowframe"},
+        {"buttonface", 212, 208, 200, "btnface"}, {"buttontext", 0, 0, 0, "btntext"}, {"buttonhilight", 255, 255, 255, "btnhighlight"},
         {"buttonlight", 212, 208, 200, "light3d"}, {"buttonshadow", 128, 128, 128, "btnshadow"}, {"buttondkshadow", 64, 64, 64, "dkshadow3d"},
         {"graytext", 128, 128, 128, "graytext"}, {"hilight", 10, 36, 106, "highlight"}, {"hilighttext", 255, 255, 255, "highlighttext"},
-        {"menu", 212, 208, 200, "menu"}, {"menubar", 212, 208, 200, "menubar"}, {"menutext", 0, 0, 0, nullptr},
-        {"menuhilight", 10, 36, 106, "menuhilight"}, {"scrollbar", 212, 208, 200, nullptr}, {"infowindow", 255, 255, 225, nullptr},
-        {"infotext", 0, 0, 0, nullptr}, {"hottrackingcolor", 0, 0, 128, nullptr}, {"activetitle", 10, 36, 106, "activecaption"},
+        {"menu", 212, 208, 200, "menu"}, {"menubar", 212, 208, 200, "menubar"}, {"menutext", 0, 0, 0, "menutext"},
+        {"menuhilight", 10, 36, 106, "menuhilight"}, {"scrollbar", 212, 208, 200, "scrollbar"}, {"infowindow", 255, 255, 225, "infobk"},
+        {"infotext", 0, 0, 0, "infotext"}, {"hottrackingcolor", 0, 0, 128, "hottracking"}, {"activetitle", 10, 36, 106, "activecaption"},
         {"inactivetitle", 128, 128, 128, "inactivecaption"}, {"titletext", 255, 255, 255, "captiontext"},
         {"inactivetitletext", 212, 208, 200, "inactivecaptiontext"}, {"gradientactivetitle", 166, 202, 240, "gradientactivecaption"},
-        {"gradientinactivetitle", 192, 192, 192, "gradientinactivecaption"},
+        {"gradientinactivetitle", 192, 192, 192, "gradientinactivecaption"}, {"activeborder", 212, 208, 200, "activeborder"},
+        {"inactiveborder", 212, 208, 200, "inactiveborder"}, {"appworkspace", 128, 128, 128, "appworkspace"},
+        {"buttonalternateface", 181, 181, 181, "buttonalternateface"},
     };
     const std::shared_ptr<Theme> theme = look->themed ? Theme::load(look->stylePath, look->colourName, look->sizeName) : nullptr;
     for (const auto &entry : colours) {
         QColor colour(entry.r, entry.g, entry.b);
-        if (theme && entry.metric)
+        if (theme)
             parseColour(theme->sysMetric(QLatin1String(entry.metric)).value_or(QString()), &colour);
+        else if (const QStringList rgb = values.value(QStringLiteral("classic.") + QLatin1String(entry.metric)).split(QLatin1Char(' '), Qt::SkipEmptyParts); rgb.size() == 3)
+            colour = QColor(rgb[0].toInt(), rgb[1].toInt(), rgb[2].toInt());
         look->colours.insert(QLatin1String(entry.registry), colour);
     }
     const auto metricFont = [&](const char *name) {

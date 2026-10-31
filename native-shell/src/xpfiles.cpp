@@ -90,12 +90,12 @@ QImage bitmap(const w4w::PeResources &pe, int id)
     return w4w::decodeDib(pe.find(QStringLiteral("2"), QString::number(id)), &partial);
 }
 
-QImage icon(const w4w::PeResources &pe, int group, int size)
+QImage icon(const w4w::PeResources &pe, int group, int size, int maxBits)
 {
-    return icon(pe, QString::number(group), size);
+    return icon(pe, QString::number(group), size, maxBits);
 }
 
-QImage icon(const w4w::PeResources &pe, const QString &group, int size)
+QImage icon(const w4w::PeResources &pe, const QString &group, int size, int maxBits)
 {
     // GRPICONDIR: 6 bytes, then 14 for each image; a RT_ICON is what an .ico
     // file holds, only its directory says otherwise: its offset for the ID.
@@ -108,6 +108,8 @@ QImage icon(const w4w::PeResources &pe, const QString &group, int size)
         const char *entry = directory.constData() + 6 + 14 * i;
         const int width = uchar(entry[0]) ? uchar(entry[0]) : 256;
         const int bits = qFromLittleEndian<quint16>(entry + 6);
+        if (bits > maxBits)
+            continue;
         const int score = (width == size ? 1000 : 500 - qAbs(width - size)) * 64 + bits;
         if (score > bestScore) {
             bestScore = score;

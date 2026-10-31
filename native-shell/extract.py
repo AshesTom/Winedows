@@ -49,6 +49,8 @@ ICON_FILES = {
     'nusrmgr.cpl': 'cpl', 'appwiz.cpl': 'cpl', 'ncpa.cpl': 'cpl',
     # The Start menu's Set Program Access and Defaults picture
     'moricons.dll': 'system32',
+    # Windows Classic's colour schemes (schemes.conf is made from it)
+    'hivedef.inf': 'inf',
     # XP's Welcome, log off and Turn Off screens (greeter/welcome.py)
     'logonui.exe': 'system32', 'msgina.dll': 'system32', 'winlogon.exe': 'system32', 'msgothic.ttc': 'fonts',
     **dict.fromkeys(('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf', 'micross.ttf'), 'fonts'),
@@ -206,6 +208,46 @@ def extract(source, output):
         print(f'{folder}/{target}')
 
 
+# The system colours of a scheme, in the order of its COLORREFs (COLOR_SCROLLBAR to COLOR_MENUBAR), by
+# their names in a visual style's [SysMetrics]
+SYSTEM_COLOURS = ('scrollbar', 'background', 'activecaption', 'inactivecaption', 'menu', 'window', 'windowframe',
+                  'menutext', 'windowtext', 'captiontext', 'activeborder', 'inactiveborder', 'appworkspace',
+                  'highlight', 'highlighttext', 'btnface', 'btnshadow', 'graytext', 'btntext', 'inactivecaptiontext',
+                  'btnhighlight', 'dkshadow3d', 'light3d', 'infotext', 'infobk', 'buttonalternateface', 'hottracking',
+                  'gradientactivecaption', 'gradientinactivecaption', 'menuhilight', 'menubar')
+
+
+def write_schemes(output):
+    """schemes.conf: Windows Classic's colour schemes as XP's Appearance page lists them, made from the
+    user's HIVEDEF.INF and themeui.dll the way XP's themeui does at first logon (prefix/xp_schemes.py):
+    a section [Scheme | Size] per scheme and size, in XP's order, with its 31 colours as "r g b"."""
+    inf, themeui = output / 'inf/hivedef.inf', output / 'system/themeui.dll'
+    if not inf.is_file() or not themeui.is_file():
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'prefix'))
+    import xp_schemes
+    texts = xp_schemes.strings(str(themeui))
+    names = [(i, texts[i]) for i in xp_schemes.NAMES if texts.get(i)]
+    schemes = {}
+    for token, legacy, data in xp_schemes.legacy_schemes(xp_schemes.xpreg.read_inf(inf)):
+        matches = [(i, name) for i, name in names if legacy.startswith(name)]
+        if not matches:
+            continue
+        longest = max(len(name) for _, name in matches)
+        display = min(i for i, name in matches if len(name) == longest)
+        schemes.setdefault(display, []).append((xp_schemes.size_of(token), data))
+    lines = []
+    for display, sizes in schemes.items():
+        for size, data in sizes:
+            colours = struct.unpack_from('<29I', data, xp_schemes.COLORS)
+            colours += (colours[13], colours[4])   # the menu highlight and bar: highlight's and menu's
+            lines.append(f'[{texts[display]} | {texts.get(xp_schemes.SIZES[size], size)}]')
+            lines += [f'{name}={c & 0xff} {c >> 8 & 0xff} {c >> 16 & 0xff}' for name, c in zip(SYSTEM_COLOURS, colours)]
+            lines.append('')
+    (output / 'schemes.conf').write_text('\n'.join(lines), encoding='utf-8')
+    print('schemes.conf')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('source', type=Path, help='the XP ISO')
@@ -213,6 +255,7 @@ def main():
                         default=Path(__file__).resolve().parents[1] / '.local/native-assets')
     args = parser.parse_args()
     extract(args.source.resolve(strict=True), args.output.resolve())
+    write_schemes(args.output.resolve())
 
 
 if __name__ == '__main__':
