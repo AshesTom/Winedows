@@ -273,6 +273,19 @@ void openCommandPrompt(const QString &folder)
     QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--console"), folder}, folder);
 }
 
+void openNotepad(const QString &file)
+{
+    QStringList arguments{QStringLiteral("--notepad")};
+    if (!file.isEmpty())
+        arguments << QStringLiteral("--") << file;
+    QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments, QDir::homePath());
+}
+
+void openCalculator()
+{
+    QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--calc")}, QDir::homePath());
+}
+
 void open(const QString &target)
 {
     // Folders and XP's own places have their windows here; the rest, their programs.

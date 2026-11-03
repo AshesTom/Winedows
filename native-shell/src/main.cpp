@@ -3,6 +3,7 @@
 // icons, the taskbar, the Start menu, Display Properties, the windows' frames. A window manager manages it as a desktop and a
 // dock: bridge-wm, or any other that follows EWMH.
 #include "applets.h"
+#include "calculator.h"
 #include "controlpanel.h"
 #include "desktop.h"
 #include "displayproperties.h"
@@ -12,6 +13,7 @@
 #include <QMessageBox>
 #include "filebrowser.h"
 #include "frames.h"
+#include "notepad.h"
 #include "notifications.h"
 #include "programs.h"
 #include "securitycenter.h"
@@ -105,6 +107,9 @@ int main(int argc, char **argv)
     parser.addOption({QStringLiteral("ipc"), QStringLiteral("bridge-wm's IPC directory (tray icons, Windows key)"), QStringLiteral("dir")});
     parser.addOption({QStringLiteral("frames"), QStringLiteral("draw the Linux windows' frames (without Wine's proxy.exe; needs --ipc)")});
     parser.addOption({QStringLiteral("console"), QStringLiteral("only XP's Command Prompt, in that folder"), QStringLiteral("folder")});
+    parser.addOption({QStringLiteral("notepad"), QStringLiteral("only XP's Notepad (the file, if any, is the first argument)")});
+    parser.addOption({QStringLiteral("calc"), QStringLiteral("only XP's Calculator")});
+    parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("Notepad's file"), QStringLiteral("[file]"));
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime, security, winver"), QStringLiteral("id")});
     parser.process(app);
@@ -132,6 +137,19 @@ int main(int argc, char **argv)
         app.setQuitOnLastWindowClosed(true);
         Console console(parser.value(QStringLiteral("console")));
         console.show();
+        return app.exec();
+    }
+    if (parser.isSet(QStringLiteral("notepad")) || parser.isSet(QStringLiteral("calc"))) {
+        const bool notepad = parser.isSet(QStringLiteral("notepad"));
+        if (xpfiles::find(QLatin1String(notepad ? "notepad.exe" : "calc.exe")).isEmpty()) {
+            fprintf(stderr, "explorer: %s not found. Run native-shell/extract.py on the XP ISO again.\n", notepad ? "notepad.exe" : "calc.exe");
+            return 1;
+        }
+        app.setQuitOnLastWindowClosed(true);
+        if (notepad)
+            (new Notepad(parser.positionalArguments().value(0)))->show();
+        else
+            (new Calculator)->show();
         return app.exec();
     }
     if (parser.isSet(QStringLiteral("explore"))) {

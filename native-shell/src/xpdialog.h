@@ -24,6 +24,11 @@ struct Page
 
 // Fills PARENT with dialog ID of PE (DLGTEMPLATE or DLGTEMPLATEEX) and sizes it.
 Page build(const w4w::PeResources &pe, int id, QWidget *parent);
+// The same for a dialog by its name (NPENCODINGDIALOG).
+Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent);
+// Dialog units in pixels, for MS Shell Dlg at 96 DPI
+int unitX(int value);
+int unitY(int value);
 // Everything that can be used on PAGE is greyed: a page of XP's with nothing behind it here.
 void greyControls(const Page &page);
 

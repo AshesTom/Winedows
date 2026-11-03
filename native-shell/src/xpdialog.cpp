@@ -33,10 +33,6 @@
 namespace xpdialog {
 namespace {
 
-// MS Shell Dlg (Tahoma 8) has dialog base units of 6 x 13 pixels at 96 DPI.
-int unitX(int value) { return (value * 6 + 2) / 4; }
-int unitY(int value) { return (value * 13 + 4) / 8; }
-
 // A template's face as XP resolves it (its FontSubstitutes): "MS Shell Dlg" is Microsoft Sans Serif,
 // unless the template asks for the shell's font (DS_SHELLFONT, DS_FIXEDSYS among its styles), or names
 // "MS Shell Dlg 2": Tahoma. The size stays the session's.
@@ -96,12 +92,32 @@ private:
     bool m_ok = true;
 };
 
+// The Button class takes a click anywhere in its window, between the box and the words too
+template<typename Base>
+class WholeButton : public Base
+{
+public:
+    WholeButton(const QString &text, QWidget *parent) : Base(text, parent) {}
+
+protected:
+    bool hitButton(const QPoint &pos) const override { return this->rect().contains(pos); }
+};
+
 } // namespace
+
+// MS Shell Dlg (Tahoma 8) has dialog base units of 6 x 13 pixels at 96 DPI.
+int unitX(int value) { return (value * 6 + 2) / 4; }
+int unitY(int value) { return (value * 13 + 4) / 8; }
 
 Page build(const w4w::PeResources &pe, int id, QWidget *parent)
 {
+    return build(pe, QString::number(id), parent);
+}
+
+Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
+{
     Page page;
-    const QByteArray data = pe.find(QStringLiteral("5"), QString::number(id));
+    const QByteArray data = pe.find(QStringLiteral("5"), name);
     Reader r(data);
     if (data.size() < 18)
         return page;
@@ -147,12 +163,15 @@ Page build(const w4w::PeResources &pe, int id, QWidget *parent)
         QWidget *widget = nullptr;
         if (ordinal == 0x80 || className.compare(QLatin1String("Button"), Qt::CaseInsensitive) == 0) {
             const int kind = controlStyle & 0xf;
-            if (kind == 7)
+            if (kind == 7) {
                 widget = new QGroupBox(text, parent);
+                // Transparent to the mouse (HTTRANSPARENT): the controls it frames may come before it
+                widget->setAttribute(Qt::WA_TransparentForMouseEvents);
+            }
             else if (kind == 2 || kind == 3)
-                widget = new QCheckBox(text, parent);
+                widget = new WholeButton<QCheckBox>(text, parent);
             else if (kind == 4 || kind == 9)
-                widget = new QRadioButton(text, parent);
+                widget = new WholeButton<QRadioButton>(text, parent);
             else
                 widget = new QPushButton(text, parent);
         } else if (ordinal == 0x82 || className.compare(QLatin1String("Static"), Qt::CaseInsensitive) == 0) {
@@ -203,6 +222,11 @@ Page build(const w4w::PeResources &pe, int id, QWidget *parent)
         if (auto *label = qobject_cast<QLabel *>(previous); label && (qobject_cast<QComboBox *>(widget) || qobject_cast<QLineEdit *>(widget) || qobject_cast<QSlider *>(widget)))
             label->setBuddy(widget);
         widget->setGeometry(unitX(x), unitY(y), unitX(cx), qobject_cast<QComboBox *>(widget) ? 21 : unitY(cy));
+        // A group box without words still has its line half a line of text down, as the Button class draws it
+        if (auto *group = qobject_cast<QGroupBox *>(widget); group && text.isEmpty()) {
+            const int down = QFontMetrics(group->font()).height() / 2;
+            group->setGeometry(group->geometry().adjusted(0, down, 0, 0));
+        }
         // WS_VISIBLE and WS_DISABLED
         widget->setVisible(controlStyle & 0x10000000);
         widget->setEnabled(!(controlStyle & 0x08000000));

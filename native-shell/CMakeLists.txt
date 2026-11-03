@@ -17,12 +17,14 @@ add_executable(explorer
     src/acs.cpp src/acs.h
     src/applets.cpp src/applets.h
     src/balloon.cpp src/balloon.h
+    src/calculator.cpp src/calculator.h
     src/console.cpp src/console.h
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
     src/filebrowser.cpp src/filebrowser.h
     src/fileicons.cpp src/fileicons.h
     src/fileops.cpp src/fileops.h
+    src/notepad.cpp src/notepad.h
     src/pictures.cpp src/pictures.h
     src/searchcompanion.cpp src/searchcompanion.h
     src/sessiondialog.cpp src/sessiondialog.h
@@ -45,6 +47,7 @@ add_executable(explorer
     src/windowlist.cpp src/windowlist.h
     src/x11.cpp src/x11.h
     src/xpfiles.cpp src/xpfiles.h
+    src/xpprogram.cpp src/xpprogram.h
     # The reader of XP's visual styles and of the prefix's look, shared with the Qt style.
     ../qt-style/src/msstyles.cpp ../qt-style/src/msstyles.h
     ../qt-style/src/session.cpp ../qt-style/src/session.h)
@@ -56,6 +59,20 @@ find_package(Qt6 QUIET COMPONENTS WebEngineWidgets)
 if(Qt6WebEngineWidgets_FOUND)
     target_link_libraries(explorer PRIVATE Qt6::WebEngineWidgets)
     target_compile_definitions(explorer PRIVATE XP_WEB_PAGES)
+endif()
+
+# Notepad's Page Setup and Print; without the module they are greyed.
+find_package(Qt6 QUIET COMPONENTS PrintSupport)
+if(Qt6PrintSupport_FOUND)
+    target_link_libraries(explorer PRIVATE Qt6::PrintSupport)
+    target_compile_definitions(explorer PRIVATE XP_PRINTING)
+endif()
+# The Calculator's 32 digits, as XP's; without libquadmath, long double's 18.
+include(CheckIncludeFileCXX)
+check_include_file_cxx(quadmath.h HAVE_QUADMATH_H)
+if(HAVE_QUADMATH_H)
+    target_link_libraries(explorer PRIVATE quadmath)
+    target_compile_definitions(explorer PRIVATE XP_QUAD)
 endif()
 
 install(TARGETS explorer RUNTIME DESTINATION bin)

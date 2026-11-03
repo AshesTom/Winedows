@@ -222,8 +222,9 @@ void showSystem()
 }
 
 // "About Windows" (winver): shell32.dll's dialog, its banner and its line. The version line is
-// the system's that really runs here, as in System Properties.
-void showAbout()
+// the system's that really runs here, as in System Properties. A program's (ShellAbout) has its
+// name in the caption and the first line, and its icon.
+void showAbout(const QString &program = QString(), const QImage &programIcon = QImage())
 {
     static QPointer<QDialog> open;
     if (open) {
@@ -234,11 +235,14 @@ void showAbout()
     const auto shell = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
     if (!shell)
         return;
-    auto *dialog = new QDialog;
+    // A program's is owned by its window, and modal to it
+    auto *dialog = new QDialog(program.isEmpty() ? nullptr : QApplication::activeWindow());
+    if (!program.isEmpty())
+        dialog->setWindowModality(Qt::WindowModal);
     open = dialog;
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     const xpdialog::Page page = xpdialog::build(*shell, 14352, dialog);
-    const QString windows = QStringLiteral("Windows");
+    const QString windows = program.isEmpty() ? QStringLiteral("Windows") : program;
     dialog->setWindowTitle(QString(page.caption).replace(QLatin1String("%s"), windows));
     const auto picture = [&](int id, int y) {
         auto *label = new QLabel(dialog);
@@ -250,7 +254,9 @@ void showAbout()
     picture(131, 0);
     picture(138, 72);
     const auto label = [&](int id) { return qobject_cast<QLabel *>(page.controls.value(id)); };
-    if (QLabel *icon = label(12297)) {
+    if (QLabel *icon = label(12297); icon && !programIcon.isNull()) {
+        icon->setPixmap(QPixmap::fromImage(programIcon));
+    } else if (icon) {
         if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe"))))
             icon->setPixmap(QPixmap::fromImage(xpfiles::icon(*explorer, 100, 32)));
     }
@@ -781,6 +787,11 @@ void open(const QString &id)
     for (QWidget *widget : QApplication::topLevelWidgets())
         if (!before.contains(widget) && qobject_cast<QDialog *>(widget))
             windows.insert(id, widget);
+}
+
+void about(const QString &program, const QImage &icon)
+{
+    showAbout(program, icon);
 }
 
 void applyInputSettings()

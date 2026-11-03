@@ -60,6 +60,9 @@ ICON_FILES = {
     'netid.dll': 'cpl', 'wuaucpl.cpl': 'cpl', 'remotepg.dll': 'cpl', 'srrstr.dll': 'cpl',
     # The Search Companion: its icons and words, its steps, and its character
     'srchui.dll': 'srchasst', 'rover.acs': 'srchasst/chars',
+    # Notepad and Calculator: their menus, dialogs, strings and icons, Notepad's Lucida Console, and the
+    # common dialogs (Find, Replace, Font)
+    'notepad.exe': 'system32', 'calc.exe': 'system32', 'comdlg32.dll': 'system32', 'lucon.ttf': 'fonts',
     # The Security Center: its notification icon and balloon, and its window
     'wscntfy.exe': 'security', 'xpsp2res.dll': 'security', 'wscui.cpl': 'security', 'inetcpl.cpl': 'security',
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',

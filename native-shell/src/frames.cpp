@@ -22,7 +22,7 @@ using w4w::Part;
 namespace {
 
 // Window part states: 1 active, 2 inactive; the caption buttons have four of each.
-enum { NormalButton = 1, HotButton = 2, PressedButton = 3 };
+enum { NormalButton = 1, HotButton = 2, PressedButton = 3, DisabledButton = 4 };
 const int ICON_SIZE = 16;
 // At 96 DPI: the system icon's place in the frame, and the room before the title
 const int ICON_X = 6, ICON_Y = 8, TITLE_GAP = 4;
@@ -32,14 +32,20 @@ Part windowPart(const char *name, int state)
     return Part{QStringLiteral("window"), QLatin1String(name), {}, state, {}};
 }
 
+// Minimize and Maximize come together, as user32 draws them: the one the window lacks is greyed.
 bool shown(FrameButton button, const FrameLook &look)
 {
     switch (button) {
-    case FrameButton::Maximize: return look.canMaximize;
-    case FrameButton::Minimize: return look.canMinimize;
+    case FrameButton::Maximize:
+    case FrameButton::Minimize: return look.canMaximize || look.canMinimize;
     case FrameButton::Help: return look.canHelp;
     default: return true;
     }
+}
+
+bool enabled(FrameButton button, const FrameLook &look)
+{
+    return (button != FrameButton::Maximize || look.canMaximize) && (button != FrameButton::Minimize || look.canMinimize);
 }
 
 const char *buttonName(FrameButton button, bool maximized)
@@ -126,7 +132,7 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
         for (FrameButton button : buttons) {
             if (!shown(button, look))
                 continue;
-            int frame = look.pressed == button ? PressedButton : look.hot == button ? HotButton : NormalButton;
+            int frame = !enabled(button, look) ? DisabledButton : look.pressed == button ? PressedButton : look.hot == button ? HotButton : NormalButton;
             if (!look.active)
                 frame += 4;
             renderer->draw(&painter, frameButtonRect(button, rect, style, look.maximized), windowPart(buttonName(button, look.maximized), frame));
@@ -178,8 +184,17 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
         painter.drawLine(r.bottomLeft(), r.bottomRight());
         painter.drawLine(r.topRight(), r.bottomRight());
         painter.setFont(glyphs);
+        const QString glyph(marlett(button, look.maximized));
+        if (!enabled(button, look)) {
+            // Greyed as DrawFrameControl's DFCS_INACTIVE: the glyph embossed in the light and shadow colours
+            painter.setPen(style.light);
+            painter.drawText(r.translated(1, 1), Qt::AlignCenter, glyph);
+            painter.setPen(style.shadow);
+            painter.drawText(r, Qt::AlignCenter, glyph);
+            continue;
+        }
         painter.setPen(Qt::black);
-        painter.drawText(r.translated(down ? 1 : 0, down ? 1 : 0), Qt::AlignCenter, QString(marlett(button, look.maximized)));
+        painter.drawText(r.translated(down ? 1 : 0, down ? 1 : 0), Qt::AlignCenter, glyph);
     }
 }
 
@@ -330,7 +345,7 @@ FrameButton FrameWindow::buttonAt(QPoint at) const
         if (!shown(button, m_look))
             continue;
         if (frameButtonRect(button, rect(), style, m_look.maximized).contains(at))
-            return button;
+            return enabled(button, m_look) ? button : FrameButton::None;
     }
     const int side = ShellTheme::instance()->scaled(ICON_SIZE + 4);
     if (QRect(ICON_X - 2, ICON_Y - 2, side, side).contains(at))

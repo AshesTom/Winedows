@@ -547,6 +547,9 @@ void XpStyle::drawPrimitive(PrimitiveElement element, const QStyleOption *option
         return;
     }
     case PE_FrameStatusBarItem:
+        // Each part of a status bar as comctl32 draws it: the Status class's Pane, whose right edge is the
+        // line between parts
+        m_renderer->draw(painter, option->rect, {QStringLiteral("status"), QStringLiteral("pane"), {}, 0, {}});
         return;
     default:
         break;
@@ -608,8 +611,12 @@ void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QP
             const PartState s = element == CE_PushButtonLabel ? buttonState(option, b->features & QStyleOptionButton::DefaultButton)
                                                           : checkState(option, element == CE_RadioButtonLabel);
             const QPalette::ColorGroup group = option->state & State_Enabled ? QPalette::Active : QPalette::Disabled;
-            const QColor c = partColour(kButton, part, s.name, QStringLiteral("textcolor"),
-                                        option->palette.color(group, QPalette::ButtonText));
+            QColor c = partColour(kButton, part, s.name, QStringLiteral("textcolor"),
+                                  option->palette.color(group, QPalette::ButtonText));
+            // A program that colours its buttons' words, as Calculator does, keeps its colour while enabled
+            if (widget && (option->state & State_Enabled) && widget->testAttribute(Qt::WA_SetPalette)
+                && widget->palette().isBrushSet(QPalette::Active, QPalette::ButtonText))
+                c = option->palette.color(QPalette::Active, QPalette::ButtonText);
             button.palette.setColor(QPalette::ButtonText, c);
             button.palette.setColor(QPalette::WindowText, c);
             o = &button;
@@ -883,6 +890,13 @@ void XpStyle::drawScrollBar(const QStyleOptionSlider *bar, QPainter *painter, co
         return fourState(enabled, active && (bar->state & State_Sunken), active && (bar->state & State_MouseOver));
     };
     const QString cls = QStringLiteral("scrollbar");
+    // With nothing to scroll the thumb takes the whole groove and is not drawn: the track fills it
+    if (!enabled) {
+        const QRect r = subControlRect(CC_ScrollBar, bar, SC_ScrollBarGroove, widget);
+        const PartState s = stateOf(SC_ScrollBarGroove);
+        if (!draw(painter, r, cls, QStringLiteral("lowertrack") + (horizontal ? QStringLiteral("horz") : QStringLiteral("vert")), s.name, s.id))
+            painter->fillRect(r, system(QStringLiteral("scrollbar"), bar->palette.color(QPalette::Window)));
+    }
     // The tracks: page up/left is the lower track, page down/right the upper.
     for (SubControl sc : {SC_ScrollBarSubPage, SC_ScrollBarAddPage}) {
         const QRect r = subControlRect(CC_ScrollBar, bar, sc, widget);
@@ -1155,6 +1169,9 @@ int XpStyle::pixelMetric(PixelMetric metric, const QStyleOption *option, const Q
     // Paint) and common dialogs have 16 x 16 pictures (comctl32's default).
     if (m_look.accurate && metric == PM_ToolBarIconSize)
         return 16 * m_look.dpi / 96;
+    // The Button class's words begin 18 pixels in, past the 13-pixel box (measured on XP's Calculator)
+    if (metric == PM_RadioButtonLabelSpacing || metric == PM_CheckBoxLabelSpacing)
+        return 5 * (m_look.dpi > 0 ? m_look.dpi : 96) / 96;
     if (themed()) {
         switch (metric) {
         case PM_ScrollBarExtent:

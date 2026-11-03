@@ -123,6 +123,56 @@ static QByteArray expandRle8(const QByteArray &dib, quint32 headerSize, int widt
     return out;
 }
 
+// An RLE4 picture (comdlg32's font pictures) as the plain 8-bit one it stands for: each pair of
+// nibbles a pixel each
+static QByteArray expandRle4(const QByteArray &dib, quint32 headerSize, int width, int height, quint32 colours)
+{
+    colours = colours ? colours : 16;
+    const qint64 start = headerSize + 4 * qint64(colours);
+    const int stride = (width + 3) & ~3;
+    QByteArray out = dib.left(start);
+    qToLittleEndian<quint16>(8, out.data() + 14);
+    qToLittleEndian<quint32>(0, out.data() + 16);
+    qToLittleEndian<quint32>(0, out.data() + 20);
+    qToLittleEndian<quint32>(colours, out.data() + 32);
+    const qint64 pixelsAt = out.size();
+    out.append(QByteArray(qint64(stride) * height, '\0'));
+    auto *pixels = reinterpret_cast<uchar *>(out.data() + pixelsAt);
+    const auto *in = reinterpret_cast<const uchar *>(dib.constData());
+    const qint64 size = dib.size();
+    const auto put = [&](int x, int y, int value) {
+        if (x < width && y < height)
+            pixels[y * stride + x] = uchar(value);
+    };
+    int x = 0, y = 0;
+    for (qint64 i = start; i + 1 < size && y < height;) {
+        const int count = in[i], value = in[i + 1];
+        i += 2;
+        if (count) {
+            for (int n = 0; n < count; ++n, ++x)
+                put(x, y, n % 2 ? value & 15 : value >> 4);
+        } else if (value == 0) {
+            x = 0;
+            ++y;
+        } else if (value == 1) {
+            break;
+        } else if (value == 2) {
+            if (i + 1 >= size)
+                break;
+            x += in[i];
+            y += in[i + 1];
+            i += 2;
+        } else {
+            // VALUE nibbles, padded to a word
+            const int bytes = (value + 1) / 2;
+            for (int n = 0; n < value && i + n / 2 < size; ++n, ++x)
+                put(x, y, n % 2 ? in[i + n / 2] & 15 : in[i + n / 2] >> 4);
+            i += bytes + (bytes & 1);
+        }
+    }
+    return out;
+}
+
 QImage decodeDib(const QByteArray &dib, bool *partial)
 {
     Reader r{dib};
@@ -132,6 +182,8 @@ QImage decodeDib(const QByteArray &dib, bool *partial)
         return {};
     if (r.u32(16) == 1 && r.u16(14) == 8 && qint32(r.u32(4)) > 0 && qint32(r.u32(8)) > 0 && qint32(r.u32(4)) <= 16384 && qint32(r.u32(8)) <= 16384 && r.u32(32) <= 256)
         return decodeDib(expandRle8(dib, headerSize, qint32(r.u32(4)), qint32(r.u32(8)), r.u32(32)), partial);
+    if (r.u32(16) == 2 && r.u16(14) == 4 && qint32(r.u32(4)) > 0 && qint32(r.u32(8)) > 0 && qint32(r.u32(4)) <= 16384 && qint32(r.u32(8)) <= 16384 && r.u32(32) <= 16)
+        return decodeDib(expandRle4(dib, headerSize, qint32(r.u32(4)), qint32(r.u32(8)), r.u32(32)), partial);
     const qint32 width = qint32(r.u32(4));
     const qint32 rawHeight = qint32(r.u32(8));
     const int bits = r.u16(14);

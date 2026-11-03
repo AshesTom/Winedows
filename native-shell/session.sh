@@ -58,7 +58,16 @@ Exec=$shell --explore %f
 NoDisplay=true
 MimeType=inode/directory;
 EOF
-printf '[Default Applications]\ninode/directory=xp-explorer.desktop\n' > "$config/xp-shell-mimeapps.list"
+# Text files open in XP's Notepad, as on XP
+cat > "$data/xp-notepad.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Notepad
+Exec=$shell --notepad %f
+NoDisplay=true
+MimeType=text/plain;
+EOF
+printf '[Default Applications]\ninode/directory=xp-explorer.desktop\ntext/plain=xp-notepad.desktop\n' > "$config/xp-shell-mimeapps.list"
 assets=$root/.local/native-assets
 # XP's icons as an icon theme, made from the user's XP files the first time (session/icon_theme.py).
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import icon_theme; icon_theme.ensure(sys.argv[2], sys.argv[3])' \

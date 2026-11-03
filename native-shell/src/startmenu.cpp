@@ -4,6 +4,7 @@
 #include "applets.h"
 
 #include "xpdialog.h"
+#include <functional>
 #include <QTimer>
 #include <QSettings>
 #include <QPushButton>
@@ -821,6 +822,19 @@ QList<MenuEntry> StartPanel::allPrograms() const
                     prompt.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*cmd, cmd->names(QStringLiteral("14")).value(0), ShellTheme::instance()->scaled(CASCADE_ICON))));
                 prompt.action = [] { programs::openCommandPrompt(QDir::homePath()); };
                 entries.append(prompt);
+                // Notepad and Calculator, by the names and icons of their files
+                const auto accessory = [&entries](const char *file, const QString &group, int nameId, std::function<void()> action) {
+                    const auto pe = xpfiles::resources(xpfiles::find(QLatin1String(file)));
+                    if (!pe)
+                        return;
+                    MenuEntry entry;
+                    entry.text = xpfiles::string(*pe, nameId);
+                    entry.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*pe, group, ShellTheme::instance()->scaled(CASCADE_ICON))));
+                    entry.action = std::move(action);
+                    entries.append(entry);
+                };
+                accessory("notepad.exe", QStringLiteral("2"), 9, [] { programs::openNotepad(); });
+                accessory("calc.exe", QStringLiteral("SC"), 83, [] { programs::openCalculator(); });
                 std::sort(entries.begin(), entries.end(), [](const MenuEntry &a, const MenuEntry &b) { return a.text.compare(b.text, Qt::CaseInsensitive) < 0; });
             }
             return entries;
