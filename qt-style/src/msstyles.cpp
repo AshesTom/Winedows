@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "msstyles.h"
 
+#include <cmath>
+
 #include <QColor>
 #include <QFile>
 #include <QPainter>
@@ -79,8 +81,6 @@ QList<int> numbers(const QString &value)
 
 } // namespace
 
-// 32bpp art keeps its alpha; PARTIAL is when Wine's uxtheme (the session's
-// shell) blends it by its alpha instead of keying out its transparent colour.
 // An RLE8 picture as the plain one it stands for
 static QByteArray expandRle8(const QByteArray &dib, quint32 headerSize, int width, int height, quint32 colours)
 {
@@ -275,8 +275,9 @@ QImage decodeDib(const QByteArray &dib, bool *partial)
 
 namespace {
 
-enum class Sizing { Stretch, Tile, TrueSize };
+enum class Sizing { TrueSize, Stretch, Tile };
 
+// uxtheme's default is Stretch.
 Sizing sizingOf(const std::optional<QString> &value)
 {
     if (value) {
@@ -289,27 +290,108 @@ Sizing sizingOf(const std::optional<QString> &value)
     return Sizing::Stretch;
 }
 
-// Copy FROM of SRC into TO of the canvas, stretched (nearest neighbour, as
-// uxtheme samples) or tiled.
-void blit(QPainter &p, const QRect &to, const QImage &src, const QRect &from, Sizing sizing)
+// GDI's nearest-neighbour step, in win32k's nine-grid (EngNineGrid) and in StretchBlt's
+// COLORONCOLOR: 32.32 fixed point rounded up, the first sample half a step in. OUT gets
+// COUNT source positions from FROM on, over SOURCECOUNT pixels.
+void stretchMap(int *out, int count, int from, int sourceCount)
 {
-    if (to.isEmpty() || from.isEmpty())
+    if (count <= 0 || sourceCount <= 0)
         return;
-    if (sizing == Sizing::Tile && to.size() != from.size()) {
-        const QImage piece = src.copy(from);
-        p.drawTiledPixmap(to, QPixmap::fromImage(piece));
+    if (count == sourceCount) {
+        for (int i = 0; i < count; ++i)
+            out[i] = from + i;
         return;
     }
-    p.drawImage(to, src, from);
+    const quint64 step = ((quint64(sourceCount) << 32) - 1) / quint64(count) + 1;
+    quint64 at = ((quint64(sourceCount) << 32) / quint64(count)) >> 1;
+    for (int i = 0; i < count; ++i, at += step)
+        out[i] = from + int(at >> 32);
 }
 
-// One axis of a nine-grid: margins shrink in proportion when they do not fit.
-QPair<int, int> split(int destination, int nearMargin, int farMargin)
+// One axis of win32k's nine-grid: each destination pixel's source pixel, and where the
+// middle is. The margins keep their size while the destination and the source both have
+// a middle between them; otherwise the destination is shared between the margins in their
+// proportion and there is no middle. Margins stretch, the middle stretches or tiles from its
+// own start.
+struct Axis
 {
-    if (nearMargin + farMargin <= destination || nearMargin + farMargin == 0)
-        return {nearMargin, farMargin};
-    const int near = int(qint64(destination) * nearMargin / (nearMargin + farMargin));
-    return {near, destination - near};
+    QList<int> map;
+    int middleFrom = 0, middleTo = 0;
+};
+
+Axis gridAxis(int destination, int source, int nearMargin, int farMargin, bool tile)
+{
+    Axis axis;
+    axis.map.resize(qMax(0, destination));
+    int near = nearMargin, far = farMargin;
+    const bool middle = destination - near - far > 0 && source - near - far > 0;
+    if (!middle) {
+        near = nearMargin + farMargin ? int(qint64(nearMargin) * destination / (nearMargin + farMargin)) : 0;
+        far = destination - near;
+    }
+    stretchMap(axis.map.data(), near, 0, nearMargin);
+    axis.middleFrom = axis.middleTo = near;
+    if (middle) {
+        const int count = destination - near - far, sourceCount = source - nearMargin - farMargin;
+        if (tile) {
+            for (int i = 0; i < count; ++i)
+                axis.map[near + i] = nearMargin + i % sourceCount;
+        } else {
+            stretchMap(axis.map.data() + near, count, nearMargin, sourceCount);
+        }
+        axis.middleTo = near + count;
+    }
+    stretchMap(axis.map.data() + destination - far, far, source - farMargin, farMargin);
+    return axis;
+}
+
+// SOURCE (premultiplied) as a nine-grid of SIZE, as EngNineGrid builds it before blending it.
+QImage nineGrid(const QImage &source, QSize size, QMargins m, bool tile, bool borderOnly)
+{
+    QImage out(size, QImage::Format_ARGB32_Premultiplied);
+    out.fill(Qt::transparent);
+    if (size.isEmpty() || source.isNull())
+        return out;
+    // (Margins wider than the art together may overlap: win32k shares the destination out.)
+    m.setLeft(qBound(0, m.left(), source.width()));
+    m.setRight(qBound(0, m.right(), source.width()));
+    m.setTop(qBound(0, m.top(), source.height()));
+    m.setBottom(qBound(0, m.bottom(), source.height()));
+    const Axis xs = gridAxis(size.width(), source.width(), m.left(), m.right(), tile);
+    const Axis ys = gridAxis(size.height(), source.height(), m.top(), m.bottom(), tile);
+    for (int y = 0; y < size.height(); ++y) {
+        const auto *from = reinterpret_cast<const QRgb *>(source.constScanLine(ys.map[y]));
+        auto *to = reinterpret_cast<QRgb *>(out.scanLine(y));
+        const bool middleRow = y >= ys.middleFrom && y < ys.middleTo;
+        for (int x = 0; x < size.width(); ++x) {
+            if (borderOnly && middleRow && x >= xs.middleFrom && x < xs.middleTo)
+                continue;
+            to[x] = from[xs.map[x]];
+        }
+    }
+    return out;
+}
+
+// SOURCE at SIZE, sampled as StretchBlt does in COLORONCOLOR
+QImage stretched(const QImage &source, QSize size)
+{
+    return nineGrid(source, size, QMargins(), false, false);
+}
+
+// uxtheme's premultiplication of 32-bpp art at load: each channel times alpha over 255,
+// rounded down
+QImage premultiplied(QImage image)
+{
+    image = image.convertToFormat(QImage::Format_ARGB32);
+    for (int y = 0; y < image.height(); ++y) {
+        auto *row = reinterpret_cast<QRgb *>(image.scanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            const int a = qAlpha(row[x]);
+            row[x] = qRgba(qRed(row[x]) * a / 255, qGreen(row[x]) * a / 255, qBlue(row[x]) * a / 255, a);
+        }
+    }
+    image.reinterpretAsFormat(QImage::Format_ARGB32_Premultiplied);
+    return image;
 }
 
 } // namespace
@@ -579,6 +661,23 @@ QImage Theme::bitmap(const QString &imageFile, bool *partialAlpha) const
             data = m_resources.find(QStringLiteral("IMAGE"), name);
         if (!data.isEmpty())
             d.image = decodeDib(data, &d.partialAlpha);
+        // uxtheme's load: a 32-bpp picture has an alpha channel only if a pixel is neither
+        // opaque nor clear; without one its alpha byte means nothing.
+        d.partialAlpha = false;
+        for (int y = 0; y < d.image.height() && !d.partialAlpha; ++y) {
+            const auto *row = reinterpret_cast<const QRgb *>(d.image.constScanLine(y));
+            for (int x = 0; x < d.image.width(); ++x)
+                if (qAlpha(row[x]) != 0 && qAlpha(row[x]) != 255) {
+                    d.partialAlpha = true;
+                    break;
+                }
+        }
+        if (!d.partialAlpha)
+            for (int y = 0; y < d.image.height(); ++y) {
+                auto *row = reinterpret_cast<QRgb *>(d.image.scanLine(y));
+                for (int x = 0; x < d.image.width(); ++x)
+                    row[x] |= 0xff000000u;
+            }
         it = m_bitmaps.insert(name, d);
     }
     if (partialAlpha)
@@ -592,101 +691,130 @@ Renderer::Renderer(std::shared_ptr<Theme> theme, int dpi)
 {
 }
 
-QString Renderer::chooseImage(const Part &p, bool glyph, QSize destination) const
+namespace {
+
+// Windows' MulDiv: A times B over C, rounded half away from zero; -1 for a zero C
+int mulDiv(int a, int b, int c)
 {
-    // A plain ImageFile (GlyphImageFile) wins. ImageFile1..7, by DPI or by
-    // size, are the background without an ImageFile, and the glyph with one
-    // (a scroll arrow's ImageFile is its button, ImageFile1.. its arrows).
-    if (auto file = property(p, glyph ? QStringLiteral("glyphimagefile") : QStringLiteral("imagefile")))
-        return *file;
-    if (glyph != property(p, QStringLiteral("imagefile")).has_value())
-        return QString();
-    const QString select = property(p, QStringLiteral("imageselecttype")).value_or(QString()).trimmed().toLower();
-    // One frame of an image (its ImageCount frames, laid out vertically unless said otherwise).
-    auto sizeOf = [&](const QString &file) {
-        const QImage image = m_theme->bitmap(file);
-        const int count = qMax(1, integer(p, QStringLiteral("imagecount")).value_or(1));
-        const bool horizontal = property(p, QStringLiteral("imagelayout")).value_or(QString()).trimmed()
-                                    .compare(QLatin1String("horizontal"), Qt::CaseInsensitive) == 0;
-        return horizontal ? QSize(image.width() / count, image.height()) : QSize(image.width(), image.height() / count);
-    };
-    if (select == QLatin1String("dpi")) {
-        for (int i = 7; i >= 1; --i) {
-            const int minimum = property(p, QStringLiteral("mindpi%1").arg(i)).value_or(QStringLiteral("0")).toInt();
-            if (minimum != 0 && m_dpi >= minimum)
-                if (auto file = property(p, QStringLiteral("imagefile%1").arg(i)))
-                    return *file;
-        }
-    } else if (select == QLatin1String("size")) {
-        for (int i = 7; i >= 1; --i) {
-            const auto file = property(p, QStringLiteral("imagefile%1").arg(i));
-            if (!file)
-                continue;
-            QSize need;
-            if (!parseSize(property(p, QStringLiteral("minsize%1").arg(i)).value_or(QString()), &need))
-                need = sizeOf(*file);
-            if (need.width() <= destination.width() && need.height() <= destination.height())
-                return *file;
-        }
-    } else {
-        return QString();
-    }
-    return property(p, QStringLiteral("imagefile1")).value_or(QString());
+    if (c == 0)
+        return -1;
+    const qint64 product = qint64(a) * b;
+    const qint64 half = qAbs(qint64(c)) / 2;
+    const qint64 result = ((product < 0) != (c < 0) ? product - (c < 0 ? -half : half) : product + (c < 0 ? -half : half)) / c;
+    return int(result);
 }
 
-// The part's frame for its state, premultiplied, colour key applied.
-QImage Renderer::frame(const Part &p, bool glyph, QSize destination) const
+bool isImageGlyph(const Renderer &r, const Part &p)
 {
-    QString file;
-    if (destination.isEmpty()) {
-        // (for chooseImage's size selection: the first numbered image, without recursing)
-        file = property(p, QStringLiteral("imagefile1")).value_or(QString());
-    } else {
-        file = chooseImage(p, glyph, destination);
+    return r.property(p, QStringLiteral("glyphtype")).value_or(QString()).trimmed()
+               .compare(QLatin1String("imageglyph"), Qt::CaseInsensitive) == 0;
+}
+
+} // namespace
+
+// The DIBs of a part as uxtheme's CImageFile keeps them: its ImageFile (GlyphImageFile for
+// an image glyph), then, when an ImageSelectType is set, ImageFile1..7 up to the first
+// missing; those belong to the glyph if it is an image glyph, else to the background, and
+// the first of them replaces the default. The default comes first in the list.
+QList<Renderer::Image> Renderer::images(const Part &p, bool glyph) const
+{
+    QList<Image> out;
+    const bool imageGlyph = isImageGlyph(*this, p);
+    if (glyph && !imageGlyph)
+        return out;
+    const auto add = [&](const QString &file, int index) {
+        Image image;
+        image.file = file;
+        if (index > 0) {
+            bool ok = false;
+            const int dpi = property(p, QStringLiteral("mindpi%1").arg(index)).value_or(QString()).trimmed().toInt(&ok);
+            if (ok)
+                image.minDpi = qMax(1, dpi);
+        }
+        // MinSize (the background's) or MinSize1..7; else the frame's own size
+        const QString minSize = index > 0 ? QStringLiteral("minsize%1").arg(index) : glyph ? QString() : QStringLiteral("minsize");
+        if (minSize.isEmpty() || !parseSize(property(p, minSize).value_or(QString()), &image.minSize))
+            image.minSize = frame(p, file, glyph).size();
+        out.append(image);
+    };
+    add(property(p, glyph ? QStringLiteral("glyphimagefile") : QStringLiteral("imagefile")).value_or(QString()), 0);
+    const QString select = property(p, QStringLiteral("imageselecttype")).value_or(QString()).trimmed().toLower();
+    if (!select.isEmpty() && select != QLatin1String("none") && glyph == imageGlyph) {
+        for (int i = 1; i <= 7; ++i) {
+            const auto file = property(p, QStringLiteral("imagefile%1").arg(i));
+            if (!file)
+                break;
+            add(*file, i);
+        }
+        if (out.size() > 1)
+            out[0] = out[1];
     }
-    if (file.isEmpty())
-        return {};
+    if (out.size() == 1 && out.first().file.isEmpty())
+        out.clear();
+    return out;
+}
+
+// CImageFile's choice for a destination (its SelectCorrectImageFile): by size the last whose
+// MinSize fits, by DPI the last whose MinDpi the screen reaches, else the default. A stretched
+// or tiled background keeps its default when the glyph is an image glyph.
+std::optional<Renderer::Image> Renderer::choose(const Part &p, bool glyph, QSize destination) const
+{
+    QList<Image> list = images(p, glyph);
+    if (list.isEmpty())
+        return std::nullopt;
+    const Image fallback = list.takeFirst();
+    if (!glyph && sizingOf(property(p, QStringLiteral("sizingtype"))) != Sizing::TrueSize && isImageGlyph(*this, p))
+        return fallback;
+    const QString select = property(p, QStringLiteral("imageselecttype")).value_or(QString()).trimmed().toLower();
+    if (select == QLatin1String("dpi")) {
+        for (int i = int(list.size()) - 1; i >= 0; --i)
+            if (m_dpi >= list[i].minDpi)
+                return list[i];
+    } else if ((select == QLatin1String("size") || parseBool(property(p, QStringLiteral("sourcegrow")).value_or(QString())))
+               && !destination.isEmpty()) {
+        for (int i = int(list.size()) - 1; i >= 0; --i)
+            if (destination.width() >= list[i].minSize.width() && destination.height() >= list[i].minSize.height())
+                return list[i];
+    }
+    return fallback;
+}
+
+// FILE's frame for the part's state: ImageCount frames side by side unless ImageLayout is
+// vertical (uxtheme's default is horizontal), each width (or height) over ImageCount; the
+// colour key taken out of art without an alpha channel; premultiplied as uxtheme does at load.
+QImage Renderer::frame(const Part &p, const QString &file, bool glyph) const
+{
     bool partial = false;
     const QImage image = m_theme->bitmap(file, &partial);
     if (image.isNull())
         return {};
-    const int count = qMax(1, property(p, glyph ? QStringLiteral("glyphimagecount") : QStringLiteral("imagecount"))
-                                  .value_or(property(p, QStringLiteral("imagecount")).value_or(QStringLiteral("1")))
-                                  .toInt());
-    const auto layout = property(p, QStringLiteral("imagelayout"));
-    // Frames run vertically unless ImageLayout says otherwise, or unless the
-    // count only divides the width.
-    const bool horizontal = layout ? layout->trimmed().compare(QLatin1String("horizontal"), Qt::CaseInsensitive) == 0
-                                   : (count > 1 && image.height() % count != 0 && image.width() % count == 0);
-    int frames = count;
-    // A glyph strip may hold fewer frames than the part has states.
-    if (glyph && !horizontal && image.height() % frames != 0)
-        frames = 1;
-    const int w = horizontal ? image.width() / frames : image.width();
-    const int h = horizontal ? image.height() : image.height() / frames;
+    const int count = qMax(1, integer(p, QStringLiteral("imagecount")).value_or(1));
+    const bool vertical = property(p, QStringLiteral("imagelayout")).value_or(QString()).trimmed()
+                              .compare(QLatin1String("vertical"), Qt::CaseInsensitive) == 0;
+    const int w = vertical ? image.width() : image.width() / count;
+    const int h = vertical ? image.height() / count : image.height();
     if (w <= 0 || h <= 0)
         return {};
-    const int index = (p.stateId >= 1 && p.stateId <= frames) ? p.stateId - 1 : 0;
-    QImage crop = image.copy(horizontal ? QRect(index * w, 0, w, h) : QRect(0, index * h, w, h));
-    const bool keyed = parseBool(property(p, glyph ? QStringLiteral("glyphtransparent") : QStringLiteral("transparent"))
-                                     .value_or(QString()));
-    QColor key(255, 0, 255);
-    parseColour(property(p, glyph ? QStringLiteral("glyphtransparentcolor") : QStringLiteral("transparentcolor"))
-                    .value_or(QString()),
-                &key);
-    const QRgb keyRgb = key.rgb() & 0x00ffffffu;
-    for (int y = 0; y < crop.height(); ++y) {
-        auto *row = reinterpret_cast<QRgb *>(crop.scanLine(y));
-        for (int x = 0; x < crop.width(); ++x)
-            if (!partial && keyed && (row[x] & 0x00ffffffu) == keyRgb)
-                row[x] = 0;
+    const int index = (p.stateId >= 1 && p.stateId <= count) ? p.stateId - 1 : 0;
+    QImage crop = image.copy(vertical ? QRect(0, index * h, w, h) : QRect(index * w, 0, w, h));
+    if (!partial && parseBool(property(p, glyph ? QStringLiteral("glyphtransparent") : QStringLiteral("transparent")).value_or(QString()))) {
+        QColor key(255, 0, 255);
+        parseColour(property(p, glyph ? QStringLiteral("glyphtransparentcolor") : QStringLiteral("transparentcolor")).value_or(QString()), &key);
+        const QRgb keyRgb = key.rgb() & 0x00ffffffu;
+        for (int y = 0; y < crop.height(); ++y) {
+            auto *row = reinterpret_cast<QRgb *>(crop.scanLine(y));
+            for (int x = 0; x < crop.width(); ++x)
+                if ((row[x] & 0x00ffffffu) == keyRgb)
+                    row[x] = 0;
+        }
     }
-    return crop.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    return premultiplied(crop);
 }
 
 QImage Renderer::stateImage(const Part &p, bool glyph) const
 {
-    return frame(p, glyph, QSize(1 << 16, 1 << 16));
+    const auto image = choose(p, glyph, QSize(1 << 16, 1 << 16));
+    return image ? frame(p, image->file, glyph) : QImage();
 }
 
 QSize Renderer::trueSize(const Part &p) const
@@ -695,7 +823,7 @@ QSize Renderer::trueSize(const Part &p) const
         const int border = integer(p, QStringLiteral("bordersize")).value_or(1);
         return QSize(2 * border + 1, 2 * border + 1);
     }
-    return frame(p, false, QSize(1 << 16, 1 << 16)).size();
+    return stateImage(p, false).size();
 }
 
 bool Renderer::has(const Part &p) const
@@ -703,7 +831,7 @@ bool Renderer::has(const Part &p) const
     const QString bg = property(p, QStringLiteral("bgtype")).value_or(QStringLiteral("imagefile")).trimmed().toLower();
     if (bg == QLatin1String("borderfill"))
         return true;
-    return bg != QLatin1String("none") && !chooseImage(p, false, QSize(1 << 16, 1 << 16)).isEmpty();
+    return bg != QLatin1String("none") && (!images(p, false).isEmpty() || !images(p, true).isEmpty());
 }
 
 QMargins Renderer::contentMargins(const Part &p) const
@@ -743,43 +871,136 @@ std::optional<int> Renderer::integer(const Part &p, const QString &name) const
     return std::nullopt;
 }
 
+// CImageFile::DrawBackground for one of the part's DIBs in ROOM: the size it is drawn at (a
+// true-size image's own, or stretched as TrueSizeScalingType, TrueSizeStretchMark,
+// IntegralSizing and UniformSizing say), its place in the room by HAlign and VAlign, the
+// fill around it (BgFill), then the nine-grid that GdiDrawStream hands to win32k, after
+// SourceShrink has scaled the art and its margins down.
+void Renderer::drawImage(QPainter &painter, const Part &p, bool glyph, const QRect &room) const
+{
+    if (room.isEmpty())
+        return;
+    const auto image = choose(p, glyph, room.size());
+    if (!image)
+        return;
+    const QImage source = frame(p, image->file, glyph);
+    if (source.isNull())
+        return;
+    const auto flag = [&](const char *name) { return parseBool(property(p, QLatin1String(name)).value_or(QString())); };
+    // An image glyph is always drawn at its true size.
+    const Sizing sizing = glyph ? Sizing::TrueSize : sizingOf(property(p, QStringLiteral("sizingtype")));
+    QSize drawn = room.size();
+    bool stretch = false;
+    if (sizing == Sizing::TrueSize) {
+        drawn = source.size();
+        const QString scaling = property(p, QStringLiteral("truesizescalingtype")).value_or(QString()).trimmed().toLower();
+        if (scaling == QLatin1String("size") || scaling == QLatin1String("dpi")) {
+            if (source.width() > room.width() || source.height() > room.height()) {
+                // Larger than its room: stretched into it
+                stretch = true;
+                drawn = room.size();
+            } else {
+                const bool byDpi = scaling == QLatin1String("dpi");
+                int w = byDpi ? mulDiv(source.width(), m_dpi, image->minDpi) : mulDiv(source.width(), room.width(), image->minSize.width());
+                int h = byDpi ? mulDiv(source.height(), m_dpi, image->minDpi) : mulDiv(source.height(), room.height(), image->minSize.height());
+                const int mark = integer(p, QStringLiteral("truesizestretchmark")).value_or(0);
+                if (w > 0 && h > 0) {
+                    w = qMin(w, room.width());
+                    h = qMin(h, room.height());
+                    if ((w - source.width()) * 100 / source.width() >= mark && (h - source.height()) * 100 / source.height() >= mark) {
+                        stretch = true;
+                        drawn = QSize(w, h);
+                    }
+                }
+            }
+        }
+        if (stretch && flag("integralsizing"))
+            drawn = QSize(int(double(drawn.width()) / source.width()) * source.width(),
+                          int(double(drawn.height()) / source.height()) * source.height());
+        if (flag("uniformsizing")) {
+            const double rx = double(drawn.width()) / source.width(), ry = double(drawn.height()) / source.height();
+            if (rx < ry)
+                drawn.setHeight(int(source.height() * rx));
+            else if (ry < rx)
+                drawn.setWidth(int(source.width() * ry));
+        }
+        if (drawn.isEmpty())
+            return;
+    }
+    // Smaller than the room: placed by HAlign and VAlign (centred unless they say otherwise)
+    QRect to = room;
+    bool smaller = false;
+    if (drawn.width() < room.width()) {
+        smaller = true;
+        const QString h = property(p, QStringLiteral("halign")).value_or(QString()).trimmed().toLower();
+        const int x = h == QLatin1String("left") ? room.x()
+                      : h == QLatin1String("right") ? room.x() + room.width() - drawn.width()
+                                                     : room.x() + (room.width() - drawn.width()) / 2;
+        to.setLeft(x);
+        to.setWidth(drawn.width());
+    }
+    if (drawn.height() < room.height()) {
+        smaller = true;
+        const QString v = property(p, QStringLiteral("valign")).value_or(QString()).trimmed().toLower();
+        const int y = v == QLatin1String("top") ? room.y()
+                      : v == QLatin1String("bottom") ? room.y() + room.height() - drawn.height()
+                                                      : room.y() + (room.height() - drawn.height()) / 2;
+        to.setTop(y);
+        to.setHeight(drawn.height());
+    }
+    const bool borderOnly = !glyph && flag("borderonly");
+    if (smaller && !borderOnly && flag("bgfill")) {
+        QColor fill(255, 255, 255);
+        parseColour(property(p, QStringLiteral("fillcolor")).value_or(QString()), &fill);
+        painter.fillRect(room, fill);
+    }
+    if (sizing == Sizing::TrueSize && !stretch) {
+        // The art at its size from the corner of its place, cut to it
+        painter.drawImage(to.topLeft(), source, QRect(QPoint(0, 0), to.size().boundedTo(source.size())));
+        return;
+    }
+    QMargins margins;
+    QImage art = source;
+    if (sizing != Sizing::TrueSize) {
+        parseMargins(property(p, QStringLiteral("sizingmargins")).value_or(QString()), &margins);
+        // SourceShrink: below its MinSize the art and its margins shrink by the room over NormalSize.
+        if (flag("sourceshrink") && (drawn.width() < image->minSize.width() || drawn.height() < image->minSize.height())) {
+            QSize normal(60, 30);
+            parseSize(property(p, QStringLiteral("normalsize")).value_or(QString()), &normal);
+            float sx = 1, sy = 1;
+            if (drawn.width() < image->minSize.width() && normal.width() > 0)
+                sx = float(drawn.width()) / normal.width();
+            if (drawn.height() < image->minSize.height() && normal.height() > 0)
+                sy = float(drawn.height()) / normal.height();
+            float scale = qMin(sx, sy);
+            if (scale > 1)
+                scale = float(int(scale));
+            if (scale != 1) {
+                const auto scaled = [scale](int n) { return int(std::floor(n * scale + 0.5f)); };
+                margins = QMargins(scaled(margins.left()), scaled(margins.top()), scaled(margins.right()), scaled(margins.bottom()));
+                const QSize size(int(source.width() * scale), int(source.height() * scale));
+                if (size.isEmpty())
+                    return;
+                art = stretched(source, size);
+            }
+        }
+    }
+    painter.drawImage(to.topLeft(), nineGrid(art, to.size(), margins, sizing == Sizing::Tile, borderOnly));
+}
+
 QImage Renderer::render(const Part &p, QSize size) const
 {
     QImage canvas(size, QImage::Format_ARGB32_Premultiplied);
     canvas.fill(Qt::transparent);
-    QSize minimum;
-    if (parseSize(property(p, QStringLiteral("minsize")).value_or(QString()), &minimum)
-        && (size.width() < minimum.width() || size.height() < minimum.height()))
-        return {};
     QPainter painter(&canvas);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
     const QRect dest = canvas.rect();
     const QString bg = property(p, QStringLiteral("bgtype")).value_or(QStringLiteral("imagefile")).trimmed().toLower();
-    const bool borderOnly = parseBool(property(p, QStringLiteral("borderonly")).value_or(QString()));
-    auto alignedIn = [&](QSize drawn, const QRect &room) {
-        const QString h = property(p, QStringLiteral("halign")).value_or(QString()).trimmed().toLower();
-        const QString v = property(p, QStringLiteral("valign")).value_or(QString()).trimmed().toLower();
-        const int spareX = room.width() - drawn.width(), spareY = room.height() - drawn.height();
-        const int x = h == QLatin1String("left") ? 0 : h == QLatin1String("right") ? spareX : spareX / 2;
-        const int y = v == QLatin1String("top") ? 0 : v == QLatin1String("bottom") ? spareY : spareY / 2;
-        return QRect(room.topLeft() + QPoint(qMax(0, x), qMax(0, y)), drawn);
-    };
-    // TrueSize art keeps its size; parts that scale (UniformSizing) shrink
-    // into a smaller room, keeping their proportions.
-    auto trueSizeDrawn = [&](QSize source, QSize room) {
-        if (room.width() >= source.width() && room.height() >= source.height())
-            return source;
-        if (!parseBool(property(p, QStringLiteral("uniformsizing")).value_or(QString())))
-            return source;
-        return source.scaled(room, Qt::KeepAspectRatio);
-    };
-
     if (bg == QLatin1String("borderfill")) {
         QColor border(0, 0, 0), fill(255, 255, 255);
         parseColour(property(p, QStringLiteral("bordercolor")).value_or(QString()), &border);
         parseColour(property(p, QStringLiteral("fillcolor")).value_or(QString()), &fill);
         const int b = qMax(0, integer(p, QStringLiteral("bordersize")).value_or(1));
-        if (!borderOnly)
+        if (!parseBool(property(p, QStringLiteral("borderonly")).value_or(QString())))
             painter.fillRect(dest, fill);
         if (b > 0 && dest.width() > 2 * b && dest.height() > 2 * b) {
             painter.fillRect(QRect(0, 0, dest.width(), b), border);
@@ -787,47 +1008,12 @@ QImage Renderer::render(const Part &p, QSize size) const
             painter.fillRect(QRect(0, b, b, dest.height() - 2 * b), border);
             painter.fillRect(QRect(dest.width() - b, b, b, dest.height() - 2 * b), border);
         }
-    } else if (bg != QLatin1String("none")) {
-        const QImage img = frame(p, false, size);
-        if (!img.isNull()) {
-            const Sizing sizing = sizingOf(property(p, QStringLiteral("sizingtype")));
-            if (sizing == Sizing::TrueSize) {
-                const QSize drawn = trueSizeDrawn(img.size(), size);
-                blit(painter, alignedIn(drawn, dest), img, img.rect(), Sizing::Stretch);
-            } else {
-                QMargins m;
-                parseMargins(property(p, QStringLiteral("sizingmargins")).value_or(QString()), &m);
-                m.setLeft(qBound(0, m.left(), img.width()));
-                m.setRight(qBound(0, m.right(), img.width() - m.left()));
-                m.setTop(qBound(0, m.top(), img.height()));
-                m.setBottom(qBound(0, m.bottom(), img.height() - m.top()));
-                const auto hx = split(dest.width(), m.left(), m.right());
-                const auto vy = split(dest.height(), m.top(), m.bottom());
-                const int sx[] = {0, m.left(), img.width() - m.right(), img.width()};
-                const int sy[] = {0, m.top(), img.height() - m.bottom(), img.height()};
-                const int dx[] = {0, hx.first, dest.width() - hx.second, dest.width()};
-                const int dy[] = {0, vy.first, dest.height() - vy.second, dest.height()};
-                for (int row = 0; row < 3; ++row)
-                    for (int col = 0; col < 3; ++col) {
-                        if (borderOnly && row == 1 && col == 1)
-                            continue;
-                        const QRect from(sx[col], sy[row], sx[col + 1] - sx[col], sy[row + 1] - sy[row]);
-                        const QRect to(dx[col], dy[row], dx[col + 1] - dx[col], dy[row + 1] - dy[row]);
-                        // Only the stretchable middle tiles.
-                        blit(painter, to, img, from, (row == 1 || col == 1) && sizing == Sizing::Tile ? Sizing::Tile : Sizing::Stretch);
-                    }
-            }
-        }
+    } else if (bg != QLatin1String("none") && !parseBool(property(p, QStringLiteral("glyphonly")).value_or(QString()))) {
+        drawImage(painter, p, false, dest);
     }
-    // An image glyph in the content rect (a combo box's arrow).
-    if (property(p, QStringLiteral("glyphtype")).value_or(QString()).trimmed().compare(QLatin1String("imageglyph"), Qt::CaseInsensitive) == 0) {
-        const QRect content = contentRect(p, dest);
-        const QImage glyph = frame(p, true, content.size());
-        if (!glyph.isNull()) {
-            const QSize drawn = trueSizeDrawn(glyph.size(), content.size());
-            blit(painter, alignedIn(drawn, content), glyph, glyph.rect(), Sizing::Stretch);
-        }
-    }
+    // An image glyph in the content rect (a combo box's arrow), at its true size
+    if (bg != QLatin1String("borderfill"))
+        drawImage(painter, p, true, contentRect(p, dest));
     return canvas;
 }
 
@@ -846,9 +1032,8 @@ bool Renderer::draw(QPainter *painter, const QRect &rect, const Part &p) const
         image = m_cache.value(key);
     }
     if (image.isNull()) {
+        // (MinSize only chooses images and starts SourceShrink: uxtheme draws below it too.)
         image = render(p, rect.size());
-        if (image.isNull())
-            return true;   // below MinSize: nothing, as uxtheme draws nothing
         QMutexLocker locker(&m_lock);
         if (m_cache.size() > 2000)
             m_cache.clear();

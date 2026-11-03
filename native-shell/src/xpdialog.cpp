@@ -219,7 +219,9 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
         } else {
             widget = new QWidget(parent);
         }
-        if (auto *label = qobject_cast<QLabel *>(previous); label && (qobject_cast<QComboBox *>(widget) || qobject_cast<QLineEdit *>(widget) || qobject_cast<QSlider *>(widget)))
+        // (A list view's place takes its label too, for the list that will stand there.)
+        const bool listView = className.compare(QLatin1String("SysListView32"), Qt::CaseInsensitive) == 0;
+        if (auto *label = qobject_cast<QLabel *>(previous); label && (qobject_cast<QComboBox *>(widget) || qobject_cast<QLineEdit *>(widget) || qobject_cast<QSlider *>(widget) || listView))
             label->setBuddy(widget);
         widget->setGeometry(unitX(x), unitY(y), unitX(cx), qobject_cast<QComboBox *>(widget) ? 21 : unitY(cy));
         // A group box without words still has its line half a line of text down, as the Button class draws it

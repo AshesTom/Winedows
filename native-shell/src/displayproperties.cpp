@@ -9,6 +9,7 @@
 #include "xpdialog.h"
 #include "xpfiles.h"
 
+#include <QApplication>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -56,8 +57,33 @@ const int DIALOG_SCREEN_SAVER = 1015, DIALOG_SETTINGS = 1007;
 const int SAVER_WAIT_LABEL = 1316, SAVER_POWER_LOGO = 1305;
 const int SAVER_MONITOR = 1302, SAVER_COMBO = 1300, SAVER_SETTINGS = 1303, SAVER_PREVIEW = 1304, SAVER_WAIT = 1306, SAVER_UPDOWN = 1307, SAVER_PASSWORD = 1320, SAVER_POWER = 1314;
 const int SETTINGS_MONITOR = 1812, SETTINGS_ARRANGE = 1819, SETTINGS_LAYOUT = 1801, SETTINGS_DISPLAYS = 1800, SETTINGS_NAME = 1811, SETTINGS_SLIDER = 1808, SETTINGS_TEXT = 1814, SETTINGS_QUALITY = 1807, SETTINGS_COLOURS = 1813, SETTINGS_TROUBLESHOOT = 1821, SETTINGS_ADVANCED = 1802;
+// The Desktop page is shell32's dialog (desk.cpl makes it from shell32's CLSID), with its words
+const int DIALOG_DESKTOP = 29952;
+const int DESKTOP_LIST = 30048, DESKTOP_BROWSE = 30049, DESKTOP_CUSTOMIZE = 30050, DESKTOP_POSITION = 30051, DESKTOP_PREVIEW = 30053, DESKTOP_COLOUR = 30054, DESKTOP_LIST_LABEL = 30056;
+const int SHELL_CENTER = 30236, SHELL_NONE_WALLPAPER = 30300;
+// desk.cpl's: its name (the sheet's caption) and its pages' names
+const int DESK_NAME = 100, DESK_DISABLED = 102, DESK_TAB_THEMES = 1240;
 // The monitor bitmap's screen
 const QRect MONITOR_SCREEN(16, 17, 152, 112);
+
+const std::optional<w4w::PeResources> &desk()
+{
+    static const auto resources = xpfiles::resources(xpfiles::find(QStringLiteral("desk.cpl")));
+    return resources;
+}
+
+QString deskText(int id, const char *fallback)
+{
+    // (The Settings page's name ends with a space in desk.cpl, as in themeui's dialog.)
+    const QString found = desk() ? xpfiles::string(*desk(), id).trimmed() : QString();
+    return found.isEmpty() ? QLatin1String(fallback) : found;
+}
+
+const std::optional<w4w::PeResources> &shell32()
+{
+    static const auto resources = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
+    return resources;
+}
 
 const std::optional<w4w::PeResources> &themeui()
 {
@@ -381,18 +407,65 @@ void DisplayProperties::showTab(Tab tab)
     dialog->activateWindow();
 }
 
+void DisplayProperties::showArguments(const QString &arguments)
+{
+    QString page = arguments.trimmed();
+    // Windows 9x's numbers: desk.cpl turns them into the pages' names. Others are taken as they
+    // are (an index into the sheet), and one past the pages is the first.
+    if (!page.isEmpty() && !page.startsWith(QLatin1Char('@'))) {
+        static const QRegularExpression number(QStringLiteral("^\\s*(-?\\d*)"));
+        const int n = number.match(page).captured(1).toInt();
+        static const char *const names[] = {"@Desktop", "@ScreenSaver", "@Appearance", "@Settings"};
+        if (n < 0 || n > 3) {
+            showTab(n >= 0 && n < LinuxPrograms ? Tab(n) : Themes);
+            return;
+        }
+        page = QLatin1String(names[n]);
+    }
+    Tab tab = Themes;
+    QString themeFile;
+    if (page.startsWith(QLatin1Char('@'))) {
+        // The page's name, to the first space (or in quotes), as its title or desk.cpl's own words for it
+        const bool quoted = page.size() > 1 && page.at(1) == QLatin1Char('"');
+        const int from = quoted ? 2 : 1;
+        int end = page.indexOf(quoted ? QLatin1Char('"') : QLatin1Char(' '), from);
+        if (end < 0)
+            end = page.size();
+        const QString name = page.mid(from, end - from);
+        const QString rest = page.mid(end);
+        const struct { const char *key; Tab tab; } known[] = {
+            {"Themes", Themes}, {"Theme Settings", Themes}, {"Desktop", Desktop}, {"Background", Desktop}, {"Web", Desktop},
+            {"ScreenSaver", ScreenSaver}, {"Appearance", Appearance}, {"Settings", Settings}};
+        for (const auto &k : known)
+            if (name.compare(QLatin1String(k.key), Qt::CaseInsensitive) == 0)
+                tab = k.tab;
+        for (int i = 0; i < 5; ++i)
+            if (name.compare(deskText(DESK_TAB_THEMES + i, ""), Qt::CaseInsensitive) == 0)
+                tab = Tab(i);
+        static const QRegularExpression file(QStringLiteral("/File:\"([^\"]*)\""), QRegularExpression::CaseInsensitiveOption);
+        if (rest.contains(QLatin1String("/Action:OpenTheme"), Qt::CaseInsensitive) || rest.contains(QLatin1String("/Action:OpenMSTheme")))
+            themeFile = file.match(rest).captured(1);
+    }
+    showTab(tab);
+    if (!themeFile.isEmpty())
+        for (QWidget *window : QApplication::topLevelWidgets())
+            if (auto *properties = qobject_cast<DisplayProperties *>(window))
+                properties->importThemeFile(themeFile);
+}
+
 DisplayProperties::DisplayProperties()
     : m_choice(ShellTheme::instance()->choice())
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowTitle(tr("Display Properties"));
+    // desk.cpl's name, which comctl32 makes "<name> Properties" (PSH_PROPTITLE)
+    setWindowTitle(tr("%1 Properties").arg(deskText(DESK_NAME, "Display")));
     m_tabs = new xpdialog::SheetTabs(this);
-    // In XP's order, and what Linux adds after them
-    m_tabs->addTab(themesPage(), tr("Themes"));
-    m_tabs->addTab(desktopPage(), tr("Desktop"));
-    m_tabs->addTab(screenSaverPage(), tr("Screen Saver"));
-    m_tabs->addTab(appearancePage(), tr("Appearance"));
-    m_tabs->addTab(settingsPage(), tr("Settings"));
+    // In desk.cpl's order, with its names, and what Linux adds after them
+    m_tabs->addTab(themesPage(), deskText(DESK_TAB_THEMES, "Themes"));
+    m_tabs->addTab(desktopPage(), deskText(DESK_TAB_THEMES + 1, "Desktop"));
+    m_tabs->addTab(screenSaverPage(), deskText(DESK_TAB_THEMES + 2, "Screen Saver"));
+    m_tabs->addTab(appearancePage(), deskText(DESK_TAB_THEMES + 3, "Appearance"));
+    m_tabs->addTab(settingsPage(), deskText(DESK_TAB_THEMES + 4, "Settings"));
     m_tabs->addTab(linuxPage(), tr("Linux"));
     auto *ok = new QPushButton(tr("OK"), this);
     auto *cancel = new QPushButton(tr("Cancel"), this);
@@ -489,33 +562,61 @@ void DisplayProperties::fillThemes()
 QWidget *DisplayProperties::desktopPage()
 {
     auto *page = new QWidget;
-    // XP's places, measured on its Desktop tab: themeui.dll keeps this page in code
     page->setFixedSize(378, 354);
-    m_monitor = new MonitorPreview(page);
-    m_monitor->move((378 - m_monitor->width()) / 2, 11);
-    auto *label = new QLabel(tr("&Background:"), page);
-    label->setGeometry(14, 190, 200, 16);
-    m_wallpapers = new QListWidget(page);
-    m_wallpapers->setGeometry(14, 208, 273, 113);
-    label->setBuddy(m_wallpapers);
-    auto *browse = new QPushButton(tr("&Browse..."), page);
-    browse->setGeometry(297, 209, 75, 23);
-    auto *position = new QLabel(tr("&Position:"), page);
-    position->setGeometry(297, 244, 75, 16);
-    m_position = new QComboBox(page);
-    m_position->setGeometry(297, 260, 75, 21);
-    position->setBuddy(m_position);
-    m_position->addItems({tr("Center"), tr("Tile"), tr("Stretch")});
-    auto *colour = new QLabel(tr("&Color:"), page);
-    colour->setGeometry(297, 291, 75, 16);
-    m_backgroundButton = new QPushButton(page);
-    m_backgroundButton->setGeometry(297, 307, 75, 21);
-    colour->setBuddy(m_backgroundButton);
-    auto *customize = new QPushButton(tr("Customize &Desktop..."), page);
-    customize->setGeometry(14, 330, 135, 23);
+    QPushButton *browse = nullptr, *customize = nullptr;
+    if (shell32()) {
+        // shell32's dialog: its list (a one-column report list view), its preview, its colour button
+        const xpdialog::Page dialog = xpdialog::build(*shell32(), DIALOG_DESKTOP, page);
+        if (QWidget *place = dialog.controls.value(DESKTOP_LIST)) {
+            m_wallpapers = new QListWidget(page);
+            m_wallpapers->setGeometry(place->geometry());
+            place->hide();
+            if (auto *label = qobject_cast<QLabel *>(dialog.controls.value(DESKTOP_LIST_LABEL)))
+                label->setBuddy(m_wallpapers);
+        }
+        if (QWidget *place = dialog.controls.value(DESKTOP_PREVIEW)) {
+            m_monitor = new MonitorPreview(page);
+            m_monitor->move(place->x() + (place->width() - m_monitor->width()) / 2, place->y());
+            place->hide();
+        }
+        browse = qobject_cast<QPushButton *>(dialog.controls.value(DESKTOP_BROWSE));
+        customize = qobject_cast<QPushButton *>(dialog.controls.value(DESKTOP_CUSTOMIZE));
+        m_position = qobject_cast<QComboBox *>(dialog.controls.value(DESKTOP_POSITION));
+        m_backgroundButton = qobject_cast<QPushButton *>(dialog.controls.value(DESKTOP_COLOUR));
+        if (m_position)
+            for (int i = 0; i < 3; ++i)
+                m_position->addItem(xpfiles::string(*shell32(), SHELL_CENTER + i));
+    }
+    if (!m_wallpapers || !m_monitor || !browse || !customize || !m_position || !m_backgroundButton) {
+        // Without shell32: its dialog's places, in pixels
+        qDeleteAll(page->children());
+        m_monitor = new MonitorPreview(page);
+        m_monitor->move((378 - m_monitor->width()) / 2, 11);
+        auto *label = new QLabel(tr("Bac&kground:"), page);
+        label->setGeometry(11, 187, 75, 13);
+        m_wallpapers = new QListWidget(page);
+        m_wallpapers->setGeometry(11, 206, 272, 114);
+        label->setBuddy(m_wallpapers);
+        browse = new QPushButton(tr("&Browse..."), page);
+        browse->setGeometry(293, 206, 75, 23);
+        auto *position = new QLabel(tr("&Position:"), page);
+        position->setGeometry(293, 241, 75, 13);
+        m_position = new QComboBox(page);
+        m_position->setGeometry(293, 257, 75, 21);
+        position->setBuddy(m_position);
+        m_position->addItems({tr("Center"), tr("Tile"), tr("Stretch")});
+        auto *colour = new QLabel(tr("&Color:"), page);
+        colour->setGeometry(293, 288, 75, 13);
+        m_backgroundButton = new QPushButton(page);
+        m_backgroundButton->setGeometry(293, 304, 75, 21);
+        colour->setBuddy(m_backgroundButton);
+        customize = new QPushButton(tr("Customize &Desktop..."), page);
+        customize->setGeometry(11, 325, 135, 23);
+    }
     customize->setEnabled(false);
 
-    auto *none = new QListWidgetItem(QIcon(QPixmap::fromImage(ShellTheme::instance()->shellIcon(200, 16))), text(STRING_NONE, "(None)"));
+    const QString noneText = shell32() ? xpfiles::string(*shell32(), SHELL_NONE_WALLPAPER) : QString();
+    auto *none = new QListWidgetItem(QIcon(QPixmap::fromImage(ShellTheme::instance()->shellIcon(200, 16))), noneText.isEmpty() ? text(STRING_NONE, "(None)") : noneText);
     m_wallpapers->addItem(none);
     const QStringList paths = wallpaperPaths();
     for (const QString &path : paths) {
@@ -858,13 +959,18 @@ void DisplayProperties::selectWallpaper()
 // user's themes. Only their resources are ever read; nothing of them runs.
 void DisplayProperties::importTheme()
 {
-    const auto restore = [this] { changed(); };
     const QString file = QFileDialog::getOpenFileName(this, tr("Open Theme"), QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
                                                       tr("Theme Files (*.theme *.msstyles)"));
     if (file.isEmpty()) {
-        restore();
+        changed();
         return;
     }
+    importThemeFile(file);
+}
+
+void DisplayProperties::importThemeFile(const QString &file)
+{
+    const auto restore = [this] { changed(); };
     const QString style = file.endsWith(QLatin1String(".msstyles"), Qt::CaseInsensitive) ? file : styleOfTheme(file);
     const StyleInfo info = style.isEmpty() ? StyleInfo() : styleInfo(style);
     if (info.colours.isEmpty() || !w4w::Theme::load(style, info.colours.first().first, info.sizes.value(0).first)) {

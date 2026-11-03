@@ -61,6 +61,10 @@ public:
     enum Tab { Themes, Desktop, ScreenSaver, Appearance, Settings, LinuxPrograms };
     // The one window of them, on TAB.
     static void showTab(Tab tab);
+    // As desk.cpl's CPlApplet takes its parameters ("control desk.cpl,,1"): Windows 9x's page
+    // numbers (0 Desktop, 1 Screen Saver, 2 Appearance, 3 Settings), "@" and a page's name,
+    // and after it /Action:OpenTheme /File:"PATH" for a theme to open.
+    static void showArguments(const QString &arguments);
     // The screen saver chosen here, when the session starts.
     static void restoreScreenSaver();
 
@@ -74,6 +78,7 @@ private:
     void applyScreenSaver();
     void fillThemes();
     void importTheme();
+    void importThemeFile(const QString &file);
     void deleteTheme();
     void applyResolution();
     QWidget *linuxPage();

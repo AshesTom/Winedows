@@ -98,6 +98,9 @@ void open(const QString &id)
 {
     if (id == QLatin1String("display"))
         DisplayProperties::showTab(DisplayProperties::Themes);
+    else if (id.startsWith(QLatin1String("display,")))
+        // desk.cpl's parameters, as "control desk.cpl,,1" or "control desk.cpl,,@Appearance" give them
+        DisplayProperties::showArguments(id.section(QLatin1Char(','), 2));
     else if (id == QLatin1String("display-desktop"))
         DisplayProperties::showTab(DisplayProperties::Desktop);
     else if (id == QLatin1String("fonts")) {

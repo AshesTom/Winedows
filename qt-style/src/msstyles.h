@@ -85,8 +85,9 @@ private:
     mutable QHash<QString, Decoded> m_bitmaps;
 };
 
-// DrawThemeBackground and friends over a Theme, drawn with nearest-neighbour
-// sampling as uxtheme does, into premultiplied images that are cached.
+// DrawThemeBackground and friends over a Theme, as XP's uxtheme.dll lays the art out
+// (CImageFile) and win32k.sys's EngNineGrid stretches it, into premultiplied images that
+// are cached.
 class Renderer
 {
 public:
@@ -110,8 +111,17 @@ public:
     std::optional<QString> property(const Part &p, const QString &name) const { return m_theme->property(p, name); }
 
 private:
-    QImage frame(const Part &p, bool glyph, QSize destination) const;
-    QString chooseImage(const Part &p, bool glyph, QSize destination) const;
+    // One of a part's DIBs: its ImageFile, the MinSize and MinDpi that choose it
+    struct Image
+    {
+        QString file;
+        QSize minSize;
+        int minDpi = 96;
+    };
+    QList<Image> images(const Part &p, bool glyph) const;
+    std::optional<Image> choose(const Part &p, bool glyph, QSize destination) const;
+    QImage frame(const Part &p, const QString &file, bool glyph) const;
+    void drawImage(QPainter &painter, const Part &p, bool glyph, const QRect &room) const;
     QImage render(const Part &p, QSize size) const;
     std::shared_ptr<Theme> m_theme;
     int m_dpi;

@@ -25,10 +25,29 @@ open applications take the new style, colours and fonts.
 
 From the `.msstyles` (a resource-only PE file, read with bounds checks): the
 layout INI of the variant (`COLORNAMES`/`SIZENAMES` index `FILERESNAMES`), and
-its bitmaps. Parts are drawn as Wine's uxtheme draws them for the shell:
-nine-grid `SizingMargins` (Stretch, Tile), `TrueSize`, `BorderFill`,
-`BorderOnly`, image glyphs, `ImageFile1..7` by DPI or by size, frames by state,
-32-bpp alpha (any pixel not opaque) or the transparent colour.
+its bitmaps. Parts are drawn as XP's own `uxtheme.dll` lays them out and
+`win32k.sys` stretches them (read from their code, not from Wine's):
+
+- the image: `ImageFile`, or with an `ImageSelectType` the last of
+  `ImageFile1..7` whose `MinSize` fits (by size) or whose `MinDpi` the screen
+  reaches (by DPI), the first of them otherwise; for an image glyph they are
+  the glyph's. Frames side by side unless `ImageLayout` is vertical, each the
+  width (or height) over `ImageCount`;
+- alpha only when a pixel is neither opaque nor clear (otherwise the alpha byte
+  is ignored and `TransparentColor`, magenta by default, is keyed out),
+  premultiplied rounding down as uxtheme does at load;
+- `TrueSize`: drawn at its size, placed by `HAlign`/`VAlign` (centred by
+  default), `BgFill` around it; with a `TrueSizeScalingType` stretched into a
+  smaller room, or grown by `MinSize` or `MinDpi` once both sides pass
+  `TrueSizeStretchMark` percent, then `IntegralSizing` and `UniformSizing`;
+- Stretch and Tile: win32k's nine-grid. The margins keep their size while the
+  destination and the art both have a middle; otherwise the destination is
+  shared between them in their proportion. GDI's nearest-neighbour step
+  (32.32 fixed point, half a step in), tiles from the middle's start.
+  `SourceShrink` below `MinSize` scales the art and its margins by the room over
+  `NormalSize`. `MinSize` never stops a part from being drawn;
+- `BorderFill`, `BorderOnly`, `GlyphOnly`, `ContentMargins` (the
+  `SizingMargins` when missing).
 
 ## What it draws
 
