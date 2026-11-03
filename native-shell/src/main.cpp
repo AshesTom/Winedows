@@ -111,7 +111,7 @@ int main(int argc, char **argv)
     parser.addOption({QStringLiteral("calc"), QStringLiteral("only XP's Calculator")});
     parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("Notepad's file"), QStringLiteral("[file]"));
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
-    parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, network, programs, sound, system, mouse, keyboard, printers, users, datetime, security, winver"), QStringLiteral("id")});
+    parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, taskbar, network, programs, sound, system, mouse, keyboard, printers, users, datetime, security, winver"), QStringLiteral("id")});
     parser.process(app);
 
     xpfiles::loadFonts();

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "controlpanel.h"
+#include "taskbarproperties.h"
 
 #include "applets.h"
 #include "displayproperties.h"
@@ -75,6 +76,8 @@ QList<Applet> applets()
     };
     add("display", cplString("desk.cpl", 41, "Display"), QT_TR_NOOP("Change the appearance of your desktop, such as the background, the theme and the look of Linux programs."), cplIcon("desk.cpl", 100, 22), Appearance);
     add("folders", QObject::tr("Folder Options"), QT_TR_NOOP("Customize the display of files and folders."), fileicons::shell(fileicons::Folder), Appearance);
+    // shell32.dll's Taskbar and Start Menu item (its name 32517, its icon -40), explorer.exe's sheet
+    add("taskbar", xpfiles::shellString(32517, "Taskbar and Start Menu"), QT_TR_NOOP("Customize the Start menu and the taskbar, such as the types of items to be displayed and how they should appear."), fileicons::shell(40), Appearance);
     add("fonts", QObject::tr("Fonts"), QT_TR_NOOP("Show and manage the fonts on your computer."), fileicons::shell(39), Appearance);
     if (installed("nmcli") || installed("nm-connection-editor"))
         add("network", cplString("ncpa.cpl", 2001, "Network Connections"), QT_TR_NOOP("Connects to other computers, networks, and the Internet."), cplIcon("ncpa.cpl", 1001, 18), Network);
@@ -107,7 +110,9 @@ void open(const QString &id)
         const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/fonts");
         QDir().mkpath(folder);
         FileBrowser::open(folder);
-    } else if (id == QLatin1String("printers"))
+    } else if (id == QLatin1String("taskbar"))
+        TaskbarProperties::showTab(TaskbarProperties::TaskbarTab);
+    else if (id == QLatin1String("printers"))
         QProcess::startDetached(QStringLiteral("system-config-printer"), {});
     else
         applets::open(id);

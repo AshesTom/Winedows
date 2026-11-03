@@ -43,6 +43,7 @@ add_executable(explorer
     src/securitycenter.cpp src/securitycenter.h src/securitywindow.cpp
     src/systemicons.cpp src/systemicons.h
     src/taskbar.cpp src/taskbar.h
+    src/taskbarproperties.cpp src/taskbarproperties.h
     src/arrange.cpp src/arrange.h
     src/tray.cpp src/tray.h
     src/windowlist.cpp src/windowlist.h
@@ -74,6 +75,26 @@ check_include_file_cxx(quadmath.h HAVE_QUADMATH_H)
 if(HAVE_QUADMATH_H)
     target_link_libraries(explorer PRIVATE quadmath)
     target_compile_definitions(explorer PRIVATE XP_QUAD)
+endif()
+
+# Windows Media Player, a program of its own as on XP: Qt Multimedia plays, Qt's JavaScript engine
+# runs the skins' scripts. The shell starts it from All Programs and for music and videos.
+find_package(Qt6 QUIET COMPONENTS Multimedia Qml)
+if(Qt6Multimedia_FOUND AND Qt6Qml_FOUND)
+    add_executable(wmplayer
+        src/wmplayer.cpp
+        src/mediaplayer.cpp src/mediaplayer.h
+        src/wmpengine.cpp src/wmpengine.h
+        src/wmpskin.cpp src/wmpskin.h
+        src/xpfiles.cpp src/xpfiles.h
+        src/xpprogram.cpp src/xpprogram.h
+        ../qt-style/src/msstyles.cpp ../qt-style/src/msstyles.h
+        ../qt-style/src/session.cpp ../qt-style/src/session.h)
+    target_include_directories(wmplayer PRIVATE ../qt-style/src)
+    target_link_libraries(wmplayer PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::Qml)
+    target_compile_options(wmplayer PRIVATE -Wall -Wextra)
+    target_compile_definitions(explorer PRIVATE XP_MEDIA_PLAYER)
+    install(TARGETS wmplayer RUNTIME DESTINATION bin)
 endif()
 
 install(TARGETS explorer RUNTIME DESTINATION bin)

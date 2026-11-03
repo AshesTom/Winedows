@@ -41,6 +41,7 @@ void openCommandPrompt(const QString &folder);
 // XP's Notepad (with FILE, if any) and Calculator, each a program of its own
 void openNotepad(const QString &file = QString());
 void openCalculator();
+void openMediaPlayer(const QStringList &files = {});
 // The icon theme for programs' icons: the one chosen in linux-look.conf, the
 // Plasma user's, or a common one that is installed.
 void useIconTheme();

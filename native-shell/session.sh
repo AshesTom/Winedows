@@ -67,7 +67,20 @@ Exec=$shell --notepad %f
 NoDisplay=true
 MimeType=text/plain;
 EOF
-printf '[Default Applications]\ninode/directory=xp-explorer.desktop\ntext/plain=xp-notepad.desktop\n' > "$config/xp-shell-mimeapps.list"
+# Music and videos in Windows Media Player, as XP's file types have them
+media='audio/mpeg audio/x-ms-wma audio/x-wav audio/wav audio/midi audio/ogg audio/flac audio/mp4 audio/x-aiff audio/basic video/x-ms-wmv video/x-ms-asf video/x-msvideo video/mpeg video/mp4 video/x-matroska video/webm video/quicktime video/ogg'
+cat > "$data/xp-mediaplayer.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Windows Media Player
+Exec=$(dirname "$shell")/wmplayer %F
+NoDisplay=true
+MimeType=${media// /;};
+EOF
+{
+    printf '[Default Applications]\ninode/directory=xp-explorer.desktop\ntext/plain=xp-notepad.desktop\n'
+    for type in $media; do printf '%s=xp-mediaplayer.desktop\n' "$type"; done
+} > "$config/xp-shell-mimeapps.list"
 assets=$root/.local/native-assets
 # XP's icons as an icon theme, made from the user's XP files the first time (session/icon_theme.py).
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import icon_theme; icon_theme.ensure(sys.argv[2], sys.argv[3])' \

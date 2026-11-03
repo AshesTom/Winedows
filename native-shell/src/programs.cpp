@@ -313,6 +313,16 @@ void openCalculator()
     QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--calc")}, QDir::homePath());
 }
 
+void openMediaPlayer(const QStringList &files)
+{
+    // wmplayer, beside the shell
+    const QString program = QFileInfo(QCoreApplication::applicationFilePath()).dir().filePath(QStringLiteral("wmplayer"));
+    QStringList arguments;
+    if (!files.isEmpty())
+        arguments << QStringLiteral("--") << files;
+    QProcess::startDetached(program, arguments, QDir::homePath());
+}
+
 void open(const QString &target)
 {
     // Folders and XP's own places have their windows here; the rest, their programs.

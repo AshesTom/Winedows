@@ -158,6 +158,19 @@ static bool isSystemFolder(const QString &path)
 
 namespace {
 
+// shell32.dll's column tables give each column's width in characters, which the view makes pixels
+// with the list's font: 6 a character with Tahoma 8, measured on XP's (Name 180, Size 96, Type 120),
+// the width of its "0". A file folder's: Name 30, Size 16, Type 20, Date Modified 20; My Computer's:
+// Name 20, Type 25, Total Size 16, Free Space 16; the Control Panel's: Name 20, Comments 20; search
+// results': Name 30, In Folder 30, then a file folder's.
+void setColumnChars(QTreeView *view, std::initializer_list<int> chars)
+{
+    const int perChar = view->fontMetrics().horizontalAdvance(QLatin1Char('0'));
+    int column = 0;
+    for (int count : chars)
+        view->setColumnWidth(column++, count * perChar);
+}
+
 // The search results' columns: shell32.dll's words
 void clearResults(QStandardItemModel *model)
 {
@@ -556,6 +569,13 @@ public:
             return info.isDir() ? QString() : fileicons::sizeText(info.size());
         }
         return QIdentityProxyModel::data(index, role);
+    }
+    // Size's header to the right: shell32's LVCFMT_RIGHT
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override
+    {
+        if (role == Qt::TextAlignmentRole && orientation == Qt::Horizontal && section == 1)
+            return int(Qt::AlignRight | Qt::AlignVCenter);
+        return QIdentityProxyModel::headerData(section, orientation, role);
     }
     QString path(const QModelIndex &index) const { return files()->filePath(mapToSource(index)); }
 };
@@ -1293,8 +1313,9 @@ void FileBrowser::buildPanes()
     m_details->viewport()->installEventFilter(this);
     m_details->installEventFilter(this);
     m_details->header()->setSectionsMovable(false);
-    m_details->header()->setFixedHeight(m_details->fontMetrics().height() + 4);
-    m_details->setColumnWidth(0, 220);
+    // 20 with Tahoma 8, as XP's Details header (its art is 18)
+    m_details->header()->setFixedHeight(m_details->fontMetrics().height() + 7);
+    setColumnChars(m_details, {30, 16, 20, 20});
     connect(m_details, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) {
         showViewContextMenu(m_details, at);
     });
@@ -1367,10 +1388,8 @@ void FileBrowser::buildPanes()
     m_virtualDetails->viewport()->installEventFilter(this);
     m_virtualDetails->installEventFilter(this);
     m_virtualDetails->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_virtualDetails->header()->setFixedHeight(m_virtualDetails->fontMetrics().height() + 4);
-    m_virtualDetails->setColumnWidth(0, 200);
-    m_virtualDetails->setColumnWidth(1, 100);
-    m_virtualDetails->setColumnWidth(2, 90);
+    m_virtualDetails->header()->setFixedHeight(m_virtualDetails->fontMetrics().height() + 7);
+    setColumnChars(m_virtualDetails, {20, 20});
     m_virtualDetails->setSortingEnabled(true);
     m_virtualDetails->sortByColumn(0, Qt::AscendingOrder);
     connect(m_virtualDetails, &QAbstractItemView::activated, this, &FileBrowser::activate);
@@ -1407,6 +1426,7 @@ void FileBrowser::buildPanes()
         updateStatus();
     });
     clearResults(m_resultsModel);
+    setColumnChars(m_results, {30, 30, 16, 20, 20});
 
     for (QItemSelectionModel *selection : {m_list->selectionModel(), m_virtualList->selectionModel()})
         connect(selection, &QItemSelectionModel::selectionChanged, this, [this] {
@@ -2253,10 +2273,14 @@ void FileBrowser::showVirtual(const QString &location)
     m_virtual->setColumnCount(columns);
     m_virtual->setHorizontalHeaderLabels(location == places::Computer ? QStringList{tr("Name"), tr("Type"), tr("Total Size"), tr("Free Space")}
                                                                      : QStringList{tr("Name"), tr("Comments")});
+    // Total Size and Free Space to the right, as shell32's table has them
+    for (int column = 2; location == places::Computer && column < 4; ++column)
+        m_virtual->horizontalHeaderItem(column)->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
     if (changedColumns) {
-        m_virtualDetails->setColumnWidth(0, 200);
-        m_virtualDetails->setColumnWidth(1, 100);
-        for (int column = 2; column < columns; ++column) m_virtualDetails->setColumnWidth(column, 90);
+        if (location == places::Computer)
+            setColumnChars(m_virtualDetails, {20, 25, 16, 16});
+        else
+            setColumnChars(m_virtualDetails, {20, 20});
     }
     m_actions.clear();
     if (location == places::Computer) {
@@ -2879,7 +2903,7 @@ void FileBrowser::finishSearch()
 {
     m_searchTimer->stop();
     m_searchPending.clear();
-    m_results->resizeColumnToContents(0);
+    setColumnChars(m_results, {30, 30, 16, 20, 20});
     m_searchCompanion->searchFinished(m_searchFound);
 }
 

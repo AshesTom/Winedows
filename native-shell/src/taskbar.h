@@ -5,6 +5,10 @@
 // rectangles are those of explorer.exe's at 96 DPI (docs/native-shell.md).
 #pragma once
 
+#include "taskbarproperties.h"
+
+#include <QFileSystemWatcher>
+
 #include "arrange.h"
 #include "tray.h"
 #include "windowlist.h"
@@ -84,6 +88,8 @@ private:
 
     QRect m_startRect, m_trayRect, m_clockRect, m_bandRect;
     QList<Button> m_buttons;
+    TaskbarSettings m_settings = TaskbarSettings::load();
+    QFileSystemWatcher m_settingsWatcher;
     QSet<QString> m_grouped;   // the programs whose windows share a button
     QList<QRect> m_trayIconRects;
     arrange::Undo m_undo;

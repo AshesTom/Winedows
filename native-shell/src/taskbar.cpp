@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "taskbar.h"
+#include "taskbarproperties.h"
+
+#include <QDir>
 
 #include <QTimer>
 
@@ -66,8 +69,12 @@ enum {
 const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_SHOW_OPEN_WINDOWS = 850;
 const int TEXT_RAISE = 1;           // the taskbar's small text sits a pixel above the centre
 const int TURN_OFF_DELAY_MS = 200;
-// The tray's art starts with 10 transparent pixels.
-const int TRAY_ICON_X = 16, TRAY_ICON_STEP = 18, TRAY_CLOCK_GAP = 7, TRAY_END = 17;
+// The notification area as explorer.exe lays it out: the style's content margins (19 and 7 with Luna),
+// a toolbar of 18-pixel buttons with the icons 1 inside, then the clock. The clock is as wide as the
+// longer of 11:00 and 23:00 in the user's format with "00" after it, whatever the time, and centres
+// the time in it (measured with 4 and 5 icons: the area at 868 and 850, the time's middle at 987).
+// Without a visual style, 6 at each end and 7 before the clock.
+const int TRAY_BUTTON = 18, TRAY_ICON_INSET = 1, CLASSIC_TRAY_END = 6, CLASSIC_CLOCK_GAP = 7;
 const int ICON_SIZE = 16;
 
 // Toolbar part states and their frames in the style's strips
@@ -299,6 +306,20 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     connect(&m_clockTimer, &QTimer::timeout, this, &Taskbar::tickClock);
     themeChanged();
     tickClock();
+    const auto reloadSettings = [this] {
+        const TaskbarSettings settings = TaskbarSettings::load();
+        if (settings.group == m_settings.group && settings.clock == m_settings.clock)
+            return;
+        m_settings = settings;
+        relayout();
+        update();
+    };
+    connect(TaskbarSettingsNotifier::instance(), &TaskbarSettingsNotifier::changed, this, reloadSettings);
+    // and from the sheet of another process (explorer --applet taskbar): QSettings replaces the file
+    const QString settingsFolder = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine");
+    QDir().mkpath(settingsFolder);
+    m_settingsWatcher.addPath(settingsFolder);
+    connect(&m_settingsWatcher, &QFileSystemWatcher::directoryChanged, this, reloadSettings);
     // bridge-wm and the session's supervisor know XP's taskbar by this class.
     x11::setString(winId(), "_WIN4WINE_CLASS", "Shell_TrayWnd");
 }
@@ -379,20 +400,29 @@ void Taskbar::relayout()
 
     const QFontMetrics clockMetrics(m_clockFont);
     const int icons = int(m_tray->icons().size());
-    const int clockWidth = clockMetrics.horizontalAdvance(m_clock);
-    const int first = theme()->scaled(renderer ? TRAY_ICON_X : 6);
-    const int end = theme()->scaled(renderer ? TRAY_END : 6);
-    const int trayWidth = first + icons * theme()->scaled(TRAY_ICON_STEP) + theme()->scaled(TRAY_CLOCK_GAP) + clockWidth + end;
+    int clockWidth = 0;
+    for (int hour : {11, 23})
+        clockWidth = qMax(clockWidth, clockMetrics.horizontalAdvance(QLocale::system().toString(QTime(hour, 0), QLocale::ShortFormat) + QLatin1String("00")));
+    // (uxtheme's extent of "11:00 PM00" is a pixel more than these advances: 58 on XP's.)
+    clockWidth += theme()->scaled(1);
+    // Show the clock, of Taskbar and Start Menu Properties (explorer.exe's HideClock)
+    if (!m_settings.clock)
+        clockWidth = 0;
+    const QMargins margins = renderer ? renderer->contentMargins(TRAY_BACKGROUND) : QMargins(CLASSIC_TRAY_END, 0, CLASSIC_TRAY_END, 0);
+    const int first = theme()->scaled(margins.left());
+    const int end = theme()->scaled(margins.right());
+    const int gap = renderer || !m_settings.clock ? 0 : theme()->scaled(CLASSIC_CLOCK_GAP);
+    const int step = theme()->scaled(TRAY_BUTTON);
+    const int trayWidth = first + icons * step + gap + clockWidth + end;
     if (renderer)
         m_trayRect = QRect(width() - trayWidth, 0, trayWidth, height());
     else
         m_trayRect = QRect(width() - trayWidth - theme()->scaled(2), theme()->scaled(4), trayWidth, height() - theme()->scaled(6));
     m_trayIconRects.clear();
     for (int i = 0; i < icons; ++i)
-        m_trayIconRects.append(QRect(m_trayRect.x() + first + i * theme()->scaled(TRAY_ICON_STEP),
+        m_trayIconRects.append(QRect(m_trayRect.x() + first + i * step + theme()->scaled(TRAY_ICON_INSET),
                                      m_trayRect.y() + (m_trayRect.height() - theme()->scaled(ICON_SIZE)) / 2, theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE)));
-    m_clockRect = QRect(m_trayRect.x() + first + icons * theme()->scaled(TRAY_ICON_STEP) + theme()->scaled(TRAY_CLOCK_GAP), m_trayRect.y(),
-                        clockWidth, m_trayRect.height());
+    m_clockRect = QRect(m_trayRect.x() + first + icons * step + gap, m_trayRect.y(), clockWidth, m_trayRect.height());
 
     layoutButtons(bandStart, m_trayRect.x() - theme()->scaled(BAND_END));
     m_tray->balloons()->iconsChanged();
@@ -427,6 +457,9 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     }
     for (auto it = m_grouped.begin(); it != m_grouped.end();)
         it = windowsOf.value(*it).size() < 2 ? m_grouped.erase(it) : std::next(it);
+    // Group similar taskbar buttons (TaskbarGlomming) unchecked: every window its own button
+    if (!m_settings.group)
+        m_grouped.clear();
     const auto chosen = [&](const QString &program) {
         qint64 latest = 0;
         for (int i : windowsOf.value(program))
@@ -451,7 +484,8 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
         if (width <= groupWidth) {
             QString oldest;
             for (const QString &program : std::as_const(programs))
-                if (!m_grouped.contains(program) && windowsOf.value(program).size() > 1 && (oldest.isEmpty() || chosen(program) < chosen(oldest)))
+                if (m_settings.group && !m_grouped.contains(program) && windowsOf.value(program).size() > 1
+                    && (oldest.isEmpty() || chosen(program) < chosen(oldest)))
                     oldest = program;
             if (!oldest.isEmpty()) {
                 m_grouped.insert(oldest);
@@ -632,7 +666,8 @@ void Taskbar::drawTray(QPainter &painter)
         painter.drawImage(m_trayIconRects[i], icons[i].image);
     painter.setFont(m_clockFont);
     painter.setPen(renderer ? renderer->colour(CLOCK, QStringLiteral("textcolor")).value_or(Qt::white) : QColor(Qt::black));
-    painter.drawText(m_clockRect.translated(0, renderer ? -theme()->scaled(TEXT_RAISE) : 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, m_clock);
+    if (m_settings.clock)
+        painter.drawText(m_clockRect.translated(0, renderer ? -theme()->scaled(TEXT_RAISE) : 0), Qt::AlignHCenter | Qt::AlignVCenter | Qt::TextSingleLine, m_clock);
 }
 
 void Taskbar::paintEvent(QPaintEvent *)
@@ -916,14 +951,12 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray)
             taskManager = QStandardPaths::findExecutable(QLatin1String(name));
     if (QAction *action = actions.value(CMD_TASK_MANAGER))
         action->setEnabled(!taskManager.isEmpty());
-    // This taskbar cannot move or change its size, and it has no Properties dialog yet.
+    // This taskbar cannot move or change its size.
     if (QAction *lock = actions.value(CMD_LOCK)) {
         lock->setCheckable(true);
         lock->setChecked(true);
         lock->setEnabled(false);
     }
-    if (QAction *properties = actions.value(CMD_PROPERTIES))
-        properties->setEnabled(false);
 
     connect(menu, &QMenu::triggered, this, [this, actions, windows, desktopShown, taskManager](QAction *action) {
         switch (actions.key(action)) {
@@ -948,6 +981,9 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray)
             break;
         case CMD_TASK_MANAGER:
             QProcess::startDetached(taskManager, {});
+            break;
+        case CMD_PROPERTIES:
+            TaskbarProperties::showTab(TaskbarProperties::TaskbarTab);
             break;
         }
     });

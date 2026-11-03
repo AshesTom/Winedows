@@ -908,6 +908,18 @@ QList<MenuEntry> StartPanel::allPrograms() const
         };
         out.append(folder);
     }
+#ifdef XP_MEDIA_PLAYER
+    // Windows Media Player, among XP's programs after the folders, by wmplayer.exe's name and icon
+    if (const auto pe = xpfiles::resources(xpfiles::find(QStringLiteral("wmplayer.exe"))); pe && !xpfiles::find(QStringLiteral("wmp.dll")).isEmpty()) {
+        MenuEntry player;
+        player.text = xpfiles::fileDescription(*pe);
+        if (player.text.isEmpty())
+            player.text = QStringLiteral("Windows Media Player");
+        player.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*pe, pe->names(QStringLiteral("14")).value(0), theme->scaled(CASCADE_ICON))));
+        player.action = [] { programs::openMediaPlayer(); };
+        out.append(player);
+    }
+#endif
     return out;
 }
 
