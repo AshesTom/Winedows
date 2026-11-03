@@ -11,6 +11,7 @@
 
 class QAction;
 class QKeyEvent;
+class QMenu;
 class QMenuBar;
 
 namespace xpprogram {
@@ -18,6 +19,8 @@ namespace xpprogram {
 // The popups and items of menu ID in BAR, the items' actions by their command. An item's words
 // after the tab are XP's name for its key; checked and greyed items start that way.
 QHash<int, QAction *> fillMenuBar(QMenuBar *bar, const w4w::PeResources &pe, int id);
+// A shortcut menu: the items of menu ID's first popup, in MENU or MENUEX form, added to MENU.
+QHash<int, QAction *> fillMenu(QMenu *menu, const w4w::PeResources &pe, int id);
 
 // An entry of an accelerator table: a virtual key with modifiers, or a character.
 struct Accelerator

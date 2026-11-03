@@ -26,6 +26,8 @@ QString explorerString(int id, const char *fallback);
 // RT_STRING and RT_BITMAP of a PE file's resources.
 QString string(const w4w::PeResources &pe, int id);
 QImage bitmap(const w4w::PeResources &pe, int id);
+// The FileDescription of a PE file's version resource, which the taskbar names its group by.
+QString fileDescription(const w4w::PeResources &pe);
 // The image of icon group GROUP closest to SIZE at the most colours (up to MAX_BITS per pixel);
 // null if there is none.
 QImage icon(const w4w::PeResources &pe, int group, int size, int maxBits = 32);

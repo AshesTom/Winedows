@@ -5,6 +5,7 @@
 // rectangles are those of explorer.exe's at 96 DPI (docs/native-shell.md).
 #pragma once
 
+#include "arrange.h"
 #include "tray.h"
 #include "windowlist.h"
 
@@ -12,6 +13,7 @@
 #include <QFont>
 #include <QImage>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 #include <QWidget>
 
@@ -27,7 +29,8 @@ public:
     QRect buttonRect(quint32 window) const;
 
 public Q_SLOTS:
-    void showStartMenu();
+    // KEYBOARD: opened with the keys, the panel underlines its access keys, as XP's.
+    void showStartMenu(bool keyboard = true);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -41,20 +44,32 @@ protected:
 private:
     struct Hit
     {
-        enum Kind { None, Start, Task, TrayIcon, Clock } kind = None;
+        // Task: a button, a window's or a group's
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
+    };
+    // A taskbar button: one window, or a program's windows grouped
+    struct Button
+    {
+        QList<int> tasks;   // indexes in the window list
+        bool group = false;
+        QRect rect;         // null when it does not fit
     };
 
     void themeChanged();
     void relayout();
+    void layoutButtons(int bandStart, int bandEnd);
     Hit hitAt(QPoint at) const;
     void setHover(Hit hit);
     void drawStart(QPainter &painter);
-    void drawTask(QPainter &painter, int index);
+    void drawButton(QPainter &painter, int index);
     void drawTray(QPainter &painter);
     void drawShadowedText(QPainter &painter, const QRect &rect, const QString &text);
-    void showTaskMenu(int index, QPoint at);
+    void showTaskMenu(int task, QPoint at);
+    void showGroupList(int button);
+    void showGroupMenu(int button, QPoint at);
+    void showTaskbarMenu(QPoint at, bool tray);
     void tickClock();
     void endSession(const char *request);
     void turnOff();
@@ -65,10 +80,14 @@ private:
 
     QImage m_flag, m_smallFlag;
     QString m_startText, m_classicStartText;
-    QFont m_startFont, m_taskFont, m_activeTaskFont, m_clockFont;
+    QFont m_startFont, m_taskFont, m_activeTaskFont, m_clockFont, m_groupCountFont;
 
-    QRect m_startRect, m_trayRect, m_clockRect;
-    QList<QRect> m_taskRects, m_trayIconRects;
+    QRect m_startRect, m_trayRect, m_clockRect, m_bandRect;
+    QList<Button> m_buttons;
+    QSet<QString> m_grouped;   // the programs whose windows share a button
+    QList<QRect> m_trayIconRects;
+    arrange::Undo m_undo;
+    int m_undoString = 0;      // explorer.exe's name for what Undo puts back
     Hit m_hover, m_pressed;
     QPointer<StartPanel> m_startPanel;
     QElapsedTimer m_startClosed;

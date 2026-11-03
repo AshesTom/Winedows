@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "windowlist.h"
 
+#include "programs.h"
 #include "x11.h"
+#include "xpfiles.h"
 
 #include <QDateTime>
 #include <QGuiApplication>
@@ -104,6 +106,39 @@ QImage WindowList::iconOf(xcb_window_t window, int size)
     return {};
 }
 
+void WindowList::readApp(Task &task)
+{
+    // WM_CLASS: "instance\0class\0"
+    const QList<QByteArray> names = x11::property(task.window, XCB_ATOM_WM_CLASS).split('\0');
+    QString wmClass = names.size() > 1 ? QString::fromLocal8Bit(names[1]) : QString();
+    if (wmClass.isEmpty() && !names.isEmpty())
+        wmClass = QString::fromLocal8Bit(names[0]);
+    task.app = wmClass.isEmpty() ? QString::number(task.window) : wmClass;
+    if (!m_appNames.contains(task.app)) {
+        // XP names a group by its program file's FileDescription: XP's own programs (a Wine window's
+        // class is its file, this shell's Notepad's is "Notepad"), else the desktop entry's name.
+        QString file = wmClass.toLower();
+        if (!file.endsWith(QLatin1String(".exe")))
+            file += QLatin1String(".exe");
+        QString name;
+        if (const QString path = xpfiles::find(file); !path.isEmpty())
+            if (const auto pe = xpfiles::resources(path))
+                name = xpfiles::fileDescription(*pe);
+        if (name.isEmpty())
+            if (const auto program = programs::forWindowClass(wmClass))
+                name = program->name;
+        if (name.isEmpty()) {
+            name = wmClass;
+            if (name.endsWith(QLatin1String(".exe"), Qt::CaseInsensitive))
+                name.chop(4);
+            if (!name.isEmpty())
+                name[0] = name[0].toUpper();
+        }
+        m_appNames.insert(task.app, name);
+    }
+    task.appName = m_appNames.value(task.app);
+}
+
 void WindowList::readList()
 {
     const QList<quint32> list = x11::property32(x11::root(), atom("_NET_CLIENT_LIST"));
@@ -122,7 +157,16 @@ void WindowList::readList()
         readTitle(task);
         readState(task);
         readIcon(task);
-        tasks.append(task);
+        readApp(task);
+        task.lastActive = QDateTime::currentMSecsSinceEpoch();
+        // XP keeps a program's buttons together: a new window goes after its program's last one.
+        qsizetype at = tasks.size();
+        for (qsizetype i = tasks.size() - 1; i >= 0; --i)
+            if (tasks[i].app == task.app) {
+                at = i + 1;
+                break;
+            }
+        tasks.insert(at, task);
     }
     m_tasks = tasks;
     Q_EMIT changed();
@@ -174,6 +218,26 @@ bool WindowList::nativeEventFilter(const QByteArray &type, void *message, qintpt
         break;
     }
     return false;
+}
+
+void WindowList::switchTo(xcb_window_t window)
+{
+    for (Task &task : m_tasks)
+        if (task.window == window)
+            task.lastActive = QDateTime::currentMSecsSinceEpoch();
+    activate(window);
+}
+
+QList<xcb_window_t> WindowList::arrangeable() const
+{
+    // From the top of the stack down, as user32 lists them: shown, not minimized.
+    QList<xcb_window_t> out;
+    const QList<quint32> stack = x11::property32(x11::root(), atom("_NET_CLIENT_LIST_STACKING"));
+    for (auto it = stack.crbegin(); it != stack.crend(); ++it)
+        for (const Task &task : m_tasks)
+            if (task.window == *it && !task.minimized)
+                out.append(task.window);
+    return out;
 }
 
 void WindowList::activateTopmost(xcb_window_t except) const

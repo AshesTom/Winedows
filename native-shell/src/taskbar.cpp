@@ -3,17 +3,16 @@
 
 #include <QTimer>
 
+#include "applets.h"
 #include "balloon.h"
 #include "filebrowser.h"
 #include "sessiondialog.h"
 #include "sounds.h"
 #include "startmenu.h"
-
-#include "filebrowser.h"
-#include "startmenu.h"
 #include "theme.h"
 #include "x11.h"
 #include "xpfiles.h"
+#include "xpprogram.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -28,7 +27,10 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QScreen>
+#include <QStandardPaths>
 #include <QToolTip>
+
+#include <functional>
 
 using w4w::Part;
 
@@ -45,8 +47,23 @@ const int START_TEXT_GAP = 2, START_TEXT_X = 1;     // the room for the gap in i
 // last rows (baked taskbar colours) under the screen's edge, and the task
 // buttons' transparent rows leave 25 of the bar's 30 showing, from y = 3.
 const int START_HEIGHT = 32;
-const int TASK_MAX_WIDTH = 160, TASK_MIN_WIDTH = 40;
+// explorer.exe's taskband: buttons SM_CXMINIMIZED wide at most and (SM_CYSIZE + 2 SM_CXEDGE) x 1.8
+// at least; under that and 8 average characters more, it groups a program's buttons. The band
+// ends 3 pixels before the notification area's rectangle (measured with 5, 7, 11 and 12 buttons:
+// 743 wide from 104 to the area at 850, or 742 and 4).
+const int TASK_MAX_WIDTH = 160, EDGE = 2, GROUP_CHARS = 8, BAND_END = 3;
+const double TASK_MIN_FACTOR = 1.8;
+const int CLASSIC_SPACING = 3;      // TB_SETMETRICS' cxButtonSpacing without a visual style; 0 with one
 const int TASK_ICON_X = 10, TASK_ICON_Y = 7, TASK_TEXT_GAP = 3, TASK_TEXT_END = 7;
+const int GROUP_ARROW_WIDTH = 5, GROUP_ARROW_GAP = 4;
+// explorer.exe's menus: the taskbar's (205) and a group's (210), their commands, and Undo's words
+const int MENU_TASKBAR = 205, MENU_GROUP = 210;
+enum {
+    CMD_CASCADE = 403, CMD_TILE_HORIZONTALLY = 404, CMD_TILE_VERTICALLY = 405, CMD_SHOW_DESKTOP = 407, CMD_ADJUST_TIME = 408,
+    CMD_PROPERTIES = 413, CMD_UNDO = 416, CMD_TASK_MANAGER = 420, CMD_CUSTOMIZE_NOTIFICATIONS = 421, CMD_LOCK = 424,
+    CMD_MINIMIZE_GROUP = 311, CMD_CLOSE_GROUP = 48913,
+};
+const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_SHOW_OPEN_WINDOWS = 850;
 const int TEXT_RAISE = 1;           // the taskbar's small text sits a pixel above the centre
 const int TURN_OFF_DELAY_MS = 200;
 // The tray's art starts with 10 transparent pixels.
@@ -63,6 +80,9 @@ const Part TASK_FLASH{QStringLiteral("taskband"), QStringLiteral("flashbutton"),
 const Part BACKGROUND{QStringLiteral("taskbar"), QStringLiteral("backgroundbottom"), {}, 1, {}};
 const Part TRAY_BACKGROUND{QStringLiteral("traynotify"), QStringLiteral("background"), {}, 1, QStringLiteral("traynotifyhoriz")};
 const Part CLOCK{QStringLiteral("clock"), {}, {}, 0, QStringLiteral("traynotify")};
+const Part GROUP_COUNT{QStringLiteral("taskband"), QStringLiteral("groupcount"), {}, 0, {}};
+const Part GROUP_LIST{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("taskbandgroupmenu")};
+const Part GROUP_LIST_ITEM{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 2, QStringLiteral("taskbandgroupmenu")};
 
 Part withState(Part part, int state)
 {
@@ -76,6 +96,156 @@ ShellTheme *theme()
 }
 
 } // namespace
+
+// A group's windows, which explorer.exe lists in a menu band drawn by the style's TaskBandGroupMenu:
+// at least as wide as the button, over it. Its rows are the buttons' content margins around a small
+// icon (3 + 16 + 3), the toolbar's 9 pixels in, then the button's 9.
+class GroupList : public QWidget
+{
+public:
+    struct Item
+    {
+        xcb_window_t window;
+        QString title;
+        QImage icon;
+    };
+    static constexpr int ROW = 22, INSET = 9, ICON_X = 9, TEXT_GAP = 7, END = 9;
+
+    GroupList(const QList<Item> &items, int minWidth, std::function<void(xcb_window_t)> chosen,
+              std::function<void(xcb_window_t, QPoint)> context)
+        : QWidget(nullptr, Qt::Popup | Qt::FramelessWindowHint)
+        , m_items(items)
+        , m_chosen(std::move(chosen))
+        , m_context(std::move(context))
+    {
+        setAttribute(Qt::WA_DeleteOnClose);
+        setMouseTracking(true);
+        w4w::Renderer *renderer = theme()->renderer();
+        const QString spec = renderer ? renderer->property(GROUP_LIST, QStringLiteral("font")).value_or(QStringLiteral("Tahoma, 8")) : QStringLiteral("Tahoma, 8");
+        setFont(theme()->font(spec));
+        int widest = 0;
+        for (const Item &item : m_items)
+            widest = qMax(widest, fontMetrics().horizontalAdvance(item.title));
+        const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+        const int width = theme()->scaled(INSET + ICON_X + ICON_SIZE + TEXT_GAP + END) + widest + frameWidth() * 2;
+        resize(qBound(minWidth, width, screen.width() / 2), theme()->scaled(ROW) * int(m_items.size()) + frameWidth() * 2);
+    }
+
+    void popUp(const QRect &button)
+    {
+        const QRect screen = QGuiApplication::primaryScreen()->geometry();
+        QPoint at(button.x(), button.y() - height());
+        at.setX(qBound(screen.left(), at.x(), screen.right() + 1 - width()));
+        move(at);
+        show();
+    }
+
+protected:
+    // Windows Classic draws it as a menu: a raised edge of 2.
+    int frameWidth() const { return theme()->renderer() ? 0 : theme()->scaled(2); }
+
+    QRect rowRect(int row) const
+    {
+        const int f = frameWidth();
+        return QRect(f + theme()->scaled(theme()->renderer() ? INSET : 0), f + row * theme()->scaled(ROW),
+                     width() - 2 * f - theme()->scaled(theme()->renderer() ? INSET : 0), theme()->scaled(ROW));
+    }
+
+    int rowAt(QPoint at) const
+    {
+        for (int i = 0; i < m_items.size(); ++i)
+            if (rowRect(i).contains(at))
+                return i;
+        return -1;
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        w4w::Renderer *renderer = theme()->renderer();
+        QColor text = Qt::white;
+        if (renderer) {
+            renderer->draw(&painter, rect(), GROUP_LIST);
+            text = renderer->colour(GROUP_LIST, QStringLiteral("textcolor")).value_or(Qt::white);
+        } else {
+            painter.fillRect(rect(), theme()->system(QStringLiteral("menu"), Qt::lightGray));
+            theme()->raised(painter, rect(), false);
+            text = Qt::black;
+        }
+        painter.setFont(font());
+        for (int i = 0; i < m_items.size(); ++i) {
+            const QRect row = rowRect(i);
+            QColor colour = text;
+            if (i == m_hover) {
+                if (renderer) {
+                    renderer->draw(&painter, row, GROUP_LIST_ITEM);
+                } else {
+                    painter.fillRect(row, theme()->system(QStringLiteral("highlight"), Qt::darkBlue));
+                    colour = theme()->system(QStringLiteral("highlighttext"), Qt::white);
+                }
+            }
+            const int icon = theme()->scaled(ICON_SIZE);
+            const int iconX = row.x() + theme()->scaled(renderer ? ICON_X : 3);
+            painter.drawImage(QRect(iconX, row.y() + (row.height() - icon) / 2, icon, icon), m_items[i].icon);
+            const int textX = iconX + icon + theme()->scaled(TEXT_GAP);
+            const QRect words(textX, row.y(), row.right() - theme()->scaled(END) - textX, row.height());
+            painter.setPen(colour);
+            painter.drawText(words, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                             fontMetrics().elidedText(m_items[i].title, Qt::ElideRight, words.width()));
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        const int row = rowAt(event->position().toPoint());
+        if (row != m_hover) {
+            m_hover = row;
+            update();
+        }
+    }
+
+    void leaveEvent(QEvent *) override
+    {
+        m_hover = -1;
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        const int row = rowAt(event->position().toPoint());
+        if (row < 0)
+            return;
+        const xcb_window_t window = m_items[row].window;
+        const QPoint at = event->globalPosition().toPoint();
+        const bool context = event->button() == Qt::RightButton;
+        close();
+        if (context)
+            m_context(window, at);
+        else if (event->button() == Qt::LeftButton)
+            m_chosen(window);
+    }
+
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        const int count = int(m_items.size());
+        if (event->key() == Qt::Key_Down || event->key() == Qt::Key_Up) {
+            m_hover = (m_hover + (event->key() == Qt::Key_Down ? 1 : count - 1) + (m_hover < 0 && event->key() == Qt::Key_Up ? 1 : 0)) % count;
+            update();
+        } else if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && m_hover >= 0) {
+            const xcb_window_t window = m_items[m_hover].window;
+            close();
+            m_chosen(window);
+        } else if (event->key() == Qt::Key_Escape) {
+            close();
+        }
+    }
+
+private:
+    QList<Item> m_items;
+    std::function<void(xcb_window_t)> m_chosen;
+    std::function<void(xcb_window_t, QPoint)> m_context;
+    int m_hover = -1;
+};
 
 Taskbar::Taskbar(WindowList *windows, Tray *tray)
     : QWidget(nullptr, Qt::Window | Qt::FramelessWindowHint)
@@ -113,7 +283,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
                 return QRect(mapToGlobal(m_trayIconRects[i].topLeft()), m_trayIconRects[i].size());
         return QRect();
     });
-    connect(m_tray, &Tray::startRequested, this, &Taskbar::showStartMenu);
+    connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
     connect(m_tray, &Tray::hotkey, this, [](int key) {
         // XP's hotkeys with the Windows key, by their virtual keys
         if (key == 'R')
@@ -148,6 +318,11 @@ void Taskbar::themeChanged()
     // The pressed (active) button's text is not bold on XP either.
     m_activeTaskFont = m_taskFont;
     m_clockFont = font(CLOCK, "Tahoma, 8");
+    // A group's count: the style's TaskBand.GroupCount, or the toolbar's font in bold
+    m_groupCountFont = m_taskFont;
+    m_groupCountFont.setBold(true);
+    if (renderer)
+        m_groupCountFont = font(GROUP_COUNT, "Tahoma, 8, bold");
     placeOnScreen();
     update();
 }
@@ -219,28 +394,108 @@ void Taskbar::relayout()
     m_clockRect = QRect(m_trayRect.x() + first + icons * theme()->scaled(TRAY_ICON_STEP) + theme()->scaled(TRAY_CLOCK_GAP), m_trayRect.y(),
                         clockWidth, m_trayRect.height());
 
-    // XP shrinks the buttons alike, then groups them (not done here: they stop at the band's end).
-    const int band = qMax(0, m_trayRect.x() - bandStart);
-    const int count = int(m_windows->tasks().size());
-    int buttonWidth = theme()->scaled(TASK_MAX_WIDTH);
-    if (count * buttonWidth > band && count)
-        buttonWidth = qMax(theme()->scaled(TASK_MIN_WIDTH), band / count);
-    m_taskRects.clear();
-    for (int i = 0; i < count; ++i) {
-        QRect rect(bandStart + i * buttonWidth, 0, buttonWidth, height());
-        if (!renderer)
-            rect = QRect(bandStart + i * buttonWidth, theme()->scaled(4), buttonWidth - theme()->scaled(3), height() - theme()->scaled(6));
-        m_taskRects.append(rect.right() < m_trayRect.x() ? rect : QRect());
-    }
+    layoutButtons(bandStart, m_trayRect.x() - theme()->scaled(BAND_END));
     m_tray->balloons()->iconsChanged();
+}
+
+void Taskbar::layoutButtons(int bandStart, int bandEnd)
+{
+    // As explorer.exe's taskband sizes its toolbar: the band's width shared by the buttons, at most
+    // SM_CXMINIMIZED each. When that comes to less than the least width and 8 average characters,
+    // the program whose windows were chosen least recently gets one button for its windows, again
+    // until they fit or no program has two windows left; when there is room for two more buttons of
+    // that width, the group chosen most recently among those that have fewer windows comes apart.
+    // With nothing more to group, the buttons shrink to the least width.
+    w4w::Renderer *renderer = theme()->renderer();
+    const QList<Task> &tasks = m_windows->tasks();
+    const int band = qMax(0, bandEnd - bandStart);
+    m_bandRect = QRect(bandStart, 0, band, height());
+    const int spacing = renderer ? 0 : theme()->scaled(CLASSIC_SPACING);
+    const int maxWidth = theme()->scaled(TASK_MAX_WIDTH);
+    const FrameStyle &frame = theme()->frame();
+    const int cySize = frame.top - frame.border - 1;
+    const int minWidth = int((cySize + 2 * theme()->scaled(EDGE)) * TASK_MIN_FACTOR);
+    const int groupWidth = minWidth + GROUP_CHARS * QFontMetrics(m_taskFont).averageCharWidth();
+
+    // The programs in the buttons' order (the window list keeps each one's windows together)
+    QList<QString> programs;
+    QHash<QString, QList<int>> windowsOf;
+    for (int i = 0; i < tasks.size(); ++i) {
+        if (!windowsOf.contains(tasks[i].app))
+            programs.append(tasks[i].app);
+        windowsOf[tasks[i].app].append(i);
+    }
+    for (auto it = m_grouped.begin(); it != m_grouped.end();)
+        it = windowsOf.value(*it).size() < 2 ? m_grouped.erase(it) : std::next(it);
+    const auto chosen = [&](const QString &program) {
+        qint64 latest = 0;
+        for (int i : windowsOf.value(program))
+            latest = qMax(latest, tasks[i].lastActive);
+        return latest;
+    };
+    const auto shown = [&] {
+        int count = 0;
+        for (const QString &program : std::as_const(programs))
+            count += m_grouped.contains(program) ? 1 : int(windowsOf.value(program).size());
+        return count;
+    };
+    const auto ideal = [&](int count) {
+        if (!count)
+            return maxWidth;
+        return qMin(maxWidth, band / count - (count > 1 ? spacing : 0));
+    };
+    int width = maxWidth;
+    for (int pass = 0; pass <= programs.size(); ++pass) {
+        const int count = shown();
+        width = ideal(count);
+        if (width <= groupWidth) {
+            QString oldest;
+            for (const QString &program : std::as_const(programs))
+                if (!m_grouped.contains(program) && windowsOf.value(program).size() > 1 && (oldest.isEmpty() || chosen(program) < chosen(oldest)))
+                    oldest = program;
+            if (!oldest.isEmpty()) {
+                m_grouped.insert(oldest);
+                continue;
+            }
+            width = qMax(width, minWidth);
+            break;
+        }
+        const int room = (band - count * groupWidth) / groupWidth;
+        QString newest;
+        if (room >= 2)
+            for (const QString &program : std::as_const(m_grouped))
+                if (windowsOf.value(program).size() < room && (newest.isEmpty() || chosen(program) > chosen(newest)))
+                    newest = program;
+        if (newest.isEmpty())
+            break;
+        m_grouped.remove(newest);
+    }
+
+    m_buttons.clear();
+    for (const QString &program : std::as_const(programs)) {
+        const QList<int> &windows = windowsOf[program];
+        if (m_grouped.contains(program))
+            m_buttons.append({windows, true, {}});
+        else
+            for (int i : windows)
+                m_buttons.append({{i}, false, {}});
+    }
+    // Those that do not fit are not shown (XP gives the band more rows and arrows to scroll them).
+    for (int i = 0; i < m_buttons.size(); ++i) {
+        QRect rect(bandStart + i * (width + spacing), 0, width, height());
+        if (!renderer)
+            rect = QRect(rect.x(), theme()->scaled(4), width, height() - theme()->scaled(6));
+        m_buttons[i].rect = rect.right() < bandEnd + theme()->scaled(BAND_END) ? rect : QRect();
+    }
 }
 
 QRect Taskbar::buttonRect(quint32 window) const
 {
     const QList<Task> &tasks = m_windows->tasks();
-    for (int i = 0; i < tasks.size() && i < m_taskRects.size(); ++i)
-        if (tasks[i].window == window && !m_taskRects[i].isNull())
-            return QRect(mapToGlobal(m_taskRects[i].topLeft()), m_taskRects[i].size());
+    for (const Button &button : m_buttons)
+        for (int i : button.tasks)
+            if (i < tasks.size() && tasks[i].window == window && !button.rect.isNull())
+                return QRect(mapToGlobal(button.rect.topLeft()), button.rect.size());
     return QRect();
 }
 
@@ -290,13 +545,19 @@ void Taskbar::drawStart(QPainter &painter)
     drawShadowedText(painter, QRect(content.x() + m_flag.width() + theme()->scaled(START_TEXT_X), -1, content.width() - m_flag.width(), height()), m_startText);
 }
 
-void Taskbar::drawTask(QPainter &painter, int index)
+void Taskbar::drawButton(QPainter &painter, int index)
 {
-    const QRect rect = m_taskRects.value(index);
+    const Button &button = m_buttons[index];
+    const QRect rect = button.rect;
     if (rect.isEmpty())
         return;
-    const Task &task = m_windows->tasks()[index];
-    const bool active = task.window == m_windows->active();
+    const QList<Task> &all = m_windows->tasks();
+    const Task &task = all[button.tasks.first()];
+    bool active = false, attention = false;
+    for (int i : button.tasks) {
+        active = active || all[i].window == m_windows->active();
+        attention = attention || all[i].attention;
+    }
     const bool hover = m_hover.kind == Hit::Task && m_hover.index == index;
     const bool pressed = m_pressed.kind == Hit::Task && m_pressed.index == index;
     int state = active ? (hover ? HotChecked : Checked) : (hover ? Hot : Normal);
@@ -305,12 +566,12 @@ void Taskbar::drawTask(QPainter &painter, int index)
     w4w::Renderer *renderer = theme()->renderer();
     if (renderer) {
         Part part = withState(TASK_BUTTON, state);
-        if (task.attention && !active)
+        if (attention && !active)
             part = TASK_FLASH;
         renderer->draw(&painter, rect, part);
     } else {
         const bool down = active || pressed;
-        if (task.attention && !active)
+        if (attention && !active)
             painter.fillRect(rect, theme()->system(QStringLiteral("highlight"), Qt::darkBlue));
         else if (active) {
             // Windows Classic's active button: the face and white, in a checker
@@ -326,16 +587,37 @@ void Taskbar::drawTask(QPainter &painter, int index)
     const int iconX = renderer ? theme()->scaled(TASK_ICON_X) : theme()->scaled(4);
     if (!icon.isNull())
         painter.drawImage(rect.x() + iconX + down, top + down, icon);
-    const int textX = rect.x() + iconX + theme()->scaled(ICON_SIZE + TASK_TEXT_GAP) + down;
-    const int textWidth = rect.right() - theme()->scaled(renderer ? TASK_TEXT_END : 4) - textX;
+    const int textRaise = down - theme()->scaled(renderer ? TEXT_RAISE : 0);
+    const QColor text = renderer ? renderer->colour(TASK_TOOLBAR, QStringLiteral("textcolor")).value_or(Qt::white) : QColor(attention && !active ? Qt::white : Qt::black);
+    int textX = rect.x() + iconX + theme()->scaled(ICON_SIZE + TASK_TEXT_GAP) + down;
+    int textEnd = rect.right() - theme()->scaled(renderer ? TASK_TEXT_END : 4);
+    QString words = task.title;
+    if (button.group) {
+        // explorer.exe draws the count centred in the gap before the words, as wide as the count with
+        // a digit more, in TaskBand.GroupCount's colours; the words are the program's name, then
+        // comctl32's arrow of a button with a whole drop-down.
+        const QString count = QString::number(button.tasks.size());
+        const int box = QFontMetrics(m_groupCountFont).horizontalAdvance(count + QLatin1Char('0'));
+        const QRect countRect(rect.x() + iconX + theme()->scaled(ICON_SIZE) + down, rect.y() + textRaise, box, rect.height());
+        painter.setFont(m_groupCountFont);
+        painter.setPen(renderer ? renderer->colour(GROUP_COUNT, QStringLiteral("textcolor")).value_or(QColor(255, 204, 109)) : text);
+        painter.drawText(countRect, Qt::AlignCenter | Qt::TextSingleLine, count);
+        textX = countRect.right() + 1;
+        const int arrowWidth = theme()->scaled(GROUP_ARROW_WIDTH);
+        const int arrowX = textEnd - arrowWidth + 1 + down, arrowY = rect.y() + (rect.height() - arrowWidth / 2 - 1) / 2 + textRaise;
+        for (int row = 0; row <= arrowWidth / 2; ++row)
+            painter.fillRect(arrowX + row, arrowY + row, arrowWidth - 2 * row, 1, text);
+        textEnd = arrowX - theme()->scaled(GROUP_ARROW_GAP) - down;
+        words = task.appName;
+    }
+    const int textWidth = textEnd - textX;
     if (textWidth <= 0)
         return;
     const QFont &font = active ? m_activeTaskFont : m_taskFont;
     painter.setFont(font);
-    const QColor text = renderer ? renderer->colour(TASK_TOOLBAR, QStringLiteral("textcolor")).value_or(Qt::white) : QColor(task.attention && !active ? Qt::white : Qt::black);
     painter.setPen(text);
-    const QString title = QFontMetrics(font).elidedText(task.title, Qt::ElideRight, textWidth);
-    painter.drawText(QRect(textX, rect.y() + down - theme()->scaled(renderer ? TEXT_RAISE : 0), textWidth, rect.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
+    const QString title = QFontMetrics(font).elidedText(words, Qt::ElideRight, textWidth);
+    painter.drawText(QRect(textX, rect.y() + textRaise, textWidth, rect.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
 }
 
 void Taskbar::drawTray(QPainter &painter)
@@ -364,8 +646,8 @@ void Taskbar::paintEvent(QPaintEvent *)
         painter.drawLine(0, 1, width(), 1);
     }
     drawStart(painter);
-    for (int i = 0; i < m_taskRects.size(); ++i)
-        drawTask(painter, i);
+    for (int i = 0; i < m_buttons.size(); ++i)
+        drawButton(painter, i);
     drawTray(painter);
 }
 
@@ -376,8 +658,8 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
         hit.kind = Hit::Start;
         return hit;
     }
-    for (int i = 0; i < m_taskRects.size(); ++i)
-        if (m_taskRects[i].contains(at)) {
+    for (int i = 0; i < m_buttons.size(); ++i)
+        if (m_buttons[i].rect.contains(at)) {
             hit.kind = Hit::Task;
             hit.index = i;
             return hit;
@@ -390,6 +672,8 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
         }
     if (m_clockRect.contains(at))
         hit.kind = Hit::Clock;
+    else if (!m_startRect.contains(at) && !m_trayRect.contains(at))
+        hit.kind = Hit::Band;
     return hit;
 }
 
@@ -418,7 +702,7 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton && hit.kind == Hit::Start) {
         // The press that closes the open menu must not open it again.
         if (!m_startClosed.isValid() || m_startClosed.elapsed() > 200)
-            showStartMenu();
+            showStartMenu(false);
         return;
     }
     if (event->button() == Qt::LeftButton && hit.kind == Hit::Task) {
@@ -439,19 +723,32 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     const Hit pressed = m_pressed;
     m_pressed = Hit();
     update();
-    if (hit.kind == Hit::Task && hit.index < m_windows->tasks().size()) {
-        const Task &task = m_windows->tasks()[hit.index];
+    if (hit.kind == Hit::Task && hit.index < m_buttons.size()) {
+        const Button &button = m_buttons[hit.index];
+        const QPoint global = event->globalPosition().toPoint();
+        if (button.group) {
+            if (event->button() == Qt::RightButton)
+                showGroupMenu(hit.index, global);
+            else if (event->button() == Qt::LeftButton && pressed == hit)
+                showGroupList(hit.index);
+            return;
+        }
+        const Task &task = m_windows->tasks()[button.tasks.first()];
         if (event->button() == Qt::RightButton) {
-            showTaskMenu(hit.index, event->globalPosition().toPoint());
+            showTaskMenu(button.tasks.first(), global);
         } else if (event->button() == Qt::LeftButton && pressed == hit) {
             if (task.window == m_activeAtPress && !task.minimized) {
                 const xcb_window_t window = task.window;
                 WindowList::minimize(window);
                 m_windows->activateTopmost(window);
             } else {
-                WindowList::activate(task.window);
+                m_windows->switchTo(task.window);
             }
         }
+    } else if ((hit.kind == Hit::Band || hit.kind == Hit::Clock || (hit.kind == Hit::None && m_trayRect.contains(at)))
+               && event->button() == Qt::RightButton) {
+        // The notification area's, the clock's included, has the date's and the icons' items too.
+        showTaskbarMenu(event->globalPosition().toPoint(), hit.kind != Hit::Band);
     } else if (hit.kind == Hit::TrayIcon && hit.index < m_tray->icons().size()) {
         const quint32 id = m_tray->icons()[hit.index].id;
         const QPoint global = event->globalPosition().toPoint();
@@ -470,8 +767,11 @@ bool Taskbar::event(QEvent *event)
         auto *help = static_cast<QHelpEvent *>(event);
         const Hit hit = hitAt(help->pos());
         QString text;
-        if (hit.kind == Hit::Task && hit.index < m_windows->tasks().size())
-            text = m_windows->tasks()[hit.index].title;
+        if (hit.kind == Hit::Task && hit.index < m_buttons.size()) {
+            const Button &button = m_buttons[hit.index];
+            const Task &task = m_windows->tasks()[button.tasks.first()];
+            text = button.group ? task.appName : task.title;
+        }
         else if (hit.kind == Hit::TrayIcon && hit.index < m_tray->icons().size())
             text = m_tray->icons()[hit.index].tooltip;
         else if (hit.kind == Hit::Clock)
@@ -502,7 +802,159 @@ void Taskbar::showTaskMenu(int index, QPoint at)
     menu->popup(at - QPoint(0, menu->sizeHint().height()));
 }
 
-void Taskbar::showStartMenu()
+void Taskbar::showGroupList(int index)
+{
+    const Button button = m_buttons[index];
+    QList<GroupList::Item> items;
+    for (int i : button.tasks) {
+        const Task &task = m_windows->tasks()[i];
+        items.append({task.window, task.title, task.icon.isNull() ? theme()->defaultIcon(theme()->scaled(ICON_SIZE)) : task.icon});
+    }
+    auto *list = new GroupList(items, button.rect.width(), [this](xcb_window_t window) { m_windows->switchTo(window); },
+                               [this](xcb_window_t window, QPoint at) {
+                                   const QList<Task> &tasks = m_windows->tasks();
+                                   for (int i = 0; i < tasks.size(); ++i)
+                                       if (tasks[i].window == window)
+                                           showTaskMenu(i, at);
+                               });
+    list->popUp(QRect(mapToGlobal(button.rect.topLeft()), button.rect.size()));
+}
+
+void Taskbar::showGroupMenu(int index, QPoint at)
+{
+    QList<xcb_window_t> windows;
+    for (int i : m_buttons[index].tasks)
+        windows.append(m_windows->tasks()[i].window);
+    // From the top of the stack down, as user32 arranges them
+    QList<xcb_window_t> stacked;
+    for (xcb_window_t window : m_windows->arrangeable())
+        if (windows.contains(window))
+            stacked.append(window);
+
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    QHash<int, QAction *> actions;
+    if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe"))))
+        actions = xpprogram::fillMenu(menu, *explorer, MENU_GROUP);
+    if (actions.isEmpty()) {
+        actions.insert(CMD_CASCADE, menu->addAction(tr("Ca&scade")));
+        actions.insert(CMD_TILE_HORIZONTALLY, menu->addAction(tr("Tile &Horizontally")));
+        actions.insert(CMD_TILE_VERTICALLY, menu->addAction(tr("Tile V&ertically")));
+        actions.insert(CMD_MINIMIZE_GROUP, menu->addAction(tr("&Minimize Group")));
+        menu->addSeparator();
+        actions.insert(CMD_CLOSE_GROUP, menu->addAction(tr("&Close Group")));
+    }
+    for (int command : {CMD_CASCADE, CMD_TILE_HORIZONTALLY, CMD_TILE_VERTICALLY})
+        if (QAction *action = actions.value(command))
+            action->setEnabled(!stacked.isEmpty());
+    connect(menu, &QMenu::triggered, this, [this, actions, windows, stacked](QAction *action) {
+        switch (actions.key(action)) {
+        case CMD_CASCADE:
+            arrange::cascade(stacked);
+            break;
+        case CMD_TILE_HORIZONTALLY:
+        case CMD_TILE_VERTICALLY:
+            arrange::tile(stacked, actions.key(action) == CMD_TILE_HORIZONTALLY);
+            break;
+        case CMD_MINIMIZE_GROUP:
+            for (xcb_window_t window : windows)
+                WindowList::minimize(window);
+            break;
+        case CMD_CLOSE_GROUP:
+            for (xcb_window_t window : windows)
+                WindowList::close(window);
+            break;
+        }
+    });
+    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+}
+
+void Taskbar::showTaskbarMenu(QPoint at, bool tray)
+{
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!explorer)
+        return;
+    QHash<int, QAction *> actions = xpprogram::fillMenu(menu, *explorer, MENU_TASKBAR);
+    if (actions.isEmpty())
+        return;
+    // As explorer.exe prepares menu 205: Adjust Date/Time, Customize Notifications and their line
+    // only on the notification area; Undo names what it puts back, or goes; Show the Desktop becomes Show Open
+    // Windows while the desktop shows; Cascade and Tile need a window to arrange.
+    const auto remove = [&](int command) {
+        if (QAction *action = actions.take(command))
+            menu->removeAction(action);
+    };
+    if (!tray) {
+        remove(CMD_ADJUST_TIME);
+        remove(CMD_CUSTOMIZE_NOTIFICATIONS);
+        const QList<QAction *> all = menu->actions();
+        if (!all.isEmpty() && all.first()->isSeparator())
+            menu->removeAction(all.first());
+    } else if (QAction *customize = actions.value(CMD_CUSTOMIZE_NOTIFICATIONS)) {
+        customize->setEnabled(false);   // no icon can be hidden here
+    }
+    if (m_undo.isEmpty() || !m_undoString) {
+        remove(CMD_UNDO);
+    } else if (QAction *undo = actions.value(CMD_UNDO)) {
+        QString what = xpfiles::string(*explorer, m_undoString);
+        undo->setText(xpfiles::string(*explorer, STRING_UNDO).replace(QLatin1String("%s"), what));
+    }
+    const QList<quint32> showing = x11::property32(x11::root(), x11::atom("_NET_SHOWING_DESKTOP"));
+    const bool desktopShown = !showing.isEmpty() && showing.first();
+    if (QAction *show = actions.value(CMD_SHOW_DESKTOP); show && desktopShown)
+        show->setText(xpfiles::string(*explorer, STRING_SHOW_OPEN_WINDOWS));
+    const QList<xcb_window_t> windows = m_windows->arrangeable();
+    for (int command : {CMD_CASCADE, CMD_TILE_HORIZONTALLY, CMD_TILE_VERTICALLY})
+        if (QAction *action = actions.value(command))
+            action->setEnabled(!windows.isEmpty());
+    // The Linux program that stands for the Task Manager, when there is one
+    QString taskManager;
+    for (const char *name : {"plasma-systemmonitor", "gnome-system-monitor", "ksysguard", "xfce4-taskmanager", "lxtask", "mate-system-monitor"})
+        if (taskManager.isEmpty())
+            taskManager = QStandardPaths::findExecutable(QLatin1String(name));
+    if (QAction *action = actions.value(CMD_TASK_MANAGER))
+        action->setEnabled(!taskManager.isEmpty());
+    // This taskbar cannot move or change its size, and it has no Properties dialog yet.
+    if (QAction *lock = actions.value(CMD_LOCK)) {
+        lock->setCheckable(true);
+        lock->setChecked(true);
+        lock->setEnabled(false);
+    }
+    if (QAction *properties = actions.value(CMD_PROPERTIES))
+        properties->setEnabled(false);
+
+    connect(menu, &QMenu::triggered, this, [this, actions, windows, desktopShown, taskManager](QAction *action) {
+        switch (actions.key(action)) {
+        case CMD_ADJUST_TIME:
+            applets::open(QStringLiteral("datetime"));
+            break;
+        case CMD_CASCADE:
+            m_undo = arrange::cascade(windows);
+            m_undoString = STRING_CASCADE;
+            break;
+        case CMD_TILE_HORIZONTALLY:
+        case CMD_TILE_VERTICALLY:
+            m_undo = arrange::tile(windows, actions.key(action) == CMD_TILE_HORIZONTALLY);
+            m_undoString = STRING_TILE;
+            break;
+        case CMD_UNDO:
+            arrange::undo(m_undo);
+            m_undo.clear();
+            break;
+        case CMD_SHOW_DESKTOP:
+            x11::sendToManager(x11::root(), "_NET_SHOWING_DESKTOP", {quint32(desktopShown ? 0 : 1)});
+            break;
+        case CMD_TASK_MANAGER:
+            QProcess::startDetached(taskManager, {});
+            break;
+        }
+    });
+    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+}
+
+void Taskbar::showStartMenu(bool keyboard)
 {
     if (m_startPanel) {
         m_startPanel->close();
@@ -521,6 +973,7 @@ void Taskbar::showStartMenu()
         update();
     });
     m_startPanel = panel;
+    panel->setKeyboardCues(keyboard);
     panel->show();
     update();
 }

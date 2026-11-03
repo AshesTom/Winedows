@@ -12,8 +12,8 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 |---|---|
 | Wallpaper | Bliss stretched by default, or what Display Properties chose, followed live; the background colour; each monitor |
 | Desktop icons | Recycle Bin (empty or full) in XP's lower right corner and the Desktop folder's files in XP's grid. Select, double-click, drag to place (remembered), rename, send to the trash, Arrange Icons |
-| Taskbar | Luna or Classic: a button per window (normal, hot, active in bold, flashing), minimize by clicking the active button, a window menu, its strut |
-| Start menu | XP's two columns from the style's StartPanel parts: the user's picture and name, the default browser and mail, the six recent programs (those started here, then those the desktop's recent files name, then everyday ones and the rest for a new account), a line, the places, All Programs and My Recent Documents with their cascades, Log Off and Turn Off Computer |
+| Taskbar | Luna or Classic: a button per window (normal, hot, active in bold, flashing), minimize by clicking the active button, a window menu, its strut. The buttons are sized and grouped as `explorer.exe`'s taskband does it (below): a group shows its count and its program's name, lists its windows in TaskBandGroupMenu's colours and has menu 210 (Cascade, Tile, Minimize Group, Close Group). Menu 205 on the taskbar and the notification area: Adjust Date/Time, Cascade, Tile and their Undo as user32 lays windows out, Show the Desktop and Show Open Windows, Task Manager (the desktop's system monitor) |
+| Start menu | XP's two columns from the style's StartPanel parts: the user's picture and name, the default browser and mail, the six recent programs (those started here, then those the desktop's recent files name, then everyday ones and the rest for a new account), a line, the places, All Programs and My Recent Documents with their cascades, Log Off and Turn Off Computer. XP's keys (arrows, letters, Enter, Escape), access keys, selection and infotips (below) |
 | Folder windows | A white line down the left edge and along the bottom, the menus, the toolbar from shell32's pictures, the address bar and Go, the Common Tasks pane from the shell style's art in each colour scheme, the Folders tree under the Desktop, the Search Companion, Favorites, web pages (with Qt WebEngine, otherwise in the desktop's browser), XP's warning on system folders, and Thumbnails, Tiles, Icons, List and Details (its sorted column shaded under a visual style) |
 | Pictures | Thumbnails made in the background, a folder's first four pictures on its own; in the Details group the selected picture's preview and its dimensions, and for several items their count and total size, in shell32's words. Picture folders (My Pictures, or one holding mostly pictures, as XP decides) get Filmstrip and the Picture Tasks: View as a slide show and Set as desktop background. Filmstrip and the context menu turn pictures as Windows Picture and Fax Viewer does: saved under their own name, JPEG without loss through `jpegtran` when its size allows, after the viewer's question otherwise. The slide show is the viewer's, on black over the whole screen with its toolbar in the top right corner. The buttons and words come from `shimgvw.dll` |
 | Command Prompt | `console.cpp`, in All Programs > Accessories and as Open Command Prompt Here: 80 x 25 in XP's raster font (`vgaoem.fon`) with the console's 16 colours and XP's buffer of 300 lines, running bash with the Wine session's `session/xp-cmd.bashrc`, the root of the system as a `C:` of its own (`C:\\home\\you>`). It understands what Linux's programs send to an xterm. Drag to mark, right click to copy or paste, as XP's QuickEdit |
@@ -37,9 +37,10 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 Not ported yet: Notepad and Calculator's Help Topics (their `.chm`), XP's own Open and Save As dialogs (Qt's file dialog in XP's style stands in, with Notepad's Encoding line), Calculator's What's This?, XP's art behind a folder's thumbnail (no extracted file has it, so the folder's icon stands in its corner), Show in Groups and Choose Details, the Picture Tasks' printing and ordering prints, XP's zip folders, Send To, shortcuts (`.lnk`), network places, Help (shown disabled, as is Printers
 and Faxes without `system-config-printer`), the Accessibility Options applets (the category is there, empty), the
 Search Companion's sounds, its other characters and its balloon mode, Map Network Drive and Synchronize (greyed), the
-Start menu's keyboard navigation, grouping of similar taskbar buttons (they shrink to
-40 pixels, then those that do not fit are not shown), Quick Launch, the Screen Saver and Settings pages, the
-menus' drop shadows, the taskbar's menu, a wireless picture for the network icon. Strings that XP's files do not give
+the Start panel's own MFU ranking (UserAssist's counts and their decay are shell32's; here, launches counted by the shell), the taskband's rows and scroll arrows when the buttons do not fit even grouped
+(they are not shown), Quick Launch and the taskbar menu's Toolbars, Taskbar and Start Menu Properties and
+unlocking the taskbar (greyed), Customize Notifications, the Screen Saver and Settings pages, the
+menus' drop shadows, a wireless picture for the network icon. Strings that XP's files do not give
 (the desktop's menus, the Linux Programs page) are in English.
 
 ## How to run it
@@ -177,6 +178,46 @@ their 31 colours. Display Properties lists them under Windows Classic style, and
 colours into `native-look.conf` as `classic.<colour>`, which the shell, Qt and GTK programs read. The Windows Classic
 theme is Windows Standard, as XP's. Under Windows Classic the Common Tasks pane stays blue: without a visual style
 XP's shell32 takes system32's `shellstyle.dll`, the same file as Luna's `blue_ss.dll`.
+
+### The taskband, from explorer.exe's code
+
+Read with `retool` (disassembly only) in the user's `explorer.exe` 6.0.2900.5512 and `user32.dll`, and checked
+against XP's explorer in the Wine prefix (12, 11, 7 and 5 Notepad windows, captured losslessly at 1024 x 768):
+
+| What | XP's rule |
+|---|---|
+| Button width | The band's width over the number of buttons (less `cxButtonSpacing` with more than one), at most SM_CXMINIMIZED (160) |
+| Band | From the first button (x = 104 with Luna's Start button) to 3 pixels before the notification area's rectangle (743 wide with the area at 850; the measures allow 742 and 4) |
+| Spacing | TB_SETMETRICS: `cxButtonSpacing` 0 and `cxPad` 20 with a visual style, 3 and 8 without |
+| Grouping | `TaskbarGlomming` (on unless set to 0 or SHRestricted's NoTaskGrouping). When the width comes to (SM_CYSIZE + 2 SM_CXEDGE) x 1.8, truncated, plus 8 x `tmAveCharWidth` of the toolbar's font or less (92 with Luna), the program with at least two windows whose most recent one was chosen least recently gets one button; again until they fit. Then they shrink, down to the first term alone (52) |
+| Ungrouping | When (band - buttons x that width) / that width is 2 or more, the group with fewer windows than that, chosen most recently, comes apart |
+| `TaskbarGroupSize` | 0 (default) as above, the only one here; 1: the program with the most windows first; 2 or more: every program with that many windows |
+| Programs | A window's program file (each `rundll32.exe` window on its own); here WM_CLASS's class, named by the XP file's FileDescription (`notepad.exe`: "Notepad") or the desktop entry |
+| "Chosen" | When the window got its button, or was activated from it (just before `SwitchToThisWindow`): not every activation |
+| Group button | Icon, then the count centred in a gap as wide as the count with a "0" more, in `TaskBand.GroupCount` (Tahoma 8 bold, 255 204 109), then the name; comctl32's drop-down arrow (drawn here as a 5 x 3 triangle 4 after the words, not measured) |
+| Group list | A menu band at least as wide as the button, over it, in `TaskBandGroupMenu` (rows of 3 + 16 + 3 from the style's margins, not measured) |
+| Menu 205 | Adjust Date/Time, Customize Notifications and their line only from the notification area; "&Undo %s" (534) with Cascade (535) or Tile (536) after one; Show the Desktop as "&Show Open Windows" (850) while it shows; Cascade and Tile greyed without a window; Task Manager greyed by DisableTaskMgr |
+| Cascade | user32's CascadeWindows on the work area: steps of SM_CXFRAME + SM_CXSIZE and SM_CYFRAME + SM_CYSIZE (22 x 29 with Luna, whose style leaves CaptionWidth at 18), as many as a third of the height holds; every window the area less those steps; the bottom window at the corner, wrapping after steps + 1 |
+| Tile | user32's TileWindows: S = 1 under 4 windows, else one less than the smallest E with E x E > N; Horizontally (MDITILE_HORIZONTAL) S columns of N / S rows, Vertically N / S columns of S rows; the last N mod S columns a row more; the topmost window first |
+
+### The Start panel's keys and selection
+
+`explorer.exe`'s DV2ControlHost routes the arrows between the panes: the focused pane moves first, and at
+its edge the host takes the next pane round them all (GetNextDlgGroupItem) whose rectangle holds the
+item's height (Left, Right) and selects the item nearest it; Right opens a cascade, Left and Right swap
+under a right-to-left layout. `Start_MinMFU` is 6 when unset. The rest was watched on XP's own explorer in
+the Wine prefix, key by key, captured losslessly:
+
+| What | XP's |
+|---|---|
+| Opening | Nothing selected; Down takes the first item, Up the last (Turn Off Computer) |
+| Up, Down | Through a pane, then the next round them all: programs, All Programs, places, Log Off and Turn Off; entered at the first item going down, the last going up |
+| Left, Right | The other column at the nearest item (round them too); Right opens My Recent Documents' or Connect To's cascade, with its first entry selected; Left and Escape close the last cascade, the item that opened it staying selected |
+| Letters | An item's access key, or the first letter of one that has none, in every pane: alone, it runs or opens its cascade; with others, the next is selected |
+| Access keys | explorer.exe's names: My Recent &Documents (8236), &Control Panel (8234), Connect &To, &Help and Support, &Search, &Run..., &Log Off, T&urn Off Computer; shell32's have none. Underlined only when the keys opened the panel or once a key is pressed; All &Programs' always |
+| Selection | COLOR_HIGHLIGHT, not the style's HotTracking, for the pointer as for the keys: 2 inside the row, 8 in from the programs' pane and 6 from its right (a program's icon 2 inside it, its words 36 after), 6 and 8 in the places; All Programs' 8 in and 6 from top and bottom. Log Off and Turn Off: filled 3 around the picture and 8 after the words with the keys, the picture lightened under the pointer; their pictures and words a pixel above the bar's middle, All Programs' words too |
+| Infotips | explorer.exe's strings (300 to 307, 7000 to 7005, 7015, 7016) and the programs' comments; none for All Programs. With the keys, the tip's border at the item's words and just under the selection; for Log Off and Turn Off, 7 back from the selection's right; with the pointer, at the pointer |
+| (Empty) | A greyed entry that is never selected |
 
 ### Font rendering without smoothing
 

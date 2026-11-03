@@ -5,6 +5,7 @@
 
 #include <QByteArray>
 #include <QList>
+#include <QRect>
 #include <xcb/xcb.h>
 
 namespace x11 {
@@ -21,6 +22,10 @@ void setString(xcb_window_t window, const char *name, const QByteArray &value);
 void watchProperties(xcb_window_t window);
 // A client message to the window manager, as EWMH asks for it.
 void sendToManager(xcb_window_t window, const char *type, const QList<quint32> &data);
+// A client's rectangle on the root with its frame (_NET_FRAME_EXTENTS); null if it has gone.
+QRect frameGeometry(xcb_window_t window);
+// Moves and sizes a client so that its frame fills OUTER (_NET_MOVERESIZE_WINDOW).
+void moveFrame(xcb_window_t window, const QRect &outer);
 // How long the user has not touched the keyboard or the mouse (MIT-SCREEN-SAVER); 0 if the server cannot tell.
 quint32 idleMilliseconds();
 

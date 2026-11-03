@@ -65,6 +65,9 @@ Program toProgram(const QString &path, const QHash<QString, QString> &values)
     program.name = values.value(QStringLiteral("Name[%1]").arg(locale),
                                 values.value(QStringLiteral("Name[%1]").arg(locale.section(QLatin1Char('_'), 0, 0)),
                                              values.value(QStringLiteral("Name"))));
+    program.comment = values.value(QStringLiteral("Comment[%1]").arg(locale),
+                                   values.value(QStringLiteral("Comment[%1]").arg(locale.section(QLatin1Char('_'), 0, 0)),
+                                                values.value(QStringLiteral("Comment"))));
     program.icon = values.value(QStringLiteral("Icon"));
     program.categories = values.value(QStringLiteral("Categories")).split(QLatin1Char(';'), Qt::SkipEmptyParts);
     // Without its field codes: nothing is being opened with it.
@@ -149,6 +152,30 @@ std::optional<Program> find(const QString &id)
 {
     const QString path = entryFiles().value(id);
     return path.isEmpty() ? std::nullopt : readEntry(path);
+}
+
+std::optional<Program> forWindowClass(const QString &wmClass)
+{
+    if (wmClass.isEmpty())
+        return std::nullopt;
+    // Its StartupWMClass first, then an entry or a command of the class's name, as docks match them.
+    const QHash<QString, QString> files = entryFiles();
+    std::optional<Program> byName;
+    for (auto it = files.cbegin(); it != files.cend(); ++it) {
+        const QHash<QString, QString> values = readEntryValues(it.value());
+        if (values.value(QStringLiteral("Type")) != QLatin1String("Application"))
+            continue;
+        if (values.value(QStringLiteral("StartupWMClass")).compare(wmClass, Qt::CaseInsensitive) == 0)
+            return toProgram(it.value(), values);
+        if (byName)
+            continue;
+        const Program program = toProgram(it.value(), values);
+        const QString base = QFileInfo(it.key()).completeBaseName();
+        if (base.compare(wmClass, Qt::CaseInsensitive) == 0 || base.section(QLatin1Char('.'), -1).compare(wmClass, Qt::CaseInsensitive) == 0
+            || (!program.command.isEmpty() && QFileInfo(program.command.first()).fileName().compare(wmClass, Qt::CaseInsensitive) == 0))
+            byName = program;
+    }
+    return byName;
 }
 
 std::optional<Program> fromFile(const QString &path)

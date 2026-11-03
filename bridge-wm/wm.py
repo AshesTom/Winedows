@@ -107,7 +107,8 @@ class Manager:
                      '_NET_WM_STATE_HIDDEN', '_NET_WM_STATE_MAXIMIZED_VERT', '_NET_WM_STATE_MAXIMIZED_HORZ',
                      '_NET_WM_STATE_ABOVE', '_NET_WM_STATE_FULLSCREEN',
                      '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_DESKTOP', '_NET_WM_WINDOW_TYPE_DOCK',
-                     '_NET_WM_ICON', '_NET_FRAME_EXTENTS', '_NET_CLOSE_WINDOW', '_NET_WM_STRUT', '_NET_WM_STRUT_PARTIAL']
+                     '_NET_WM_ICON', '_NET_FRAME_EXTENTS', '_NET_CLOSE_WINDOW', '_NET_WM_STRUT', '_NET_WM_STRUT_PARTIAL',
+                     '_NET_MOVERESIZE_WINDOW', '_NET_SHOWING_DESKTOP']
         self.setprop(self.root, '_NET_SUPPORTED', Xatom.ATOM, [self.atom(a) for a in supported])
         self.setprop(self.root, '_NET_NUMBER_OF_DESKTOPS', Xatom.CARDINAL, [1])
         self.setprop(self.root, '_NET_CURRENT_DESKTOP', Xatom.CARDINAL, [0])
@@ -603,6 +604,37 @@ class Manager:
             except error.XError:
                 continue
             self.raise_owned(c['w'].id, seen)
+
+    def request_configure(self, window, values):
+        """A client's ConfigureRequest, or a pager's _NET_MOVERESIZE_WINDOW for it."""
+        c = self.clients.get(window.id)
+        if c:
+            moves = any(name in values for name in ('x', 'y', 'width', 'height'))
+            if moves and window.id in self.frames:
+                self.frame_moves(c, values)
+                self.follow_frame(window.id, values)
+            self.configure(c, **values)
+            if moves and c['kind'] == 'normal' and not c['hwnd']:
+                self.follow_native(window.id)
+        else:
+            window.configure(**values)
+        if 'sibling' in values or 'stack_mode' in values:
+            self.restack()
+        if c and c['kind'] == 'dock':
+            self.workarea()
+
+    def show_desktop(self, on):
+        """Show the Desktop: minimize the shown windows; Show Open Windows brings them back."""
+        if on:
+            self.before_desktop = [c['w'] for c in self.clients.values() if c['kind'] == 'normal' and not c['hidden']]
+            for w in self.before_desktop:
+                self.minimize(w)
+        else:
+            for w in getattr(self, 'before_desktop', []):
+                if w.id in self.clients and self.clients[w.id]['hidden']:
+                    self.focus(w)
+            self.before_desktop = []
+        self.setprop(self.root, '_NET_SHOWING_DESKTOP', Xatom.CARDINAL, [1 if on else 0])
 
     def message(self, w, name, values):
         w.send_event(protocol.event.ClientMessage(window=w, client_type=self.atom(name), data=(32, values)))
@@ -1175,21 +1207,7 @@ class Manager:
                       ((X.CWX, 'x'), (X.CWY, 'y'), (X.CWWidth, 'width'), (X.CWHeight, 'height'),
                        (X.CWBorderWidth, 'border_width'), (X.CWSibling, 'sibling'), (X.CWStackMode, 'stack_mode'))
                       if e.value_mask & bit}
-            c = self.clients.get(e.window.id)
-            if c:
-                moves = e.value_mask & (X.CWX | X.CWY | X.CWWidth | X.CWHeight)
-                if moves and e.window.id in self.frames:
-                    self.frame_moves(c, values)
-                    self.follow_frame(e.window.id, values)
-                self.configure(c, **values)
-                if moves and c['kind'] == 'normal' and not c['hwnd']:
-                    self.follow_native(e.window.id)
-            else:
-                e.window.configure(**values)
-            if e.value_mask & (X.CWSibling | X.CWStackMode):
-                self.restack()
-            if c and c['kind'] == 'dock':
-                self.workarea()
+            self.request_configure(e.window, values)
         elif e.type == X.DestroyNotify:
             self.overlays.pop(e.window.id, None)
             self.unmanage(e.window.id)
@@ -1286,6 +1304,15 @@ class Manager:
             values = e.data[1]
             if e.client_type == self.atom('_NET_ACTIVE_WINDOW'):
                 self.focus(e.window)
+            elif e.client_type == self.atom('_NET_MOVERESIZE_WINDOW') and e.window.id in self.clients:
+                # From the taskbar's Cascade and Tile: the client's own X, Y, width and height.
+                fields = ((1 << 8, 'x'), (1 << 9, 'y'), (1 << 10, 'width'), (1 << 11, 'height'))
+                request = {name: values[1 + i] - (1 << 32 if values[1 + i] >= 1 << 31 else 0)
+                           for i, (bit, name) in enumerate(fields) if values[0] & bit}
+                if request:
+                    self.request_configure(e.window, request)
+            elif e.client_type == self.atom('_NET_SHOWING_DESKTOP'):
+                self.show_desktop(bool(values[0]))
             elif e.client_type == self.atom('_NET_CLOSE_WINDOW'):
                 self.close(e.window)
             elif e.client_type == self.atom('WM_CHANGE_STATE') and values[0] == 3:

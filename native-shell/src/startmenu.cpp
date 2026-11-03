@@ -26,6 +26,8 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHash>
+#include <QApplication>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -33,6 +35,7 @@
 #include <QProcess>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QToolTip>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QXmlStreamReader>
@@ -51,7 +54,14 @@ const int ACTIVATE_DELAY_MS = 100;
 // How long XP's menus wait before they change (SPI_GETMENUSHOWDELAY's default)
 const int CASCADE_DELAY_MS = 400;
 const int DIALOG_RUN = 1003, RUN_COMMAND = 12298, RUN_SEPARATE_MEMORY = 12306, RUN_BROWSE = 12288, STRING_BROWSE_TITLE = 9015, RUN_HISTORY = 26;
-const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722;
+const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722, EXPLORER_INTERNET = 7024, EXPLORER_MAIL = 7025;
+// The panel's own names, with their access keys (My Recent &Documents, &Control Panel); the other places'
+// are shell32's, which have none.
+const int EXPLORER_RECENT = 8236, EXPLORER_CONTROL_PANEL = 8234;
+// explorer.exe's infotips: the places', the pinned programs', All Programs', Log Off's and Turn Off's
+const int TIP_DOCUMENTS = 300, TIP_RECENT = 301, TIP_MUSIC = 302, TIP_PICTURES = 303, TIP_COMPUTER = 304, TIP_CONNECT = 306,
+          TIP_CONTROL_PANEL = 307, TIP_SEARCH = 7000, TIP_HELP = 7001, TIP_RUN = 7003, TIP_INTERNET = 7004, TIP_MAIL = 7005,
+          TIP_LOG_OFF = 7015, TIP_TURN_OFF = 7016, TIP_ALL_PROGRAMS = 8227;
 const int SHELL_DOCUMENTS = 9227, SHELL_RECENT = 12691, SHELL_PICTURES = 9076, SHELL_MUSIC = 9105, SHELL_COMPUTER = 9216;
 const int SHELL_CONTROL_PANEL = 4161, SHELL_PRINTERS = 9319;
 // explorer.exe's Connect To. Set Program Access and Defaults is a shortcut of All Users' Start Menu,
@@ -301,6 +311,27 @@ QRect Cascade::entryGlobalRect(int index) const
     return m_rects[index].translated(mapToGlobal(QPoint(0, 0)));
 }
 
+int Cascade::nextSelectable(int from, int step) const
+{
+    const int count = int(m_entries.size());
+    int at = from;
+    for (int i = 0; i < count; ++i) {
+        at = at < 0 ? (step > 0 ? 0 : count - 1) : (at + step + count) % count;
+        if (!m_entries[at].separator && m_entries[at].enabled)
+            return at;
+    }
+    return -1;
+}
+
+QList<int> Cascade::entriesFor(QChar letter) const
+{
+    QList<int> out;
+    for (int i = 0; i < m_entries.size(); ++i)
+        if (!m_entries[i].separator && m_entries[i].enabled && !m_entries[i].text.isEmpty() && m_entries[i].text.at(0).toLower() == letter.toLower())
+            out.append(i);
+    return out;
+}
+
 void Cascade::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -317,7 +348,7 @@ void Cascade::paintEvent(QPaintEvent *)
     const int icon = theme->scaled(CASCADE_ICON);
     for (int i = 0; i < m_entries.size(); ++i) {
         const QRect r = m_rects[i];
-        const bool hot = i == m_hot;
+        const bool hot = i == m_hot && m_entries[i].enabled;
         if (hot) {
             if (renderer)
                 renderer->draw(&painter, r, Part{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 2, QStringLiteral("startmenu")});
@@ -326,7 +357,9 @@ void Cascade::paintEvent(QPaintEvent *)
         }
         const QPixmap pixmap = m_entries[i].icon.pixmap(icon, icon);
         painter.drawPixmap(r.x() + theme->scaled(7), r.y() + (r.height() - icon) / 2, pixmap);
-        const QColor text = hot ? Qt::white : (renderer ? renderer->colour(toolbar, QStringLiteral("textcolor")).value_or(Qt::black) : QColor(Qt::black));
+        QColor text = hot ? Qt::white : (renderer ? renderer->colour(toolbar, QStringLiteral("textcolor")).value_or(Qt::black) : QColor(Qt::black));
+        if (!m_entries[i].enabled)
+            text = theme->system(QStringLiteral("graytext"), Qt::gray);
         painter.setPen(text);
         const int textX = r.x() + theme->scaled(7 + CASCADE_ICON + 7);
         const int textEnd = r.right() - theme->scaled(14);
@@ -412,7 +445,7 @@ void StartPanel::addPlace(int &y, int iconId, const QString &text, bool bold, st
     Item item;
     const int height = theme->scaled(PLACE_HEIGHT);
     item.rect = QRect(m_right.x() + theme->scaled(5), y, m_right.width() - theme->scaled(10), height);
-    item.text = QString(text).remove(QLatin1Char('&'));
+    item.text = text;
     item.bold = bold;
     item.icon = theme->shellIcon(iconId, theme->scaled(PLACE_ICON));
     item.enabled = bool(action) || arrow;
@@ -457,9 +490,9 @@ void StartPanel::build(QPoint bottomLeft)
     // Keep XP's normal columns; grow them for large fonts and translated labels.
     const QFontMetrics placeMetrics(theme->systemFont(QStringLiteral("menufont"), true));
     int column = theme->scaled(COLUMN);
-    for (const QString &label : {shellString(SHELL_DOCUMENTS, "My Documents"), shellString(SHELL_RECENT, "My Recent Documents"),
+    for (const QString &label : {shellString(SHELL_DOCUMENTS, "My Documents"), explorerString(EXPLORER_RECENT, "My Recent &Documents"),
                                 shellString(SHELL_PICTURES, "My Pictures"), shellString(SHELL_MUSIC, "My Music"),
-                                shellString(SHELL_COMPUTER, "My Computer"), shellString(SHELL_CONTROL_PANEL, "Control Panel"),
+                                shellString(SHELL_COMPUTER, "My Computer"), explorerString(EXPLORER_CONTROL_PANEL, "&Control Panel"),
                                 shellString(SHELL_PRINTERS, "Printers and Faxes"), explorerString(EXPLORER_HELP, "Help and Support")})
         column = qMax(column, placeMetrics.horizontalAdvance(QString(label).remove(QLatin1Char('&'))) + theme->scaled(PLACE_ICON + 32));
     const int width = 2 * column;
@@ -471,8 +504,8 @@ void StartPanel::build(QPoint bottomLeft)
     m_picture = userPicture(theme->scaled(48));
     // XP underlines its letter (All &Programs) even when opened with the mouse
     m_moreText = explorerString(EXPLORER_ALL_PROGRAMS, "All &Programs");
-    m_logOffText = explorerString(EXPLORER_LOG_OFF, "Log Off").remove(QLatin1Char('&')).remove(QLatin1String("..."));
-    m_turnOffText = explorerString(EXPLORER_TURN_OFF, "Turn Off Computer").remove(QLatin1Char('&')).remove(QLatin1String("..."));
+    m_logOffText = explorerString(EXPLORER_LOG_OFF, "&Log Off").remove(QLatin1String("..."));
+    m_turnOffText = explorerString(EXPLORER_TURN_OFF, "T&urn Off Computer").remove(QLatin1String("..."));
     m_logOffIcon = theme->shellIcon(ICON_LOG_OFF, theme->scaled(24));
     m_turnOffIcon = theme->shellIcon(ICON_TURN_OFF, theme->scaled(24));
     if (classic)
@@ -489,19 +522,26 @@ void StartPanel::build(QPoint bottomLeft)
                       : QRect(column, userHeight, width - column, 0);
     int y = userHeight + theme->scaled(classic ? CLASSIC_TOP : COLUMN_TOP);
     const auto opens = [](const QString &path) { return [path] { programs::open(path); }; };
+    const auto tip = [this](int id) { m_items.last().tip = explorerString(id, ""); };
     addPlace(y, ICON_DOCUMENTS, shellString(SHELL_DOCUMENTS, "My Documents"), true, opens(xdgDir(QStandardPaths::DocumentsLocation)));
-    addPlace(y, ICON_RECENT, shellString(SHELL_RECENT, "My Recent Documents"), true, {}, true);
+    tip(TIP_DOCUMENTS);
+    addPlace(y, ICON_RECENT, explorerString(EXPLORER_RECENT, "My Recent &Documents"), true, {}, true);
     m_items.last().children = [this] { return recentDocuments(); };
+    tip(TIP_RECENT);
     addPlace(y, ICON_PICTURES, shellString(SHELL_PICTURES, "My Pictures"), true, opens(xdgDir(QStandardPaths::PicturesLocation)));
+    tip(TIP_PICTURES);
     addPlace(y, ICON_MUSIC, shellString(SHELL_MUSIC, "My Music"), true, opens(xdgDir(QStandardPaths::MusicLocation)));
+    tip(TIP_MUSIC);
     addPlace(y, ICON_COMPUTER, shellString(SHELL_COMPUTER, "My Computer"), true, opens(QStringLiteral("file:///")));
+    tip(TIP_COMPUTER);
     Item separator;
     separator.separator = true;
     separator.rect = classic ? QRect(m_right.x() + theme->scaled(5), y + theme->scaled(PLACE_LINE), m_right.width() - theme->scaled(6), theme->scaled(2))
                              : QRect(m_right.x() + theme->scaled(10), y + theme->scaled(PLACE_LINE), m_right.width() - theme->scaled(20), theme->scaled(2));
     m_items.append(separator);
     y += theme->scaled(8);
-    addPlace(y, ICON_CONTROL_PANEL, shellString(SHELL_CONTROL_PANEL, "Control Panel"), false, m_controlPanel);
+    addPlace(y, ICON_CONTROL_PANEL, explorerString(EXPLORER_CONTROL_PANEL, "&Control Panel"), false, m_controlPanel);
+    tip(TIP_CONTROL_PANEL);
     // XP's next two: the programs' defaults (Add or Remove Programs here), and the network's connections
     addPlace(y, 0, tr("Set Program Access and Defaults"), false, [] { applets::open(QStringLiteral("programs")); });
     const auto moricons = xpfiles::resources(xpfiles::find(QStringLiteral("moricons.dll")));
@@ -509,6 +549,7 @@ void StartPanel::build(QPoint bottomLeft)
     if (!QStandardPaths::findExecutable(QStringLiteral("nmcli")).isEmpty()) {
         addPlace(y, ICON_CONNECT, explorerString(EXPLORER_CONNECT, "Connect To"), false, {}, true);
         m_items.last().children = [] { return connections(); };
+        tip(TIP_CONNECT);
     }
     const bool printers = !QStandardPaths::findExecutable(QStringLiteral("system-config-printer")).isEmpty();
     addPlace(y, ICON_PRINTERS, shellString(SHELL_PRINTERS, "Printers and Faxes"), false,
@@ -516,9 +557,12 @@ void StartPanel::build(QPoint bottomLeft)
     separator.rect.moveTop(y + theme->scaled(PLACE_LINE));
     m_items.append(separator);
     y += theme->scaled(8);
-    addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "Help and Support"), false, {});
-    addPlace(y, ICON_SEARCH, explorerString(EXPLORER_SEARCH, "Search"), false, [] { FileBrowser::open(places::Search); });
-    addPlace(y, ICON_RUN, explorerString(EXPLORER_RUN, "Run..."), false, [] { showRunDialog(); });
+    addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "&Help and Support"), false, {});
+    tip(TIP_HELP);
+    addPlace(y, ICON_SEARCH, explorerString(EXPLORER_SEARCH, "&Search"), false, [] { FileBrowser::open(places::Search); });
+    tip(TIP_SEARCH);
+    addPlace(y, ICON_RUN, explorerString(EXPLORER_RUN, "&Run..."), false, [] { showRunDialog(); });
+    tip(TIP_RUN);
     const auto browser = programs::defaultBrowser(), mail = programs::defaultMail();
     const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0);
     const int leftHeight = theme->scaled((classic ? CLASSIC_TOP : LEFT_TOP) + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + RECENT_PROGRAMS * LEFT_SMALL + LEFT_LINE) + moreHeight;
@@ -534,10 +578,14 @@ void StartPanel::build(QPoint bottomLeft)
     // The left column: the default browser and mail, then the most used programs
     y = m_left.y() + theme->scaled(classic ? CLASSIC_TOP : LEFT_TOP);
     const auto launcher = [](const programs::Program &program) { return [program] { programs::launch(program); }; };
-    if (browser)
-        addLeft(y, tr("Internet"), browser->name, programs::iconOf(*browser), launcher(*browser), true);
-    if (mail)
-        addLeft(y, tr("E-mail"), mail->name, programs::iconOf(*mail), launcher(*mail), true);
+    if (browser) {
+        addLeft(y, explorerString(EXPLORER_INTERNET, "Internet"), browser->name, programs::iconOf(*browser), launcher(*browser), true);
+        tip(TIP_INTERNET);
+    }
+    if (mail) {
+        addLeft(y, explorerString(EXPLORER_MAIL, "E-mail"), mail->name, programs::iconOf(*mail), launcher(*mail), true);
+        tip(TIP_MAIL);
+    }
     if (browser || mail) {
         Item line;
         line.separator = true;
@@ -555,6 +603,7 @@ void StartPanel::build(QPoint bottomLeft)
         if (added++ >= RECENT_PROGRAMS)
             break;
         addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
+        m_items.last().tip = program.comment;
     }
     Item moreLine;
     moreLine.separator = true;
@@ -566,9 +615,10 @@ void StartPanel::build(QPoint bottomLeft)
     // and 11 apart
     QFontMetrics metrics(theme->systemFont(QStringLiteral("menufont")));
     const int icon = theme->scaled(24), gap = theme->scaled(4);
-    const int turnOffWidth = icon + gap + metrics.horizontalAdvance(m_turnOffText);
-    const int logOffWidth = icon + gap + metrics.horizontalAdvance(m_logOffText);
-    const int buttonY = m_logoff.y() + (logoffHeight - icon) / 2;
+    const int turnOffWidth = icon + gap + metrics.horizontalAdvance(QString(m_turnOffText).remove(QLatin1Char('&')));
+    const int logOffWidth = icon + gap + metrics.horizontalAdvance(QString(m_logOffText).remove(QLatin1Char('&')));
+    // (A pixel above the middle on XP's.)
+    const int buttonY = m_logoff.y() + (logoffHeight - icon) / 2 - theme->scaled(1);
     m_turnOffButton = QRect(width - theme->scaled(classic ? CLASSIC_RIGHT_MARGIN : 10) - turnOffWidth,
                             classic ? m_logoff.y() + theme->scaled(CLASSIC_ICON_Y) : buttonY, turnOffWidth, icon);
     m_logOffButton = QRect(m_turnOffButton.x() - theme->scaled(11) - logOffWidth, m_turnOffButton.y(), logOffWidth, icon);
@@ -689,12 +739,14 @@ void StartPanel::paintEvent(QPaintEvent *)
     }
     }
 
-    // The items
+    // The items. XP underlines the access keys when the keys opened the panel, or once one is pressed
+    // (All Programs' always).
+    const int mnemonics = m_cues ? Qt::TextShowMnemonic : Qt::TextHideMnemonic;
     const QFont normal = theme->systemFont(QStringLiteral("menufont")), bold = theme->systemFont(QStringLiteral("menufont"), true);
     const QColor leftText = renderer ? renderer->colour(panelPart("proglist"), QStringLiteral("textcolor")).value_or(Qt::black) : QColor(Qt::black);
     const QColor rightText = renderer ? renderer->colour(panelPart("placeslist"), QStringLiteral("textcolor")).value_or(Qt::black) : QColor(Qt::black);
-    const QColor leftHot = renderer ? renderer->colour(panelPart("proglist"), QStringLiteral("hottracking")).value_or(highlight) : highlight;
-    const QColor rightHot = renderer ? renderer->colour(panelPart("placeslist"), QStringLiteral("hottracking")).value_or(highlight) : highlight;
+    // The selection, the pointer's or the keys', is COLOR_HIGHLIGHT on XP: not the style's HotTracking.
+    const QColor leftHot = highlight, rightHot = highlight;
     for (int i = 0; i < m_items.size(); ++i) {
         const Item &item = m_items[i];
         const bool onLeft = item.rect.x() < m_right.x();
@@ -706,9 +758,15 @@ void StartPanel::paintEvent(QPaintEvent *)
             continue;
         }
         const bool hot = i == m_hot && item.enabled;
+        // Measured on XP's: the selection 2 inside its row, 8 in from the programs' pane and 6 from its
+        // right, 6 in from the places' and 8 from their right; a program's icon 2 inside it.
+        QRect selection = item.rect;
+        if (renderer)
+            selection = onLeft ? QRect(m_left.x() + theme->scaled(8), item.rect.y() + theme->scaled(2), m_left.width() - theme->scaled(14), item.rect.height() - theme->scaled(4))
+                               : QRect(m_right.x() + theme->scaled(6), item.rect.y() + theme->scaled(2), m_right.width() - theme->scaled(14), item.rect.height() - theme->scaled(4));
         if (hot)
-            painter.fillRect(item.rect, onLeft ? leftHot : rightHot);
-        const int iconX = item.rect.x() + theme->scaled(3);
+            painter.fillRect(selection, onLeft ? leftHot : rightHot);
+        const int iconX = renderer && onLeft ? selection.x() + theme->scaled(2) : item.rect.x() + theme->scaled(3);
         if (!item.icon.isNull())
             painter.drawImage(iconX, item.rect.y() + (item.rect.height() - item.icon.height()) / 2, item.icon);
         const int textX = iconX + item.icon.width() + theme->scaled(!renderer && !onLeft ? 3 : 4);
@@ -721,10 +779,10 @@ void StartPanel::paintEvent(QPaintEvent *)
         if (item.subtitle.isEmpty() && !onLeft) {
             // A place's words are a pixel above the middle, as on XP; too long for the column, they take two lines.
             const QRect words(textX, item.rect.y() - theme->scaled(1), textEnd - textX, item.rect.height());
-            if (painter.fontMetrics().horizontalAdvance(item.text) > words.width())
-                painter.drawText(words.translated(0, theme->scaled(1)), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, item.text);
+            if (painter.fontMetrics().horizontalAdvance(QString(item.text).remove(QLatin1Char('&'))) > words.width())
+                painter.drawText(words.translated(0, theme->scaled(1)), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap | mnemonics, item.text);
             else
-                painter.drawText(words, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, item.text);
+                painter.drawText(words, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine | mnemonics, item.text);
         } else if (item.subtitle.isEmpty()) {
             painter.drawText(QRect(textX, item.rect.y(), textEnd - textX, item.rect.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                              painter.fontMetrics().elidedText(item.text, Qt::ElideRight, textEnd - textX));
@@ -753,10 +811,13 @@ void StartPanel::paintEvent(QPaintEvent *)
     const QRect arrow = moreArrow();
     painter.setFont(renderer ? bold : normal);
     const QRect band = moreBand();
-    const QRect moreText = renderer ? QRect(band.x(), band.y(), arrow.x() - band.x() - theme->scaled(MORE_GAP), band.height())
+    // (XP's words a pixel above the middle of their band)
+    const QRect moreText = renderer ? QRect(band.x(), band.y() - theme->scaled(1), arrow.x() - band.x() - theme->scaled(MORE_GAP), band.height())
                                     : QRect(band.x() + theme->scaled(CLASSIC_MORE_TEXT), band.y(), band.width(), band.height());
     if (moreHot) {
-        const QRect band(m_more.x() + theme->scaled(8), m_more.y() + theme->scaled(3), m_more.width() - theme->scaled(10), m_more.height() - theme->scaled(6));
+        // XP's: 8 in from each side, 6 from the top and the bottom
+        const QRect band = renderer ? m_more.adjusted(theme->scaled(8), theme->scaled(6), -theme->scaled(8), -theme->scaled(6))
+                                    : QRect(m_more.x() + theme->scaled(8), m_more.y() + theme->scaled(3), m_more.width() - theme->scaled(10), m_more.height() - theme->scaled(6));
         painter.fillRect(band, leftHot);
     }
     painter.setPen(moreHot ? QColor(Qt::white) : leftText);
@@ -772,8 +833,12 @@ void StartPanel::paintEvent(QPaintEvent *)
     // Log Off and Turn Off Computer
     painter.setFont(normal);
     const auto logoffButton = [&](const QRect &rect, const QImage &icon, const QString &text, bool hot) {
+        // Selected with the keys, XP fills it with COLOR_HIGHLIGHT, 3 around the picture and 8 after the
+        // words; under the pointer it only lightens the picture.
+        if (hot && m_byKeys)
+            painter.fillRect(keySelection(rect), highlight);
         painter.drawImage(rect.topLeft(), icon);
-        if (hot) {
+        if (hot && !m_byKeys) {
             // XP lightens the hot button's icon.
             QImage light = icon.convertToFormat(QImage::Format_ARGB32_Premultiplied);
             QPainter tint(&light);
@@ -784,8 +849,10 @@ void StartPanel::paintEvent(QPaintEvent *)
         }
         // White on Luna's blue bar; the menu's text on Classic's
         painter.setPen(renderer ? QColor(Qt::white) : theme->system(QStringLiteral("menutext"), Qt::black));
-        painter.drawText(QRect(rect.x() + icon.width() + theme->scaled(4), rect.y(), rect.width() - icon.width() - theme->scaled(4), rect.height()),
-                         Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, text);
+        // (A pixel above the middle of the picture on XP's)
+        const int raise = renderer ? theme->scaled(1) : 0;
+        painter.drawText(QRect(rect.x() + icon.width() + theme->scaled(4), rect.y() - raise, rect.width() - icon.width() - theme->scaled(4), rect.height()),
+                         Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine | mnemonics, text);
     };
     logoffButton(m_logOffButton, m_logOffIcon, m_logOffText, m_hotPart == LogOffHot);
     logoffButton(m_turnOffButton, m_turnOffIcon, m_turnOffText, m_hotPart == TurnOffHot);
@@ -874,10 +941,10 @@ QList<MenuEntry> StartPanel::recentDocuments() const
         out.append(entry);
     }
     if (out.isEmpty()) {
+        // explorer.exe's word for an empty cascade, greyed
         MenuEntry empty;
         empty.text = tr("(Empty)");
-        empty.icon = documentIcon;
-        empty.action = [] {};
+        empty.enabled = false;
         out.append(empty);
     }
     return out;
@@ -935,8 +1002,9 @@ void StartPanel::track(QPoint global)
         const int entry = cascade->entryAt(global);
         if (entry == -2)
             continue;
-        // Crossing the panel to get here asked for nothing.
+        // Crossing the panel to get here asked for nothing; the keys now work in this cascade's family.
         m_openTimer.stop();
+        m_keysInCascade = true;
         // On its way into this one, the rows that led here stay lit, and what they had asked for
         // meanwhile is forgotten.
         if (m_switchLevel < level)
@@ -976,6 +1044,8 @@ void StartPanel::track(QPoint global)
     if (hot != m_hot || part != m_hotPart) {
         m_hot = hot;
         m_hotPart = part;
+        m_keysInCascade = false;
+        m_byKeys = false;
         update();
         // Moving onto something else in the panel closes the open cascades, after a moment.
         int wanted = -1;
@@ -1035,7 +1105,7 @@ void StartPanel::mouseReleaseEvent(QMouseEvent *event)
         const int entry = m_cascades[level]->entryAt(global);
         if (entry == -2)
             continue;
-        if (entry >= 0 && m_cascades[level]->entry(entry).action) {
+        if (entry >= 0 && m_cascades[level]->entry(entry).action && m_cascades[level]->entry(entry).enabled) {
             const auto action = m_cascades[level]->entry(entry).action;
             run(action);
         }
@@ -1065,16 +1135,306 @@ void StartPanel::mouseReleaseEvent(QMouseEvent *event)
     }
 }
 
+QChar StartPanel::accessKey(const QString &text)
+{
+    // The letter after a single &; without one, the first letter
+    for (qsizetype i = 0; i + 1 < text.size(); ++i)
+        if (text[i] == QLatin1Char('&')) {
+            if (text[i + 1] != QLatin1Char('&'))
+                return text[i + 1].toLower();
+            ++i;
+        }
+    return text.isEmpty() ? QChar() : text[0].toLower();
+}
+
+void StartPanel::setKeyboardCues(bool on)
+{
+    m_cues = on;
+    update();
+}
+
+QRect StartPanel::keySelection(const QRect &button)
+{
+    ShellTheme *theme = ShellTheme::instance();
+    return button.adjusted(-theme->scaled(3), -theme->scaled(3), theme->scaled(8), theme->scaled(3));
+}
+
+QString StartPanel::tipOf(const Target &target) const
+{
+    // (All Programs has none on XP.)
+    if (target.item == MoreItem)
+        return QString();
+    if (target.item == LogOffItem)
+        return xpfiles::explorerString(TIP_LOG_OFF, "");
+    if (target.item == TurnOffItem)
+        return xpfiles::explorerString(TIP_TURN_OFF, "");
+    return m_items[target.item].tip;
+}
+
+void StartPanel::showTip(const Target &target)
+{
+    // Measured on XP's: the tip's border at the item's words, its top just under the selection.
+    ShellTheme *theme = ShellTheme::instance();
+    const QString text = tipOf(target);
+    if (text.isEmpty()) {
+        QToolTip::hideText();
+        return;
+    }
+    int x = target.rect.x(), bottom = target.rect.bottom();
+    if (target.pane == BottomPane) {
+        // Log Off's and Turn Off's, 7 back from the selection's right
+        const QRect selection = keySelection(target.rect);
+        x = selection.right() - theme->scaled(7);
+        bottom = selection.bottom();
+    } else if (target.item >= 0) {
+        const bool onLeft = target.pane == LeftPane;
+        const int icon = m_items[target.item].icon.width();
+        x = onLeft ? m_left.x() + theme->scaled(10) + icon + theme->scaled(4) : target.rect.x() + theme->scaled(3) + icon + theme->scaled(4);
+        bottom -= theme->scaled(2);
+    }
+    QToolTip::showText(mapToGlobal(QPoint(x, bottom + 1)), text, this);
+    // Qt puts a tip under and right of the point it is given, more or less: it goes where XP's was.
+    for (QWidget *tip : QApplication::topLevelWidgets())
+        if (tip->inherits("QTipLabel") && tip->isVisible())
+            tip->move(mapToGlobal(QPoint(x, bottom + 1)));
+}
+
+bool StartPanel::event(QEvent *event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        // The pointer's: at the pointer, as Qt places them
+        const auto *help = static_cast<QHelpEvent *>(event);
+        const QList<Target> all = targets();
+        for (const Target &target : all)
+            if (target.rect.contains(help->pos())) {
+                const QString text = tipOf(target);
+                if (!text.isEmpty())
+                    QToolTip::showText(help->globalPos(), text, this);
+                return true;
+            }
+        QToolTip::hideText();
+        return true;
+    }
+    return QWidget::event(event);
+}
+
+QList<StartPanel::Target> StartPanel::targets() const
+{
+    QList<Target> left, places;
+    for (int i = 0; i < m_items.size(); ++i) {
+        const Item &item = m_items[i];
+        if (item.separator || !item.enabled)
+            continue;
+        (item.rect.x() < m_right.x() ? left : places).append({item.rect.x() < m_right.x() ? LeftPane : PlacesPane, i, item.rect, item.text});
+    }
+    QList<Target> out = left;
+    out.append({MorePane, MoreItem, m_more, m_moreText});
+    out.append(places);
+    out.append({BottomPane, LogOffItem, m_logOffButton, m_logOffText});
+    out.append({BottomPane, TurnOffItem, m_turnOffButton, m_turnOffText});
+    return out;
+}
+
+int StartPanel::currentTarget(const QList<Target> &all) const
+{
+    for (int i = 0; i < all.size(); ++i) {
+        const int item = all[i].item;
+        if ((item >= 0 && item == m_hot) || (item == MoreItem && m_hotPart == MoreHot) || (item == LogOffItem && m_hotPart == LogOffHot)
+            || (item == TurnOffItem && m_hotPart == TurnOffHot))
+            return i;
+    }
+    return -1;
+}
+
+void StartPanel::select(const Target &target)
+{
+    // A selection made with the keys opens nothing, and closes what the pointer had opened.
+    m_openTimer.stop();
+    closeCascades(0);
+    m_keysInCascade = false;
+    m_hot = target.item >= 0 ? target.item : -1;
+    m_hotPart = target.item == MoreItem ? MoreHot : target.item == LogOffItem ? LogOffHot : target.item == TurnOffItem ? TurnOffHot : Nothing;
+    m_byKeys = true;
+    update();
+    showTip(target);
+}
+
+void StartPanel::openByKeyboard(int wanted)
+{
+    // The cascade opens with its first entry selected, and the keys go on in it.
+    m_openTimer.stop();
+    m_openWanted = wanted;
+    openChildren(0);
+    if (Cascade *cascade = m_cascades.value(0)) {
+        cascade->setHot(cascade->nextSelectable(-1, 1));
+        m_keysInCascade = true;
+    }
+}
+
+void StartPanel::activate(const Target &target)
+{
+    select(target);
+    if (target.item == MoreItem)
+        openByKeyboard(-2);
+    else if (target.item == LogOffItem)
+        run(m_logOff);
+    else if (target.item == TurnOffItem)
+        run(m_turnOff);
+    else if (m_items[target.item].children)
+        openByKeyboard(target.item);
+    else
+        run(m_items[target.item].action);
+}
+
+bool StartPanel::cascadeKey(QKeyEvent *event)
+{
+    const int level = int(m_cascades.size()) - 1;
+    Cascade *cascade = m_cascades.value(level);
+    if (!cascade || !m_keysInCascade)
+        return false;
+    const int hot = cascade->hot();
+    const bool openable = hot >= 0 && cascade->entry(hot).enabled && cascade->entry(hot).children;
+    switch (event->key()) {
+    case Qt::Key_Down:
+    case Qt::Key_Up:
+        m_switchTimer.stop();
+        closeCascades(level + 1);
+        cascade->setHot(cascade->nextSelectable(hot, event->key() == Qt::Key_Down ? 1 : -1));
+        return true;
+    case Qt::Key_Right:
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        if (openable) {
+            openChildren(level + 1);
+            if (Cascade *child = m_cascades.value(level + 1))
+                child->setHot(child->nextSelectable(-1, 1));
+        } else if (event->key() != Qt::Key_Right && hot >= 0 && cascade->entry(hot).enabled && cascade->entry(hot).action) {
+            run(cascade->entry(hot).action);
+        }
+        return true;
+    case Qt::Key_Left:
+    case Qt::Key_Escape:
+        // Back to the row or the panel's item that opened it
+        closeCascades(level);
+        m_keysInCascade = level > 0;
+        return true;
+    default:
+        break;
+    }
+    const QString typed = event->text();
+    if (typed.size() == 1 && typed[0].isPrint()) {
+        // A menu's letters: one entry runs or opens, several take turns
+        const QList<int> matches = cascade->entriesFor(typed[0]);
+        if (matches.size() == 1) {
+            cascade->setHot(matches.first());
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            return cascadeKey(&enter);
+        }
+        if (!matches.isEmpty()) {
+            const auto next = std::upper_bound(matches.cbegin(), matches.cend(), hot);
+            cascade->setHot(next == matches.cend() ? matches.first() : *next);
+        }
+        return true;
+    }
+    return true;
+}
+
 void StartPanel::keyPressEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Escape)
+    // As XP's Start panel does, seen on XP's own: with nothing selected, Down takes the first item and Up
+    // the last. Up and Down go through a pane, then on to the next pane round them all (programs, All
+    // Programs, places, Log Off and Turn Off), at its first item going down and its last going up. Left
+    // and Right go to the next pane that way whose rectangle has the item's height in it, at its nearest
+    // item (DV2ControlHost's routing); Right opens a cascade. A letter: the item whose access key it is,
+    // or whose first letter it is when it has none, runs or opens when it is the only one, else the next
+    // one is selected. Escape and Left close the last cascade.
+    // A key shows the access keys from then on.
+    if (!m_cues) {
+        m_cues = true;
+        update();
+    }
+    if (cascadeKey(event))
+        return;
+    const QList<Target> all = targets();
+    const int current = currentTarget(all);
+    const auto paneRect = [&](Pane pane) { return pane == LeftPane ? m_left : pane == MorePane ? m_more : pane == PlacesPane ? m_right : m_logoff; };
+    const int key = event->key();
+    if (key == Qt::Key_Escape) {
         close();
-    else
-        QWidget::keyPressEvent(event);
+        return;
+    }
+    if (key == Qt::Key_Down || key == Qt::Key_Up) {
+        if (all.isEmpty())
+            return;
+        if (current < 0) {
+            select(key == Qt::Key_Down ? all.first() : all.last());
+            return;
+        }
+        // The targets are in the panes' order, so the next pane is entered at its first item going
+        // down and at its last going up.
+        const int step = key == Qt::Key_Down ? 1 : -1;
+        select(all[(current + step + int(all.size())) % int(all.size())]);
+        return;
+    }
+    if (key == Qt::Key_Left || key == Qt::Key_Right) {
+        if (current < 0) {
+            select(all.first());
+            return;
+        }
+        const Target &here = all[current];
+        if (key == Qt::Key_Right && (here.item == MoreItem || (here.item >= 0 && m_items[here.item].children))) {
+            activate(here);
+            return;
+        }
+        if (here.pane == BottomPane) {
+            for (const Target &t : all)
+                if (t.item == (key == Qt::Key_Left ? LogOffItem : TurnOffItem))
+                    select(t);
+            return;
+        }
+        const int y = here.rect.center().y();
+        const int step = key == Qt::Key_Right ? 1 : -1;
+        for (int k = 1; k < 4; ++k) {
+            const Pane pane = Pane((here.pane + step * k + 4) % 4);
+            const QRect area = paneRect(pane);
+            if (y < area.top() || y > area.bottom())
+                continue;
+            int best = -1;
+            for (int i = 0; i < all.size(); ++i)
+                if (all[i].pane == pane && (best < 0 || qAbs(all[i].rect.center().y() - y) < qAbs(all[best].rect.center().y() - y)))
+                    best = i;
+            if (best >= 0) {
+                select(all[best]);
+                return;
+            }
+        }
+        return;
+    }
+    if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+        if (current >= 0)
+            activate(all[current]);
+        return;
+    }
+    const QString typed = event->text();
+    if (typed.size() == 1 && typed[0].isPrint()) {
+        QList<int> matches;
+        for (int i = 0; i < all.size(); ++i)
+            if (accessKey(all[i].text) == typed[0].toLower())
+                matches.append(i);
+        if (matches.size() == 1) {
+            activate(all[matches.first()]);
+        } else if (!matches.isEmpty()) {
+            const auto next = std::upper_bound(matches.cbegin(), matches.cend(), current);
+            select(all[next == matches.cend() ? matches.first() : *next]);
+        }
+        return;
+    }
+    QWidget::keyPressEvent(event);
 }
 
 void StartPanel::hideEvent(QHideEvent *)
 {
+    QToolTip::hideText();
     closeCascades(0);
     Q_EMIT closed();
 }

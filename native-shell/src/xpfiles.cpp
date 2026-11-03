@@ -70,6 +70,25 @@ QString string(const w4w::PeResources &pe, int id)
     return QString();
 }
 
+QString fileDescription(const w4w::PeResources &pe)
+{
+    // VS_VERSIONINFO's String: its key, then its value, each in UTF-16 and DWORD aligned
+    const QByteArray info = pe.find(QStringLiteral("16"), QStringLiteral("1"));
+    static const QByteArray key = QByteArray(reinterpret_cast<const char *>(u"FileDescription"), 2 * 16);
+    qsizetype at = info.indexOf(key);
+    if (at < 0)
+        return QString();
+    at = (at + key.size() + 3) & ~qsizetype(3);
+    QString out;
+    for (; at + 2 <= info.size(); at += 2) {
+        const char16_t c = qFromLittleEndian<quint16>(info.constData() + at);
+        if (!c)
+            break;
+        out += QChar(c);
+    }
+    return out.trimmed();
+}
+
 QString shellString(int id, const char *fallback)
 {
     static const auto resources = xpfiles::resources(find(QStringLiteral("shell32.dll")));

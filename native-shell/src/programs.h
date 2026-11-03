@@ -14,6 +14,7 @@ struct Program
 {
     QString id;           // its desktop entry's file name
     QString name, icon;
+    QString comment;      // its Comment, which XP's Start menu shows as the item's infotip
     QStringList command;
     QStringList categories;
 };
@@ -21,6 +22,8 @@ struct Program
 // Read each time: the Start menu has what is installed when it opens.
 QMap<QString, QList<Program>> folders();
 std::optional<Program> find(const QString &id);
+// The application whose windows have this WM_CLASS class; nullopt if no entry names it.
+std::optional<Program> forWindowClass(const QString &wmClass);
 // A desktop entry's file, shown or not; nullopt if it is none.
 std::optional<Program> fromFile(const QString &path);
 QIcon iconOf(const Program &program);

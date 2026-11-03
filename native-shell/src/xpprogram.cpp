@@ -37,7 +37,13 @@ public:
             out += QChar(c);
         return out;
     }
+    quint32 u32()
+    {
+        const quint32 low = u16();
+        return low | quint32(u16()) << 16;
+    }
     void skip(int bytes) { m_at += bytes; }
+    void align4() { m_at = (m_at + 3) & ~3; }
 
 private:
     const QByteArray &m_data;
@@ -115,6 +121,74 @@ QHash<int, QAction *> fillMenuBar(QMenuBar *bar, const w4w::PeResources &pe, int
         }
     };
     items(nullptr);
+    return actions;
+}
+
+QHash<int, QAction *> fillMenu(QMenu *menu, const w4w::PeResources &pe, int id)
+{
+    QHash<int, QAction *> actions;
+    const QByteArray data = pe.find(QStringLiteral("4"), QString::number(id));
+    Reader r(data);
+    const quint16 version = r.u16();
+    const quint16 offset = r.u16();
+    if (version == 0) {
+        // A MENU: its first popup's items, the way fillMenuBar reads them
+        r.skip(offset);
+        QMenuBar bar;
+        const QHash<int, QAction *> read = fillMenuBar(&bar, pe, id);
+        const QList<QAction *> popups = bar.actions();
+        if (popups.isEmpty() || !popups.first()->menu())
+            return actions;
+        for (QAction *action : popups.first()->menu()->actions()) {
+            if (action->isSeparator()) {
+                menu->addSeparator();
+                continue;
+            }
+            QAction *copy = menu->addAction(action->text());
+            copy->setCheckable(action->isCheckable());
+            copy->setChecked(action->isChecked());
+            copy->setEnabled(action->isEnabled());
+            actions.insert(read.key(action), copy);
+        }
+        return actions;
+    }
+    // MENUEX_TEMPLATE_HEADER: version 1, the offset of the items after the help ID
+    r.skip(offset);
+    // MENUEX_TEMPLATE_ITEM: type, state, ID, then flags (0x01 popup, 0x80 last), the words, DWORD aligned;
+    // a popup's help ID comes before its items.
+    const quint32 MFT_SEPARATOR = 0x800, MFS_GRAYED = 0x03, MFS_CHECKED = 0x08, MFS_DEFAULT = 0x1000;
+    std::function<void(QMenu *, int)> items = [&](QMenu *into, int depth) {
+        while (r.ok()) {
+            const quint32 type = r.u32(), state = r.u32(), command = r.u32();
+            const quint16 flags = r.u16();
+            const QString text = r.text();
+            r.align4();
+            if (flags & 0x01) {
+                r.u32();
+                // The template's first popup holds the shortcut menu's items.
+                QMenu *popup = depth == 0 ? into : into->addMenu(text);
+                items(popup, depth + 1);
+            } else if (into && depth > 0) {
+                if (type & MFT_SEPARATOR) {
+                    into->addSeparator();
+                } else {
+                    QAction *action = into->addAction(text);
+                    action->setCheckable(state & MFS_CHECKED);
+                    action->setChecked(state & MFS_CHECKED);
+                    action->setEnabled(!(state & MFS_GRAYED));
+                    if (state & MFS_DEFAULT) {
+                        QFont bold = action->font();
+                        bold.setBold(true);
+                        action->setFont(bold);
+                    }
+                    actions.insert(int(command), action);
+                }
+            }
+            if (flags & 0x80)
+                return;
+        }
+    };
+    items(menu, 0);
     return actions;
 }
 

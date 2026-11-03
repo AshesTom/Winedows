@@ -133,7 +133,9 @@ int main(int argc, char **argv)
         controlpanel::open(parser.value(QStringLiteral("applet")));
         return app.exec();
     }
+    // Each program its own WM_CLASS, as XP's taskbar tells programs apart by their file.
     if (parser.isSet(QStringLiteral("console"))) {
+        app.setApplicationName(QStringLiteral("cmd"));
         app.setQuitOnLastWindowClosed(true);
         Console console(parser.value(QStringLiteral("console")));
         console.show();
@@ -145,6 +147,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "explorer: %s not found. Run native-shell/extract.py on the XP ISO again.\n", notepad ? "notepad.exe" : "calc.exe");
             return 1;
         }
+        app.setApplicationName(QLatin1String(notepad ? "notepad" : "calc"));
         app.setQuitOnLastWindowClosed(true);
         if (notepad)
             (new Notepad(parser.positionalArguments().value(0)))->show();

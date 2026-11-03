@@ -43,6 +43,7 @@ add_executable(explorer
     src/securitycenter.cpp src/securitycenter.h src/securitywindow.cpp
     src/systemicons.cpp src/systemicons.h
     src/taskbar.cpp src/taskbar.h
+    src/arrange.cpp src/arrange.h
     src/tray.cpp src/tray.h
     src/windowlist.cpp src/windowlist.h
     src/x11.cpp src/x11.h

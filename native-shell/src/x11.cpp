@@ -112,6 +112,39 @@ void sendToManager(xcb_window_t window, const char *type, const QList<quint32> &
     xcb_flush(connection());
 }
 
+QRect frameGeometry(xcb_window_t window)
+{
+    xcb_generic_error_t *error = nullptr;
+    auto *geometry = xcb_get_geometry_reply(connection(), xcb_get_geometry(connection(), window), &error);
+    free(error);
+    if (!geometry)
+        return {};
+    error = nullptr;
+    auto *at = xcb_translate_coordinates_reply(connection(), xcb_translate_coordinates(connection(), window, root(), 0, 0), &error);
+    free(error);
+    QRect rect;
+    if (at)
+        rect = QRect(at->dst_x, at->dst_y, geometry->width, geometry->height);
+    free(at);
+    free(geometry);
+    // left, right, top, bottom
+    const QList<quint32> extents = property32(window, atom("_NET_FRAME_EXTENTS"));
+    if (!rect.isNull() && extents.size() == 4)
+        rect.adjust(-int(extents[0]), -int(extents[2]), int(extents[1]), int(extents[3]));
+    return rect;
+}
+
+void moveFrame(xcb_window_t window, const QRect &outer)
+{
+    const QList<quint32> extents = property32(window, atom("_NET_FRAME_EXTENTS"));
+    QRect client = outer;
+    if (extents.size() == 4)
+        client.adjust(int(extents[0]), int(extents[2]), -int(extents[1]), -int(extents[3]));
+    // Static gravity: X, Y are the client's own; from a pager (2), with X, Y, width and height.
+    const quint32 flags = XCB_GRAVITY_STATIC | (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (2 << 12);
+    sendToManager(window, "_NET_MOVERESIZE_WINDOW", {flags, quint32(client.x()), quint32(client.y()), quint32(qMax(1, client.width())), quint32(qMax(1, client.height()))});
+}
+
 quint32 idleMilliseconds()
 {
     auto *info = xcb_screensaver_query_info_reply(connection(), xcb_screensaver_query_info(connection(), root()), nullptr);
