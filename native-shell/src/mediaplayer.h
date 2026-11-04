@@ -100,6 +100,7 @@ private:
     void connectMenu(const QHash<int, QAction *> &actions);
     QWidget *fullWindow() const;
     void showFullScreenControls(bool shown);
+    void showFullScreenPlaylist(bool shown);
     QPixmap skinPicture(const wmpskin::Node &document, const QString &folder, QSize room);
     void changedAll(const QString &object, std::initializer_list<const char *> names);
     static QString timeString(double seconds);
@@ -117,6 +118,7 @@ private:
     void setAutoBarVisible(bool shown);
     void barHideCheck();
     QPointer<wmp::SkinView> m_fullScreenTop, m_fullScreenBottom;
+    QPointer<QWidget> m_fullScreenPlaylist;
     QTimer *m_fullScreenIdle = nullptr;
     QList<QPointer<wmp::SkinView>> m_skinViews;   // its other views (theme.openView)
     QMediaPlayer *m_player = nullptr;

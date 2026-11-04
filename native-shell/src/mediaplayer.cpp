@@ -938,6 +938,8 @@ bool MediaPlayer::set(const QString &object, const QString &name, const QVariant
             QTimer::singleShot(0, this, [this] { setFullScreen(true); });
         } else if (name == QLatin1String("pinfullscreencontrols") && m_fullScreen) {
             showFullScreenControls(true);
+        } else if (name == QLatin1String("showfullscreenplaylist") && m_fullScreen) {
+            showFullScreenPlaylist(value.toBool());
         }
         if (name == QLatin1String("backhueshift") || name == QLatin1String("backsaturation") || name == QLatin1String("buttonhueshift")
             || name == QLatin1String("buttonsaturation") || name.startsWith(QLatin1String("show")) || name.endsWith(QLatin1String("width"))
@@ -1467,6 +1469,9 @@ void MediaPlayer::setFullScreen(bool on)
     if (on == !m_fullScreen.isNull() || !m_window)
         return;
     if (!on) {
+        if (m_fullScreenPlaylist)
+            m_fullScreenPlaylist->deleteLater();
+        m_fullScreenPlaylist.clear();
         m_fullScreen->deleteLater();
         m_fullScreen.clear();
         fullWindow()->show();
@@ -1528,6 +1533,8 @@ void MediaPlayer::setFullScreen(bool on)
     window->showFullScreen();
     fullWindow()->hide();
     showFullScreenControls(true);
+    if (m_mediacenter.value(QStringLiteral("showfullscreenplaylist")).toBool())
+        showFullScreenPlaylist(true);
     changedAll(QStringLiteral("player"), {"fullscreen"});
 }
 
@@ -1541,6 +1548,48 @@ void MediaPlayer::showFullScreenControls(bool shown)
     m_fullScreen->setCursor(shown ? Qt::ArrowCursor : Qt::BlankCursor);
     if (shown && m_fullScreenIdle)
         m_fullScreenIdle->start();
+}
+
+// wmp.dll draws the full screen playlist itself, not from a skin: a black pane down the right
+// side, its items in white, the playing one green; a double-click plays one.
+void MediaPlayer::showFullScreenPlaylist(bool shown)
+{
+    if (!m_fullScreen)
+        return;
+    if (!shown) {
+        if (m_fullScreenPlaylist) {
+            m_fullScreenPlaylist->hide();
+            m_fullScreenPlaylist->deleteLater();
+            m_fullScreenPlaylist.clear();
+        }
+        return;
+    }
+    if (m_fullScreenPlaylist)
+        return;
+    const QRect screen = m_fullScreen->geometry();
+    auto *panel = new QWidget(m_fullScreen);
+    panel->setObjectName(QStringLiteral("fullScreenPlaylist"));
+    panel->setStyleSheet(QStringLiteral("QWidget#fullScreenPlaylist{background:#101010;} QListWidget{background:#101010;color:white;"
+                                        "border:none;font-family:Tahoma;font-size:8pt;outline:0;}"
+                                        "QListWidget::item:selected{background:#3F5A86;}"));
+    panel->setGeometry(screen.width() - 300, 0, 300, screen.height() - 78);
+    auto *layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto *list = new QListWidget(panel);
+    for (int i = 0; i < m_items.size(); ++i) {
+        const Item &item = m_items.at(i);
+        auto *entry = new QListWidgetItem(QStringLiteral("%1    %2").arg(item.title, timeString(item.duration / 1000.0)), list);
+        entry->setForeground(i == m_current ? QColor(QStringLiteral("#8EEB6E")) : QColor(Qt::white));
+    }
+    QObject::connect(list, &QListWidget::itemDoubleClicked, this, [this, list](QListWidgetItem *entry) {
+        const int row = list->row(entry);
+        if (row >= 0 && row < m_items.size())
+            playIndex(row);
+    });
+    layout->addWidget(list);
+    panel->show();
+    panel->raise();
+    m_fullScreenPlaylist = panel;
 }
 
 // ---- skin mode ----
