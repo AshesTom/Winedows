@@ -139,7 +139,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
 | Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog now shows Current Items' icons (Past Items have none), and the open chevron closes on a click elsewhere on the bar (but not in another application) |
 | Classic Start menu | Done (section 14) |
-| Both Customize dialogs (dialogs 9, 1036, 1135) | Missing (greyed) |
+| Both Customize dialogs (dialogs 9, 1036, 1135) | Partial: the classic Start menu's dialog 9 opens from Taskbar and Start Menu Properties and its tree's Display Favorites, Display Log Off, Display Run and Show Small Icons in Start menu work; Add/Remove/Advanced/Sort/Clear are greyed, and the Start panel's dialogs 1135 and 1036 are still greyed |
 | The "?" button and context help | Missing |
 
 ---
@@ -411,7 +411,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Start menu | Newly installed programs highlighted in All Programs (8229) | String 8229 |
 | Start menu | Favorites (8235), Windows Security (7022), Undock Computer (7012, 7014), Disconnect (7017) | Strings |
 | Start menu | "Some items cannot be shown" when the panel is too small (8231, 8232); the panel's size values 8256–8260 | Strings |
-| Start menu | The Customize dialogs (1311; dialogs 9, 1036, 1135) | Dialogs |
+| Start menu | The Customize dialogs (1311; dialogs 9, 1036, 1135) | Dialogs; section 2 and 14: dialog 9's four options are done, 1036/1135 remain |
 | Start menu | Help and Support (`helpctr.exe -FromStartHelp`, 732) | String 732 |
 | Session | Safe mode notice (538, 539); "could not load or run" for the Run key's programs (515) | Strings |
 | Menus | Drop shadows under menus, tooltips and the Start menu: win32k's xxxAddShadow (`sub_bf854347`) puts a layered SysShadow window (WS_EX_LAYERED, TRANSPARENT, TOOLWINDOW; TOPMOST with a topmost owner) behind a CS_DROPSHADOW window when SPI_GETDROPSHADOW is on; its picture (`sub_bf8544b3`) is the window's size plus 5 each way | `win32k.sys`; the profile measured on XP (wine/patches/0033-winex11-external-drop-shadow.patch: 0.442, 0.328, 0.168, 0.055, 0.012 across, fading 0.113 to 1.0 along, corners 0.882 to 0.018) | Done (`menushadow.cpp`: an override-redirect shadow window masked to the right and bottom strips, the screen beneath it darkened; `Effects/DropShadow` and `WIN4WINE_NO_MENU_SHADOW` turn it off; the Start panel has none). `sub_bf850d1b` itself is not decompiled; the profile is the measured one |
@@ -434,5 +434,5 @@ Binary: `explorer.exe` (menu 204, banners 158–167), `shell32.dll` (icons), mea
 | Keys: the arrows, Right opening a cascade, access keys underlined when the keys opened the menu | StartPanel's routing, one column | Done |
 | The Start Menu page: Start menu or Classic Start menu (controls 1132, 1133), preview 170 or 171 | dialog 205; `sub_1038a95` | Done; saved as `StartMenu/Classic` |
 | The Start Menu folder's own items | XP: Set Program Access and Defaults, Windows Catalog, Windows Update | Partial: Set Program Access and Defaults only |
-| Customize Classic Start Menu (dialog 1135) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | dialog 1135 | Missing (greyed) |
+| Customize Classic Start Menu (dialog 9) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | dialog 9; `trayprop.cpp` | Partial: dialog 9 opens and its Display Favorites, Display Log Off, Display Run and Show Small Icons options change the classic menu; Add/Remove/Advanced/Sort/Clear are greyed and the other Advanced options are not wired |
 | The desktop's icons in classic mode (XP keeps HideDesktopIcons per mode: ClassicStartMenu shows them) | XP in Wine (icons shown) | Done: `desktop/hideIcons` for the Start panel and `desktop/hideIconsClassic` for the classic menu, chosen by `StartMenu/Classic` |

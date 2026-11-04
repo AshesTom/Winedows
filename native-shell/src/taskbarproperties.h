@@ -34,6 +34,7 @@ struct TaskbarSettings
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
     bool quickLaunchLargeIcons = false;   // its View menu's Large Icons (24-pixel pictures)
     bool classicStartMenu = false;
+    bool classicFavorites = false, classicLogOff = true, classicRun = true, classicSmallIcons = false;
     // explorer.exe's StartButtonBalloonTip: 0 until the Start button is first used, 2 once it has been
     int startButtonBalloonTip = 0;   // the Start menu page's Classic Start menu (SHELLSTATE's fStartPanelOn off)
     bool hideInactive = true;   // Hide inactive icons (EnableAutoTray), on as XP sets it up    // Keep the taskbar on top of other windows (ABS_ALWAYSONTOP)   // Lock the Taskbar (explorer.exe's TaskbarSizeMove, inverted)   // the Quick Launch band in the taskbar's rebar

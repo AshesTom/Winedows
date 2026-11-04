@@ -13,6 +13,7 @@
 #include <QComboBox>
 
 #include "filebrowser.h"
+#include "fileicons.h"
 
 #include "programs.h"
 #include "taskbarproperties.h"
@@ -109,7 +110,7 @@ const int FLAT_ROW = 20, FLAT_ICON_X = 3, FLAT_TEXT_X = 27, FLAT_EXTRA = 50, FLA
 const int BITMAP_BANNER_PROFESSIONAL = 167;
 // Menu 204's commands
 enum { MENU_START = 204, CMD_PROGRAMS = 504, CMD_DOCUMENTS = 501, CMD_SETTINGS = 508, CMD_SEARCH = 520, CMD_HELP = 503,
-       CMD_RUN = 401, CMD_LOG_OFF = 402, CMD_CONTROL_PANEL = 505, CMD_NETWORK = 557, CMD_PRINTERS = 510, CMD_TASKBAR = 413 };
+       CMD_RUN = 401, CMD_LOG_OFF = 402, CMD_FAVORITES = 507, CMD_CONTROL_PANEL = 505, CMD_NETWORK = 557, CMD_PRINTERS = 510, CMD_TASKBAR = 413 };
 const int NCPA_ICON = 1001, SHELL_FIND_FILES = 23232, ICON_SETTINGS = 22, ICON_SMALL_CONTROL_PANEL = 137, ICON_NETWORK = 18, ICON_TASKBAR = 40;
 
 // XP's menu arrow, 4 x 7, its point at the right
@@ -645,7 +646,9 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
     if (explorer())
         m_banner = xpfiles::bitmap(*explorer(), BITMAP_BANNER_PROFESSIONAL);
 
-    const auto big = [theme](int id) { return QIcon(QPixmap::fromImage(theme->shellIcon(id, theme->scaled(CLASSIC_MENU_SMALL_ICON)))); };
+    const TaskbarSettings classicSettings = TaskbarSettings::load();
+    const int classicIcon = classicSettings.classicSmallIcons ? 16 : CLASSIC_MENU_SMALL_ICON;
+    const auto big = [theme, classicIcon](int id) { return QIcon(QPixmap::fromImage(theme->shellIcon(id, theme->scaled(classicIcon)))); };
     const auto small = [theme](int id) { return QIcon(QPixmap::fromImage(theme->shellIcon(id, theme->scaled(CASCADE_ICON)))); };
     struct Row
     {
@@ -662,6 +665,27 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
     top.append({tr("Set Program Access and Defaults"), spad, [] { applets::open(QStringLiteral("programs")); }, {}});
     QList<Row> middle;
     middle.append({word(CMD_PROGRAMS, "&Programs"), big(ICON_PROGRAMS), {}, [this] { return allPrograms(); }});
+    if (classicSettings.classicFavorites)
+        middle.append({word(CMD_FAVORITES, "F&avorites"), big(ICON_RECENT), {}, [] {
+            QList<MenuEntry> out;
+            const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Favorites");
+            QDir().mkpath(folder);
+            const QFileInfoList entries = QDir(folder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+            for (const QFileInfo &entry : entries) {
+                const QString path = entry.filePath();
+                if (entry.suffix() == QLatin1String("desktop")) {
+                    if (const auto program = programs::fromFile(path))
+                        out.append({program->name, programs::iconOf(*program), [program] { programs::launch(*program); }, {}});
+                } else if (entry.isDir()) {
+                    out.append({entry.fileName(), fileicons::forFile(entry), [path] { FileBrowser::open(path); }, {}});
+                } else {
+                    out.append({entry.fileName(), fileicons::forFile(entry), [path] { programs::open(path); }, {}});
+                }
+            }
+            if (out.isEmpty())
+                out.append({QObject::tr("(Empty)"), QIcon(), {}, {}, false, false});
+            return out;
+        }});
     middle.append({word(CMD_DOCUMENTS, "&Documents"), big(ICON_RECENT), {}, [this] { return classicDocuments(); }});
     const auto controlPanel = m_controlPanel;
     middle.append({word(CMD_SETTINGS, "&Settings"), big(ICON_SETTINGS), {}, [=] {
@@ -688,10 +712,12 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
         return QList<MenuEntry>{{shellString(SHELL_FIND_FILES, "For &Files or Folders..."), small(ICON_SEARCH), [] { FileBrowser::open(places::Search); }, {}}};
     }});
     middle.append({word(CMD_HELP, "&Help and Support"), big(ICON_HELP), {}, {}});
-    middle.append({word(CMD_RUN, "&Run..."), big(ICON_RUN), [] { showRunDialog(); }, {}});
+    if (classicSettings.classicRun)
+        middle.append({word(CMD_RUN, "&Run..."), big(ICON_RUN), [] { showRunDialog(); }, {}});
     // Log Off %s... with the user's name; Shut Down... becomes Turn Off Computer... (string 731)
     QList<Row> bottom;
-    bottom.append({word(CMD_LOG_OFF, "&Log Off %s...").replace(QLatin1String("%s"), m_userName), big(ICON_LOG_OFF), m_logOff, {}});
+    if (classicSettings.classicLogOff)
+        bottom.append({word(CMD_LOG_OFF, "&Log Off %s...").replace(QLatin1String("%s"), m_userName), big(ICON_LOG_OFF), m_logOff, {}});
     bottom.append({explorerString(EXPLORER_TURN_OFF, "T&urn Off Computer..."), big(ICON_TURN_OFF), m_turnOff, {}});
 
     const QFontMetrics metrics(theme->systemFont(QStringLiteral("menufont")));

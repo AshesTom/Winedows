@@ -92,6 +92,10 @@ TaskbarSettings TaskbarSettings::load()
     loaded.quickLaunchLargeIcons = settings.value(QStringLiteral("Taskbar/QuickLaunchLargeIcons"), false).toBool();
     loaded.hideInactive = settings.value(QStringLiteral("TrayNotify/EnableAutoTray"), true).toBool();
     loaded.classicStartMenu = settings.value(QStringLiteral("StartMenu/Classic"), false).toBool();
+    loaded.classicFavorites = settings.value(QStringLiteral("StartMenu/ClassicFavorites"), false).toBool();
+    loaded.classicLogOff = settings.value(QStringLiteral("StartMenu/ClassicLogOff"), true).toBool();
+    loaded.classicRun = settings.value(QStringLiteral("StartMenu/ClassicRun"), true).toBool();
+    loaded.classicSmallIcons = settings.value(QStringLiteral("StartMenu/ClassicSmallIcons"), false).toBool();
     loaded.startButtonBalloonTip = settings.value(QStringLiteral("StartMenu/StartButtonBalloonTip"), 0).toInt();
     return loaded;
 }
@@ -111,6 +115,10 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchLargeIcons"), quickLaunchLargeIcons);
     settings.setValue(QStringLiteral("TrayNotify/EnableAutoTray"), hideInactive);
     settings.setValue(QStringLiteral("StartMenu/Classic"), classicStartMenu);
+    settings.setValue(QStringLiteral("StartMenu/ClassicFavorites"), classicFavorites);
+    settings.setValue(QStringLiteral("StartMenu/ClassicLogOff"), classicLogOff);
+    settings.setValue(QStringLiteral("StartMenu/ClassicRun"), classicRun);
+    settings.setValue(QStringLiteral("StartMenu/ClassicSmallIcons"), classicSmallIcons);
     settings.setValue(QStringLiteral("StartMenu/StartButtonBalloonTip"), startButtonBalloonTip);
 }
 
@@ -193,6 +201,63 @@ QWidget *TaskbarProperties::taskbarPage()
     return page;
 }
 
+// explorer.exe's Customize Classic Start Menu (dialog 1135): here its advanced tree's four options
+// change the classic menu; Add/Remove/Advanced/Sort/Clear are greyed.
+static void showClassicCustomize(QWidget *parent)
+{
+    if (!explorer())
+        return;
+    QDialog dialog(parent);
+    const xpdialog::Page page = xpdialog::build(*explorer(), 9, &dialog);
+    dialog.setWindowTitle(page.caption);
+    QWidget *place = page.controls.value(1123);
+    auto *tree = new QTreeWidget(&dialog);
+    if (place) {
+        tree->setGeometry(place->geometry());
+        place->hide();
+    }
+    tree->setHeaderHidden(true);
+    tree->setRootIsDecorated(false);
+    const TaskbarSettings settings = TaskbarSettings::load();
+    enum Field { Favorites, LogOff, Run, SmallIcons };
+    const QList<QPair<QString, QPair<Field, bool>>> options = {
+        {QObject::tr("Display Favorites"), {Favorites, settings.classicFavorites}},
+        {QObject::tr("Display Log Off"), {LogOff, settings.classicLogOff}},
+        {QObject::tr("Display Run"), {Run, settings.classicRun}},
+        {QObject::tr("Show Small Icons in Start menu"), {SmallIcons, settings.classicSmallIcons}},
+    };
+    for (const auto &[text, option] : options) {
+        auto *item = new QTreeWidgetItem(tree, {text});
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(0, option.second ? Qt::Checked : Qt::Unchecked);
+        item->setData(0, Qt::UserRole, int(option.first));
+    }
+    // Add/Remove/Advanced/Sort/Clear change the Start Menu folder; their files are not read here.
+    for (int id : {1126, 1127, 1128, 1124, 1125})
+        if (QWidget *control = page.controls.value(id))
+            control->setEnabled(false);
+    const auto save = [&] {
+        TaskbarSettings changed = TaskbarSettings::load();
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            const QTreeWidgetItem *item = tree->topLevelItem(i);
+            const bool on = item->checkState(0) == Qt::Checked;
+            switch (Field(item->data(0, Qt::UserRole).toInt())) {
+            case Favorites: changed.classicFavorites = on; break;
+            case LogOff: changed.classicLogOff = on; break;
+            case Run: changed.classicRun = on; break;
+            case SmallIcons: changed.classicSmallIcons = on; break;
+            }
+        }
+        changed.save();
+        emit TaskbarSettingsNotifier::instance()->changed();
+    };
+    if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(1)))
+        QObject::connect(ok, &QPushButton::clicked, &dialog, [&] { save(); dialog.accept(); });
+    if (auto *cancel = qobject_cast<QPushButton *>(page.controls.value(2)))
+        QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    dialog.exec();
+}
+
 QWidget *TaskbarProperties::startMenuPage()
 {
     auto *page = new QWidget;
@@ -212,7 +277,9 @@ QWidget *TaskbarProperties::startMenuPage()
     }
     for (int id : {ID_CUSTOMIZE, ID_CUSTOMIZE_CLASSIC})
         if (QWidget *control = dialog.controls.value(id))
-            control->setEnabled(false);
+            control->setEnabled(id == ID_CUSTOMIZE_CLASSIC);
+    if (auto *customizeClassic = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_CUSTOMIZE_CLASSIC)))
+        connect(customizeClassic, &QAbstractButton::clicked, this, [this] { showClassicCustomize(this); });
     const auto follow = [this, preview] {
         if (preview)
             preview->setPixmap(picture(BITMAP_START_MENU + (m_classicRadio && m_classicRadio->isChecked() ? 1 : 0)));
