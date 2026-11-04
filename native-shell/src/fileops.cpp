@@ -296,7 +296,10 @@ void remove(const QStringList &paths, bool permanent, QWidget *parent)
     const QString title = paths.size() == 1 ? QObject::tr("Confirm File Delete") : QObject::tr("Confirm Multiple File Delete");
     const QString question = permanent ? QObject::tr("Are you sure you want to delete %1?").arg(quotedList(paths))
                                        : QObject::tr("Are you sure you want to send %1 to the Recycle Bin?").arg(quotedList(paths));
-    if (QMessageBox::question(parent, title, question) != QMessageBox::Yes)
+    // Recycle Bin Properties' "Display delete confirmation dialog"
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("fileops"));
+    if (settings.value(QStringLiteral("RecycleBin/ConfirmDelete"), true).toBool()
+        && QMessageBox::question(parent, title, question) != QMessageBox::Yes)
         return;
     QStringList failed;
     for (const QString &path : paths) {

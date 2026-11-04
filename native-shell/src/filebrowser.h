@@ -118,6 +118,7 @@ private:
     void renameSelected();
     void deleteSelected(bool permanent);
     void showProperties();
+    void recycleBinProperties();
     void moveOrCopyTo(bool move);
     void startSearch(const SearchQuery &query);
     void continueSearch();

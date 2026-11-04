@@ -180,7 +180,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial: Folder, Shortcut (a link to a chosen file), Text Document, Bitmap Image (1 x 1 BMP), WordPad Document (empty RTF), Wave Sound (44-byte header), Briefcase (a folder) and Compressed Folder (an empty ZIP) are there; the registry's ShellNew keys are not read and a shortcut is still a link |
 | Auto Arrange in folder windows | Missing (greyed; implemented on the desktop) |
 | My Computer: Manage | Missing |
-| Recycle Bin Properties | Missing (greyed) |
+| Recycle Bin Properties | Partial: File > Properties or the background menu opens a sheet with "Display delete confirmation dialog" (`fileops::remove` reads it); the drives' quota pages are not there |
 | Real `.lnk` shortcuts | Partial: `fileops::shortcutTarget` reads the Shell Link header, LinkInfo local base path/common suffix or relative path, and opening/resolving the icon uses it; Create Shortcut still makes a link |
 
 ---

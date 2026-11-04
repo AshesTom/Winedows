@@ -37,6 +37,7 @@
 #include "xpdialog.h"
 #include <QDialogButtonBox>
 #include <QBuffer>
+#include <QCheckBox>
 #include <QDir>
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -2613,7 +2614,7 @@ void FileBrowser::updateActions()
     m_moveAction->setEnabled(some && files);
     m_copyToAction->setEnabled(some && files);
     m_renameAction->setEnabled(selected.size() == 1 && files);
-    m_propertiesAction->setEnabled(some || files);
+    m_propertiesAction->setEnabled(some || files || m_location == places::RecycleBin);
     m_pasteAction->setEnabled(files && fileops::clipboardHasFiles());
     m_newFolderAction->setEnabled(files);
     m_newTextAction->setEnabled(files);
@@ -2929,6 +2930,8 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
     } else {
         menu->addMenu(m_viewsMenu)->setText(tr("&View"));
         menu->addAction(tr("R&efresh"), this, [this] { navigate(m_location, false); });
+        if (m_location == places::RecycleBin)
+            menu->addAction(tr("P&roperties"), this, &FileBrowser::recycleBinProperties);
         if (m_location == places::Computer) {
             menu->addSeparator();
             menu->addAction(tr("P&roperties"), this, [] { controlpanel::open(QStringLiteral("system")); });
@@ -3266,10 +3269,33 @@ void FileBrowser::deleteSelected(bool permanent)
 void FileBrowser::showProperties()
 {
     const QStringList selected = selectedPaths();
-    if (!selected.isEmpty())
+    if (m_location == places::RecycleBin && selected.isEmpty()) {
+        recycleBinProperties();
+    } else if (!selected.isEmpty())
         showItemProperties(selected, this);
     else if (!currentFolder().isEmpty())
         showItemProperties({currentFolder()}, this);
+}
+
+// The Recycle Bin's own property sheet: its one setting that this port has, the delete confirmation.
+void FileBrowser::recycleBinProperties()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Recycle Bin Properties"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *confirm = new QCheckBox(tr("Display delete confirmation dialog"), &dialog);
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("fileops"));
+    confirm->setChecked(settings.value(QStringLiteral("RecycleBin/ConfirmDelete"), true).toBool());
+    layout->addWidget(confirm);
+    layout->addWidget(new QLabel(tr("The Recycle Bin holds deleted files until it is emptied."), &dialog));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        settings.setValue(QStringLiteral("RecycleBin/ConfirmDelete"), confirm->isChecked());
+        dialog.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.exec();
 }
 
 void FileBrowser::moveOrCopyTo(bool move)
