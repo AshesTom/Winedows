@@ -181,7 +181,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Auto Arrange in folder windows | Missing (greyed; implemented on the desktop) |
 | My Computer: Manage | Missing |
 | Recycle Bin Properties | Missing (greyed) |
-| Real `.lnk` shortcuts | Missing (symbolic links) |
+| Real `.lnk` shortcuts | Partial: `fileops::shortcutTarget` reads the Shell Link header, LinkInfo local base path/common suffix or relative path, and opening/resolving the icon uses it; Create Shortcut still makes a link |
 
 ---
 

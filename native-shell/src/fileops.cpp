@@ -8,6 +8,8 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDir>
+#include <QFile>
+#include <QtEndian>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
@@ -176,6 +178,61 @@ QString quotedList(const QStringList &paths)
 }
 
 } // namespace
+
+QString shortcutTarget(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return QString();
+    const QByteArray data = file.readAll();
+    if (data.size() < 76 || qFromLittleEndian<quint32>(data.constData()) != 0x4C)
+        return QString();
+    const auto u16 = [&](qsizetype at) { return at + 2 <= data.size() ? qFromLittleEndian<quint16>(data.constData() + at) : quint16(0); };
+    const auto u32 = [&](qsizetype at) { return at + 4 <= data.size() ? qFromLittleEndian<quint32>(data.constData() + at) : quint32(0); };
+    const quint32 flags = u32(20);
+    qsizetype at = 76;
+    if (flags & 0x1)   // LinkTargetIDList
+        at += 2 + qsizetype(u16(at));
+    QString target;
+    if ((flags & 0x2) && at + 28 <= data.size()) {   // LinkInfo
+        const qsizetype start = at, size = qsizetype(u32(at));
+        const quint32 infoFlags = u32(at + 8);
+        const qsizetype baseOffset = qsizetype(u32(at + 16)), suffixOffset = qsizetype(u32(at + 24));
+        if ((infoFlags & 1) && baseOffset > 0) {
+            const auto ansi = [&](qsizetype offset) {
+                if (offset <= 0 || start + offset >= data.size())
+                    return QString();
+                qsizetype end = data.indexOf('\0', start + offset);
+                if (end < 0)
+                    end = data.size();
+                return QString::fromLocal8Bit(data.mid(start + offset, end - start - offset));
+            };
+            target = ansi(baseOffset);
+            if (suffixOffset > 0)
+                target += ansi(suffixOffset);
+        }
+        at = start + (size > 0 ? size : 0);
+    }
+    // StringData: NAME_STRING (0x4), RELATIVE_PATH (0x8)
+    const auto stringData = [&] {
+        if (at + 2 > data.size())
+            return QString();
+        const qsizetype count = qsizetype(u16(at));
+        at += 2;
+        if (count == 0 || at + count * 2 > data.size())
+            return QString();
+        const QString value = QString::fromUtf16(reinterpret_cast<const char16_t *>(data.constData() + at), count);
+        at += count * 2;
+        return value;
+    };
+    if (flags & 0x4)
+        stringData();
+    if ((flags & 0x8) && target.isEmpty())
+        target = stringData();
+    if (!target.isEmpty() && QDir::isRelativePath(target))
+        target = QFileInfo(path).absoluteDir().filePath(target);
+    return target;
+}
 
 QString freeName(const QString &folder, const QString &base)
 {

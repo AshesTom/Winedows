@@ -33,4 +33,8 @@ void restoreFromTrash(const QStringList &paths, QWidget *parent);
 // A name that does not exist in FOLDER yet, from BASE: "New Folder", "New Folder (2)"
 QString freeName(const QString &folder, const QString &base);
 
+// The target of a Windows .lnk (Shell Link): its local base path plus common suffix, or its
+// relative path; empty if PATH is not a readable shortcut.
+QString shortcutTarget(const QString &path);
+
 } // namespace fileops

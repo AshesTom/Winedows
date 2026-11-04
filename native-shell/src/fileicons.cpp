@@ -2,6 +2,7 @@
 #include "fileicons.h"
 
 #include "programs.h"
+#include "fileops.h"
 #include "theme.h"
 #include "xpfiles.h"
 
@@ -116,6 +117,11 @@ QIcon forFile(const QFileInfo &file)
         if (file.isRoot())
             return shell(Drive);
         return shell(placeIcon(file.absoluteFilePath()));
+    }
+    if (file.suffix().compare(QLatin1String("lnk"), Qt::CaseInsensitive) == 0) {
+        const QString target = fileops::shortcutTarget(file.absoluteFilePath());
+        if (!target.isEmpty() && QFileInfo::exists(target))
+            return forFile(QFileInfo(target));
     }
     if (file.suffix() == QLatin1String("desktop")) {
         if (const auto program = programs::fromFile(file.absoluteFilePath())) {

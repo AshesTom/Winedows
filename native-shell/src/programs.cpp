@@ -2,6 +2,7 @@
 #include "programs.h"
 
 #include "filebrowser.h"
+#include "fileops.h"
 #include "session.h"
 
 #include <QCoreApplication>
@@ -430,15 +431,22 @@ void openMediaPlayer(const QStringList &files)
 
 void open(const QString &target)
 {
+    // A Windows shortcut opens what it points at.
+    QString resolved = target;
+    if (QFileInfo(target).suffix().compare(QLatin1String("lnk"), Qt::CaseInsensitive) == 0) {
+        const QString shortcut = fileops::shortcutTarget(target);
+        if (!shortcut.isEmpty())
+            resolved = shortcut;
+    }
     // Folders and XP's own places have their windows here; the rest, their programs.
     if (target == QLatin1String("file:///"))
         FileBrowser::open(places::Computer);
     else if (target == QLatin1String("trash:///"))
         FileBrowser::open(places::RecycleBin);
-    else if (QFileInfo(target).isDir())
-        FileBrowser::open(target);
+    else if (QFileInfo(resolved).isDir())
+        FileBrowser::open(resolved);
     else
-        QProcess::startDetached(QStringLiteral("xdg-open"), {target}, QDir::homePath());
+        QProcess::startDetached(QStringLiteral("xdg-open"), {resolved}, QDir::homePath());
 }
 
 } // namespace programs
