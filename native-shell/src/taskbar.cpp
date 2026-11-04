@@ -612,6 +612,8 @@ QRect Taskbar::shownRect() const
 {
     const QRect monitor = QGuiApplication::primaryScreen()->geometry();
     const int height = baseHeight() + sizingHeight();
+    if (m_settings.position == 1)
+        return QRect(monitor.x(), monitor.y(), monitor.width(), height);
     return QRect(monitor.x(), monitor.bottom() + 1 - height, monitor.width(), height);
 }
 
@@ -637,7 +639,10 @@ QRect Taskbar::hiddenRect() const
     const QRect monitor = QGuiApplication::primaryScreen()->geometry();
     const int frame = theme()->scaled(4);   // SM_CYFRAME on XP
     QRect rect = shownRect();
-    rect.moveTop(monitor.bottom() + 1 - frame / 2);
+    if (m_settings.position == 1)
+        rect.moveTop(monitor.top() - rect.height() + frame / 2);
+    else
+        rect.moveTop(monitor.bottom() + 1 - frame / 2);
     return rect;
 }
 
@@ -707,11 +712,18 @@ void Taskbar::placeOnScreen()
         m_autoHideTimer.start();
     // The screen's bottom edge may be another monitor's: struts count from the root's. An
     // auto-hidden bar keeps no room: windows have the whole screen, as XP's work area.
-    const int bottom = m_settings.autoHide ? 0 : screen->virtualGeometry().bottom() - monitor.bottom() + height;
     const quint32 start = monitor.left(), end = monitor.right();
-    x11::setProperty32(winId(), "_NET_WM_STRUT", XCB_ATOM_CARDINAL, {0, 0, 0, quint32(bottom)});
-    x11::setProperty32(winId(), "_NET_WM_STRUT_PARTIAL", XCB_ATOM_CARDINAL,
-                       {0, 0, 0, quint32(bottom), 0, 0, 0, 0, 0, 0, start, end});
+    if (m_settings.position == 1) {
+        const int top = m_settings.autoHide ? 0 : monitor.top() - screen->virtualGeometry().top() + height;
+        x11::setProperty32(winId(), "_NET_WM_STRUT", XCB_ATOM_CARDINAL, {0, 0, quint32(top), 0});
+        x11::setProperty32(winId(), "_NET_WM_STRUT_PARTIAL", XCB_ATOM_CARDINAL,
+                           {0, 0, quint32(top), 0, 0, 0, 0, 0, start, end, 0, 0});
+    } else {
+        const int bottom = m_settings.autoHide ? 0 : screen->virtualGeometry().bottom() - monitor.bottom() + height;
+        x11::setProperty32(winId(), "_NET_WM_STRUT", XCB_ATOM_CARDINAL, {0, 0, 0, quint32(bottom)});
+        x11::setProperty32(winId(), "_NET_WM_STRUT_PARTIAL", XCB_ATOM_CARDINAL,
+                           {0, 0, 0, quint32(bottom), 0, 0, 0, 0, 0, 0, start, end});
+    }
     relayout();
 }
 
@@ -1514,6 +1526,11 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
         update();
     }
     m_activeAtPress = m_windows->activeAtPress();
+    // The sizing bar moves the unlocked bar between the bottom and top edges.
+    if (event->button() == Qt::LeftButton && !m_settings.locked && event->position().y() < m_top) {
+        m_movingBar = true;
+        return;
+    }
     if (event->button() == Qt::LeftButton && hit.kind == Hit::Start) {
         // The press that closes the open menu must not open it again.
         if (!m_startClosed.isValid() || m_startClosed.elapsed() > 200)
@@ -1545,6 +1562,19 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     m_pressed = Hit();
     m_scrollRepeat.stop();
     update();
+    if (m_movingBar) {
+        m_movingBar = false;
+        const QRect monitor = QGuiApplication::primaryScreen()->geometry();
+        const int position = event->globalPosition().toPoint().y() < monitor.center().y() ? 1 : 0;
+        if (position != m_settings.position) {
+            TaskbarSettings settings = TaskbarSettings::load();
+            settings.position = position;
+            settings.save();
+            m_settings.position = position;
+            placeOnScreen();
+        }
+        return;
+    }
     if (hit.kind == Hit::Desktop && hit.index < m_desktopItems.size()) {
         if (event->button() == Qt::LeftButton && pressed == hit)
             runDesktopItem(hit.index);
@@ -1665,7 +1695,7 @@ void Taskbar::showTaskMenu(int index, QPoint at)
     QFont bold = close->font();
     bold.setBold(true);
     close->setFont(bold);
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    menu->popup(m_settings.position == 1 ? at : at - QPoint(0, menu->sizeHint().height()));
 }
 
 void Taskbar::showGroupList(int index)
@@ -1732,7 +1762,7 @@ void Taskbar::showGroupMenu(int index, QPoint at)
             break;
         }
     });
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    menu->popup(m_settings.position == 1 ? at : at - QPoint(0, menu->sizeHint().height()));
 }
 
 void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
@@ -1881,7 +1911,7 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
             break;
         }
     });
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    menu->popup(m_settings.position == 1 ? at : at - QPoint(0, menu->sizeHint().height()));
 }
 
 void Taskbar::showStartMenu(bool keyboard)
@@ -1914,6 +1944,8 @@ void Taskbar::showStartMenu(bool keyboard)
         update();
     });
     m_startPanel = panel;
+    if (m_settings.position == 1)
+        panel->move(panel->x(), geometry().bottom() + 1);
     panel->setKeyboardCues(keyboard);
     panel->show();
     update();
@@ -2253,7 +2285,7 @@ void Taskbar::showQuickItemMenu(int index, QPoint at)
             if (action->menu())
                 action->setEnabled(false);   // Send To is the folder windows'
     }
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    menu->popup(m_settings.position == 1 ? at : at - QPoint(0, menu->sizeHint().height()));
 }
 
 void Taskbar::dragEnterEvent(QDragEnterEvent *event)

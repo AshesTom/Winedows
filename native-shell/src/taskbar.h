@@ -186,6 +186,7 @@ private:
     QString chevronTip() const;
     static QString trayName(const TrayIcon &icon);
     int m_top = 0;   // the sizing bar's rows above the bar, unlocked
+    bool m_movingBar = false;
     QFileSystemWatcher m_quickWatcher;
     arrange::Undo m_undo;
     int m_undoString = 0;      // explorer.exe's name for what Undo puts back
