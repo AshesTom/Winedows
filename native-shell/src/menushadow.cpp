@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "menushadow.h"
 
+#include "theme.h"
 #include "x11.h"
 
 #include <QApplication>
@@ -214,6 +215,9 @@ private:
             return false;
         const Qt::WindowType type = Qt::WindowType(int(widget->windowFlags()) & int(Qt::WindowType_Mask));
         if (type != Qt::Popup && type != Qt::ToolTip)
+            return false;
+        // Windows Classic draws no shadow under its menus here (the user's choice for this shell)
+        if (!ShellTheme::instance()->renderer())
             return false;
         // XP's Start panel clears CS_DROPSHADOW while it shows (docs/reverse-status.md, section 13).
         if (qstrcmp(widget->metaObject()->className(), "StartPanel") == 0)

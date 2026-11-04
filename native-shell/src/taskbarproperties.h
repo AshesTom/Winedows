@@ -30,6 +30,7 @@ struct TaskbarSettings
     bool clock = true;
     bool autoHide = false;   // StuckRects2's ABS_AUTOHIDE
     bool quickLaunch = false;
+    bool desktopBand = false;   // the Toolbars menu's Desktop band
     bool locked = true;
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
