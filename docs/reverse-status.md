@@ -409,7 +409,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Area | Original feature | Evidence |
 |---|---|---|
 | Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx (the native button keeps the flash colour while the window wants attention) | `sub_1002819`; user32 not reversed |
-| Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604 |
+| Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604. Done: Close sends WM_CLOSE, waits 2 s, and if the window still exists asks with 603/604 and kills the X client on End Now; it does not use `_NET_WM_PING` to prove the hang |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
 | Taskbar | The taskband's extra rows (a resized bar), and the scrollbar's thumb and tracks | Section 6 |
 | Taskbar | Deskbands such as Windows Media Player's | Section 2 |

@@ -185,6 +185,34 @@ ShellTheme *theme()
     return ShellTheme::instance();
 }
 
+// A window that ignores WM_CLOSE gets XP's end-program question (strings 603/604); the X client is
+// killed only if the user says yes.
+void closeWithForce(xcb_window_t window)
+{
+    WindowList::close(window);
+    QTimer::singleShot(2000, qApp, [window] {
+        xcb_generic_error_t *error = nullptr;
+        xcb_get_window_attributes_reply_t *attributes =
+            xcb_get_window_attributes_reply(x11::connection(), xcb_get_window_attributes(x11::connection(), window), &error);
+        free(error);
+        if (!attributes)
+            return;
+        free(attributes);
+        QString title = QObject::tr("End Program"), text = QObject::tr("This program is not responding. To end it now, click End Now.");
+        if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")))) {
+            const QString foundTitle = xpfiles::string(*explorer, 603), foundText = xpfiles::string(*explorer, 604);
+            if (!foundTitle.isEmpty()) title = foundTitle;
+            if (!foundText.isEmpty()) text = foundText;
+        }
+        QMessageBox box(QMessageBox::Warning, title, text, QMessageBox::NoButton);
+        QPushButton *end = box.addButton(QObject::tr("End Now"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        if (box.clickedButton() == end)
+            xcb_kill_client(x11::connection(), window);
+    });
+}
+
 } // namespace
 
 // A group's windows, which explorer.exe lists in a menu band drawn by the style's TaskBandGroupMenu:
@@ -1609,7 +1637,7 @@ void Taskbar::showTaskMenu(int index, QPoint at)
     menu->addAction(tr("Mi&nimize"), this, [window] { WindowList::minimize(window); })->setEnabled(!task.minimized);
     menu->addAction(tr("Ma&ximize"), this, [window] { WindowList::maximize(window, true); });
     menu->addSeparator();
-    QAction *close = menu->addAction(tr("&Close"), this, [window] { WindowList::close(window); });
+    QAction *close = menu->addAction(tr("&Close"), this, [window] { closeWithForce(window); });
     QFont bold = close->font();
     bold.setBold(true);
     close->setFont(bold);
