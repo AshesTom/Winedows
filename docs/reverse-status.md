@@ -413,7 +413,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
 | Taskbar | The taskband's extra rows (a resized bar), and the scrollbar's thumb and tracks | Section 6 |
 | Taskbar | Deskbands such as Windows Media Player's | Section 2 |
-| Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings |
+| Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings. Low resolution done: once, after 2.5 s, when the screen is under 800 x 600 and a tray icon can point at it; the others remain |
 | Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7. Remove from This List is done (right-click a recent program, `programs::removeUse`); the ranking still uses this shell's counts and the gone-item prompt is missing |
 | Start menu | Pin to Start menu, dragging items in the panel and in All Programs, Sort by Name | shell32's verbs; StartMenu band. Pin/Unpin works from a recent program's menu (`StartMenu/Pinned`, shell32 strings 5381/5382); dragging and Sort by Name are missing |
 | Start menu | Newly installed programs highlighted in All Programs (8229) | String 8229 |

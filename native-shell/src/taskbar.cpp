@@ -433,6 +433,25 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         return QRect();
     });
     connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
+    // A screen below XP's 800 x 600 minimum gets explorer.exe's low-resolution balloon (strings 811/812).
+    QTimer::singleShot(2500, this, [this] {
+        const QSize screen = QGuiApplication::primaryScreen()->geometry().size();
+        const QList<TrayIcon> icons = m_tray->icons();
+        if (icons.isEmpty() || (screen.width() >= 800 && screen.height() >= 600))
+            return;
+        BalloonTip tip;
+        tip.icon = icons.first().id;
+        tip.kind = BalloonTip::Warning;
+        tip.timeout = 10000;
+        tip.title = QStringLiteral("Low screen resolution");
+        tip.text = QStringLiteral("Your screen resolution is below 800 by 600. Some programs may not display correctly.");
+        if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")))) {
+            const QString title = xpfiles::string(*explorer, 811), text = xpfiles::string(*explorer, 812);
+            if (!title.isEmpty()) tip.title = title;
+            if (!text.isEmpty()) tip.text = text;
+        }
+        m_tray->balloons()->show(tip);
+    });
     connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
     QTimer::singleShot(START_BALLOON_DELAY_MS, this, &Taskbar::startButtonBalloon);
     m_dragTimer.setSingleShot(true);
