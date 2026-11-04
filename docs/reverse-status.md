@@ -65,7 +65,8 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 - **Custom sliders**: the frame for the value drawn from the strip, and the value read from the grey map
   under the mouse.
 - **Evaluation rules**: `jscript:` values evaluated once at load, in document order, with the element's
-  own properties in scope; `wmpprop:` bindings that track their dependencies, with write-back from
+  own properties in scope (a view's own `width` and `height` first, so `height="jscript:GetViewHeight();"`
+  sizes its window); the player's objects found whatever their case (`mediaCenter`); `wmpprop:` bindings that track their dependencies, with write-back from
   sliders; alignment applied only to resizes after load; intrinsic sizes from images; window region
   built from the views' backgrounds; `clippingColor`, transparency colours, hue and saturation shifts;
   `moveTo` and `alphaBlendTo`; event handlers with an `event` object; `theme.loadString`,
@@ -85,13 +86,13 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Media Guide and Radio Tuner (RT_HTML pages of `wmploc.dll`; the online services are gone) | Missing |
 | Copy from CD, Copy to CD or Device, CD and DVD playback | Missing |
 | Premium Services | Missing |
-| Full-mode menu bar (show, hide, auto-hide) | Missing (only the Play menu, as a popup) |
+| Full-mode menu bar (show, hide, auto-hide) | Partial: `app.titleBarVisible` ("Show menu bar", `appautohidebtn`) puts the skin in a framed window under menu 102, remembered between runs; the auto-hidden bar does not appear on hovering the top |
 | Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Missing (an approximate FFT bar display stands in) |
 | Audio effect of the equalizer, SRS WOW, crossfading, auto volume levelling | Missing |
 | Full metadata (`WM/Lyrics`, `getItemInfoByType`) | Partial (title, artist, album, duration; album art from the file's tags or its folder's `Folder.jpg` / `AlbumArtSmall.jpg`, as `WMPImage_AlbumArtLarge` / `Small`) |
 | `listbox`/`popup`, `editbox` and `librarytree` elements | Missing (created, not drawn or interactive) |
 | Full playlist control (columns, dragging, `dropDownList`, its shortcut menu) | Partial (selection, double-click to play, wheel scrolling) |
-| Full-screen mode with `FullScreenTopLayout` and `FullScreenBottomLayout` | Missing |
+| Full-screen mode with `FullScreenTopLayout` and `FullScreenBottomLayout` | Partial: the display fills the screen under both layouts, which hide after 3 s unless `pinFullScreenControls`; `fullScreenRequest`, Alt+Enter, Esc and `view.returnToMediaCenter` enter and leave it. The Customize button's full-screen playlist (`showFullScreenPlaylist`) is not drawn |
 | `theme.openDialog`; additional theme views beyond a plain window | Partial |
 | Options, Properties and Statistics dialogs | Missing |
 | Pixel comparison with the real WMP 9 running in Wine | Missing |

@@ -308,6 +308,8 @@ SkinView::SkinView(Model *model, const wmpskin::Node &document, const QString &f
     const QHash<QString, QString> globals = m_model->globals();
     for (auto it = globals.begin(); it != globals.end(); ++it)
         global.setProperty(it.key(), proxy(it.value()));
+    // wmp.dll finds the player's objects whatever their case (FullScreenTopLayout.wsz writes mediaCenter)
+    global.setProperty(QStringLiteral("mediaCenter"), global.property(QStringLiteral("mediacenter")));
     if (m_view)
         global.setProperty(QStringLiteral("view"), proxy(keyOf(m_view)));
     if (m_theme)
@@ -335,6 +337,11 @@ SkinView::SkinView(Model *model, const wmpskin::Node &document, const QString &f
     for (const auto &element : m_elements)
         if (element.get() != m_theme && element.get() != m_view && element->values.contains(QStringLiteral("scriptfile")))
             loadScripts(element.get());
+    // a view sized by its scripts (height="jscript:GetViewHeight();") has that size from the start
+    if (m_view && !initial.isValid())
+        for (const QString name : {QStringLiteral("width"), QStringLiteral("height")})
+            if (const QString text = m_view->values.value(name).toString(); text.startsWith(QLatin1String("jscript:"), Qt::CaseInsensitive))
+                m_view->values.insert(name, fromScript(evaluate(text.mid(8), keyOf(m_view))));
     const QSize size = initial.isValid() ? initial : preferredSize();
     if (m_view) {
         m_view->values.insert(QStringLiteral("width"), size.width());

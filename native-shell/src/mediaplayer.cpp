@@ -24,6 +24,7 @@
 #include <QMediaPlayer>
 #include <QMenu>
 #include <QMenuBar>
+#include <QVBoxLayout>
 #include <QMimeData>
 #include <QRandomGenerator>
 #include <QScreen>
@@ -379,8 +380,10 @@ MediaPlayer::~MediaPlayer()
     settings.setValue(QStringLiteral("shuffle"), m_shuffle);
     settings.setValue(QStringLiteral("loop"), m_loop);
     if (m_window)
-        settings.setValue(QStringLiteral("geometry"), m_window->geometry());
+        settings.setValue(QStringLiteral("geometry"), QRect(m_window->mapToGlobal(QPoint()), m_window->size()));
+    settings.setValue(QStringLiteral("titleBarVisible"), !m_menuFrame.isNull());
     delete m_window;
+    delete m_menuFrame;
 }
 
 std::optional<wmpskin::Node> MediaPlayer::skin(const QString &name) const
@@ -391,7 +394,20 @@ std::optional<wmpskin::Node> MediaPlayer::skin(const QString &name) const
     const QByteArray data = m_loc->find(QStringLiteral("256"), resource);
     if (data.isEmpty())
         return std::nullopt;
-    return wmpskin::readCompiled(data, m_properties.names, [this](int id) { return text(id); });
+    std::optional<wmpskin::Node> node = wmpskin::readCompiled(data, m_properties.names, [this](int id) { return text(id); });
+    // WMP_TREE=name.wsz: the skin's elements and attributes, for reading wmploc.dll's skins
+    if (node && qEnvironmentVariable("WMP_TREE").compare(name, Qt::CaseInsensitive) == 0) {
+        const std::function<void(const wmpskin::Node &, int)> print = [&print](const wmpskin::Node &element, int depth) {
+            QString line = QString(depth * 2, QLatin1Char(' ')) + QLatin1Char('<') + element.tag;
+            for (const auto &[key, value] : element.attributes)
+                line += QStringLiteral(" %1=\"%2\"").arg(key, value.toString().left(160));
+            fprintf(stderr, "%s>\n", qPrintable(line));
+            for (const wmpskin::Node &child : element.children)
+                print(child, depth + 1);
+        };
+        print(*node, 0);
+    }
+    return node;
 }
 
 QString MediaPlayer::text(int id) const
@@ -401,6 +417,8 @@ QString MediaPlayer::text(int id) const
 
 void MediaPlayer::show()
 {
+    if (const QString tree = qEnvironmentVariable("WMP_TREE"); !tree.isEmpty())
+        skin(tree);
     std::optional<wmpskin::Node> document = skin(QStringLiteral("MainAppSkin.wsz"));
     if (!document) {
         fprintf(stderr, "explorer: MainAppSkin.wsz not found in wmploc.dll\n");
@@ -435,6 +453,8 @@ void MediaPlayer::show()
     emit changed(QStringLiteral("app"), QStringLiteral("currenttask"));
     open(m_pending);
     m_pending.clear();
+    if (settings.value(QStringLiteral("titleBarVisible")).toBool())
+        set(QStringLiteral("app"), QStringLiteral("titlebarvisible"), true);
     // wmp.dll opens in the mode it was left in
     if (settings.value(QStringLiteral("mode")).toString() == QLatin1String("skin"))
         showSkin(currentSkin());
@@ -726,7 +746,7 @@ QVariant MediaPlayer::get(const QString &object, const QString &name)
         if (name == QLatin1String("versioninfo"))
             return QStringLiteral("9.0.0.4503");
         if (name == QLatin1String("fullscreen"))
-            return m_window && m_window->isFullScreen();
+            return !m_fullScreen.isNull();
         if (name == QLatin1String("enabled") || name == QLatin1String("enablecontextmenu") || name == QLatin1String("isonline")
             || name == QLatin1String("stretchtofit") || name == QLatin1String("windowlessvideo"))
             return name != QLatin1String("isonline");
@@ -817,7 +837,7 @@ QVariant MediaPlayer::get(const QString &object, const QString &name)
         return m_mediacenter.value(name);
     if (object == QLatin1String("app")) {
         if (name == QLatin1String("maximized"))
-            return m_window && m_window->isMaximized();
+            return m_window && fullWindow()->isMaximized();
         return m_app.value(name);
     }
     return {};
@@ -833,7 +853,7 @@ bool MediaPlayer::set(const QString &object, const QString &name, const QVariant
             return true;
         }
         if (name == QLatin1String("fullscreen") && m_window) {
-            value.toBool() ? m_window->showFullScreen() : m_window->showNormal();
+            setFullScreen(value.toBool());
             return true;
         }
         return false;
@@ -861,6 +881,13 @@ bool MediaPlayer::set(const QString &object, const QString &name, const QVariant
         if (m_mediacenter.value(name) == value)
             return true;
         m_mediacenter.insert(name, value);
+        // the skins ask for full screen with fullScreenRequest (NowPlaying's button); wmp.dll clears it
+        if (name == QLatin1String("fullscreenrequest") && value.toBool()) {
+            m_mediacenter.insert(name, false);
+            QTimer::singleShot(0, this, [this] { setFullScreen(true); });
+        } else if (name == QLatin1String("pinfullscreencontrols") && m_fullScreen) {
+            showFullScreenControls(true);
+        }
         if (name == QLatin1String("backhueshift") || name == QLatin1String("backsaturation") || name == QLatin1String("buttonhueshift")
             || name == QLatin1String("buttonsaturation") || name.startsWith(QLatin1String("show")) || name.endsWith(QLatin1String("width"))
             || name.endsWith(QLatin1String("height")) || name.endsWith(QLatin1String("view")) || name.endsWith(QLatin1String("preset"))) {
@@ -877,6 +904,8 @@ bool MediaPlayer::set(const QString &object, const QString &name, const QVariant
             return true;
         m_app.insert(name, value);
         emit changed(object, name);
+        if (name == QLatin1String("titlebarvisible"))
+            QTimer::singleShot(0, this, [this, shown = value.toBool()] { setMenuBarShown(shown); });
         if (name == QLatin1String("currenttask")) {
             m_task = value.toString();
             emit taskChanged();
@@ -999,9 +1028,9 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
         if (name == QLatin1String("adjustleft") && m_window) {
             // the taskbar's width taken from (or given to) the window's left
             const int dx = arguments.value(0).toInt();
-            QRect geometry = m_window->geometry();
+            QRect geometry = fullWindow()->geometry();
             geometry.setLeft(geometry.left() + dx);
-            m_window->setGeometry(geometry);
+            fullWindow()->setGeometry(geometry);
         }
         return {};
     }
@@ -1257,12 +1286,27 @@ void MediaPlayer::setPreference(const QString &name, const QString &value)
 
 bool MediaPlayer::eventFilter(QObject *watched, QEvent *event)
 {
-    const bool ours = watched == m_window || (m_skinWindow && watched == m_skinWindow);
+    // full screen: the mouse brings the controls back, Esc leaves it as wmp.dll does
+    if (m_fullScreen && watched->isWidgetType() && (watched == m_fullScreen || m_fullScreen->isAncestorOf(static_cast<QWidget *>(watched)))) {
+        if (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonPress)
+            showFullScreenControls(true);
+        if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            setFullScreen(false);
+            return true;
+        }
+    }
+    const bool ours = watched == m_window || (m_skinWindow && watched == m_skinWindow) || (m_fullScreen && watched == m_fullScreen)
+        || (m_menuFrame && watched == m_menuFrame);
+    if (m_menuFrame && watched == m_menuFrame && event->type() == QEvent::Close) {
+        // the frame's close button: the player's Exit
+        m_player->stop();
+        QApplication::quit();
+    }
     // wmploc.dll's keys: accelerator table 102 in full mode, 4002 in skin mode
     if (ours && event->type() == QEvent::KeyPress && m_loc) {
         static const QList<xpprogram::Accelerator> full = xpprogram::accelerators(*m_loc, QStringLiteral("102")),
                                                    skinned = xpprogram::accelerators(*m_loc, QStringLiteral("4002"));
-        if (const int id = xpprogram::command(watched == m_window ? full : skinned, static_cast<QKeyEvent *>(event))) {
+        if (const int id = xpprogram::command(watched == m_skinWindow ? skinned : full, static_cast<QKeyEvent *>(event))) {
             command(id);
             return true;
         }
@@ -1292,22 +1336,105 @@ void MediaPlayer::windowRequest(const QString &request)
     if (!m_window)
         return;
     if (request == QLatin1String("close")) {
-        m_window->close();
+        fullWindow()->close();
         m_player->stop();
         QApplication::quit();
     } else if (request == QLatin1String("minimize")) {
-        m_window->showMinimized();
+        fullWindow()->showMinimized();
     } else if (request == QLatin1String("maximize")) {
-        m_window->showMaximized();
+        fullWindow()->showMaximized();
         emit changed(QStringLiteral("app"), QStringLiteral("maximized"));
     } else if (request == QLatin1String("restore")) {
-        m_window->showNormal();
+        fullWindow()->showNormal();
         emit changed(QStringLiteral("app"), QStringLiteral("maximized"));
     } else if (request.startsWith(QLatin1String("automenu:")) || request.startsWith(QLatin1String("menu:"))) {
         showMenu(request.section(QLatin1Char(':'), 1));
     } else if (request == QLatin1String("skinmode")) {
         showSkin(currentSkin());
+    } else if (request == QLatin1String("returntomediacenter")) {
+        setFullScreen(false);
     }
+}
+
+void MediaPlayer::setFullScreen(bool on)
+{
+    if (on == !m_fullScreen.isNull() || !m_window)
+        return;
+    if (!on) {
+        m_fullScreen->deleteLater();
+        m_fullScreen.clear();
+        fullWindow()->show();
+        fullWindow()->activateWindow();
+        changedAll(QStringLiteral("player"), {"fullscreen"});
+        return;
+    }
+    const QRect screen = (m_window->screen() ? m_window->screen() : QGuiApplication::primaryScreen())->geometry();
+    auto *window = new QWidget(nullptr, Qt::FramelessWindowHint);
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->setWindowTitle(m_window->windowTitle());
+    window->setWindowIcon(m_window->windowIcon());
+    window->setAutoFillBackground(true);
+    QPalette palette = window->palette();
+    palette.setColor(QPalette::Window, Qt::black);
+    window->setPalette(palette);
+    window->setGeometry(screen);
+    m_fullScreen = window;
+    const auto view = [this, window](const QString &name) -> wmp::SkinView * {
+        const std::optional<wmpskin::Node> document = name.endsWith(QLatin1String(".wsz")) ? skin(name) : plugin(name);
+        if (!document)
+            return nullptr;
+        auto *skinView = new wmp::SkinView(this, *document, QString(), window);
+        skinView->windowRequest = [this](const QString &request) { windowRequest(request); };
+        skinView->installEventFilter(this);
+        skinView->setMouseTracking(true);
+        return skinView;
+    };
+    // the display under everything: the video, or the visualization
+    if (wmp::SkinView *display = view(QStringLiteral("VizView"))) {
+        display->setGeometry(QRect(QPoint(), screen.size()));
+        display->show();
+        display->start();
+    }
+    m_fullScreenTop = view(QStringLiteral("FullScreenTopLayout.wsz"));
+    m_fullScreenBottom = view(QStringLiteral("FullScreenBottomLayout.wsz"));
+    if (m_fullScreenTop) {
+        m_fullScreenTop->setGeometry(0, 0, screen.width(), m_fullScreenTop->preferredSize().height());
+        m_fullScreenTop->show();
+        m_fullScreenTop->start();
+    }
+    if (m_fullScreenBottom) {
+        const int height = m_fullScreenBottom->preferredSize().height();
+        m_fullScreenBottom->setGeometry(0, screen.height() - height, screen.width(), height);
+        m_fullScreenBottom->show();
+        m_fullScreenBottom->start();
+    }
+    if (!m_fullScreenIdle) {
+        m_fullScreenIdle = new QTimer(this);
+        m_fullScreenIdle->setSingleShot(true);
+        m_fullScreenIdle->setInterval(3000);
+        connect(m_fullScreenIdle, &QTimer::timeout, this, [this] {
+            if (!m_mediacenter.value(QStringLiteral("pinfullscreencontrols")).toBool())
+                showFullScreenControls(false);
+        });
+    }
+    window->installEventFilter(this);
+    window->setMouseTracking(true);
+    window->showFullScreen();
+    fullWindow()->hide();
+    showFullScreenControls(true);
+    changedAll(QStringLiteral("player"), {"fullscreen"});
+}
+
+void MediaPlayer::showFullScreenControls(bool shown)
+{
+    if (!m_fullScreen)
+        return;
+    for (wmp::SkinView *bar : {m_fullScreenTop.data(), m_fullScreenBottom.data()})
+        if (bar)
+            bar->setVisible(shown);
+    m_fullScreen->setCursor(shown ? Qt::ArrowCursor : Qt::BlankCursor);
+    if (shown && m_fullScreenIdle)
+        m_fullScreenIdle->start();
 }
 
 // ---- skin mode ----
@@ -1422,7 +1549,7 @@ void MediaPlayer::showSkin(const QString &file)
     else
         m_skinWindow->setFixedSize(geometry.size());
     if (m_window)
-        m_window->hide();
+        fullWindow()->hide();
     m_skinWindow->show();
     m_skinWindow->start();
     settings.setValue(QStringLiteral("mode"), QStringLiteral("skin"));
@@ -1449,9 +1576,80 @@ void MediaPlayer::showFullMode()
     m_preferenceGroup.clear();
     QSettings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer")).setValue(QStringLiteral("mode"), QStringLiteral("full"));
     if (m_window) {
-        m_window->show();
-        m_window->raise();
-        m_window->activateWindow();
+        fullWindow()->show();
+        fullWindow()->raise();
+        fullWindow()->activateWindow();
+    }
+}
+
+QWidget *MediaPlayer::fullWindow() const
+{
+    return m_menuFrame ? m_menuFrame.data() : static_cast<QWidget *>(m_window.data());
+}
+
+void MediaPlayer::setMenuBarShown(bool shown)
+{
+    if (!m_window || shown == !m_menuFrame.isNull())
+        return;
+    const QRect client(m_window->mapToGlobal(QPoint()), m_window->size());
+    const bool visible = fullWindow()->isVisible();
+    if (!shown) {
+        QWidget *frame = m_menuFrame;
+        m_menuFrame.clear();
+        m_window->setParent(nullptr, Qt::Window | Qt::FramelessWindowHint);
+        m_window->setGeometry(client);
+        if (visible)
+            m_window->show();
+        frame->deleteLater();
+        return;
+    }
+    auto *frame = new QWidget(nullptr, Qt::Window);
+    frame->setWindowTitle(m_window->windowTitle());
+    frame->setWindowIcon(m_window->windowIcon());
+    frame->setAcceptDrops(true);
+    frame->installEventFilter(this);
+    auto *layout = new QVBoxLayout(frame);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    auto *bar = new QMenuBar(frame);
+    bar->setNativeMenuBar(false);   // in the window, as XP has it, never a desktop's global menu
+    if (m_loc) {
+        const QHash<int, QAction *> actions = xpprogram::fillMenuBar(bar, *m_loc, 102);
+        connectMenu(actions);
+        // the checks follow the player when a menu opens
+        for (QMenu *menu : bar->findChildren<QMenu *>())
+            connect(menu, &QMenu::aboutToShow, this, [this, actions] {
+                for (const int id : {int(Shuffle), int(Repeat), int(Mute)})
+                    if (QAction *action = actions.value(id))
+                        action->setChecked(id == Shuffle ? m_shuffle : id == Repeat ? m_loop : m_audio->isMuted());
+            });
+    }
+    layout->setMenuBar(bar);
+    m_window->setParent(frame);
+    layout->addWidget(m_window);
+    m_menuFrame = frame;
+    m_window->show();
+    // the frame round the client the skin had
+    frame->resize(client.width(), client.height() + bar->sizeHint().height());
+    frame->move(client.topLeft() - QPoint(0, bar->sizeHint().height()));
+    if (visible)
+        frame->show();
+}
+
+void MediaPlayer::connectMenu(const QHash<int, QAction *> &actions)
+{
+    for (auto it = actions.begin(); it != actions.end(); ++it) {
+        QAction *action = it.value();
+        const int id = it.key();
+        static const QSet<int> handled{Open, OpenUrl, CloseMedia, Exit, PlayPause, Stop, Fast, Normal, Slow, Previous, Next, Rewind,
+                                       FastForward, Shuffle, Repeat, VolumeUp, VolumeDown, Mute, FullScreen, HideTaskbar,
+                                       FullMode, SkinMode};
+        action->setEnabled(handled.contains(id) || (id >= GoToFirst && id <= SkinChooser));
+        if (id == Shuffle || id == Repeat || id == Mute) {
+            action->setCheckable(true);
+            action->setChecked(id == Shuffle ? m_shuffle : id == Repeat ? m_loop : m_audio->isMuted());
+        }
+        connect(action, &QAction::triggered, this, [this, id] { command(id); });
     }
 }
 
@@ -1596,19 +1794,7 @@ void MediaPlayer::showMenu(const QString &name)
             chosen = action->menu();
     if (!chosen)
         return;
-    for (auto it = actions.begin(); it != actions.end(); ++it) {
-        QAction *action = it.value();
-        const int id = it.key();
-        static const QSet<int> handled{Open, OpenUrl, CloseMedia, Exit, PlayPause, Stop, Fast, Normal, Slow, Previous, Next, Rewind,
-                                       FastForward, Shuffle, Repeat, VolumeUp, VolumeDown, Mute, FullScreen, HideTaskbar,
-                                       FullMode, SkinMode};
-        action->setEnabled(handled.contains(id) || (id >= GoToFirst && id <= SkinChooser));
-        if (id == Shuffle || id == Repeat || id == Mute) {
-            action->setCheckable(true);
-            action->setChecked(id == Shuffle ? m_shuffle : id == Repeat ? m_loop : m_audio->isMuted());
-        }
-        connect(action, &QAction::triggered, this, [this, id] { command(id); });
-    }
+    connectMenu(actions);
     chosen->exec(QCursor::pos());
 }
 
@@ -1661,7 +1847,7 @@ void MediaPlayer::command(int id)
         m_audio->setMuted(!m_audio->isMuted());
         break;
     case FullScreen:
-        set(QStringLiteral("player"), QStringLiteral("fullscreen"), !(m_window && m_window->isFullScreen()));
+        set(QStringLiteral("player"), QStringLiteral("fullscreen"), m_fullScreen.isNull());
         break;
     case FullMode:
         showFullMode();

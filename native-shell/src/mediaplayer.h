@@ -88,6 +88,16 @@ private:
     void showSkin(const QString &file);
     void closeSkin();
     void showFullMode();
+    // Full screen: the display alone, FullScreenTopLayout.wsz above it and FullScreenBottomLayout.wsz
+    // below, which hide when the mouse rests unless mediacenter.pinFullScreenControls
+    void setFullScreen(bool on);
+    // app.titleBarVisible ("Show menu bar"): the skin in a framed window under wmploc.dll's menu 102,
+    // its own caption buttons hidden by MainAppSkin.js
+    void setMenuBarShown(bool shown);
+    // menu 102's commands that this player carries out, connected to it
+    void connectMenu(const QHash<int, QAction *> &actions);
+    QWidget *fullWindow() const;
+    void showFullScreenControls(bool shown);
     QPixmap skinPicture(const wmpskin::Node &document, const QString &folder, QSize room);
     void changedAll(const QString &object, std::initializer_list<const char *> names);
     static QString timeString(double seconds);
@@ -97,6 +107,10 @@ private:
     QHash<QString, wmpskin::Predefined> m_predefined;
     QPointer<wmp::SkinView> m_window;
     QPointer<wmp::SkinView> m_skinWindow;
+    QPointer<QWidget> m_fullScreen;
+    QPointer<QWidget> m_menuFrame;
+    QPointer<wmp::SkinView> m_fullScreenTop, m_fullScreenBottom;
+    QTimer *m_fullScreenIdle = nullptr;
     QList<QPointer<wmp::SkinView>> m_skinViews;   // its other views (theme.openView)
     QMediaPlayer *m_player = nullptr;
     QAudioOutput *m_audio = nullptr;
