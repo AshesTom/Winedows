@@ -613,6 +613,11 @@ QRect StartPanel::moreBand() const
 }
 
 namespace {
+QString startMenuFolder()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
+}
+
 QList<MenuEntry> favoritesEntries()
 {
     QList<MenuEntry> out;
@@ -686,6 +691,20 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
     QIcon spad;
     if (const auto moricons = xpfiles::resources(xpfiles::find(QStringLiteral("moricons.dll"))))
         spad = QIcon(QPixmap::fromImage(xpfiles::icon(*moricons, MORICONS_SPAD, theme->scaled(32))));
+    const QString startFolder = startMenuFolder();
+    QDir().mkpath(startFolder);
+    const QFileInfoList startEntries = QDir(startFolder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &entry : startEntries) {
+        const QString path = entry.filePath();
+        if (entry.suffix() == QLatin1String("desktop")) {
+            if (const auto program = programs::fromFile(path))
+                top.append({program->name, programs::iconOf(*program), [program] { programs::launch(*program); }, {}});
+        } else if (entry.isDir()) {
+            top.append({entry.fileName(), fileicons::forFile(entry), [path] { FileBrowser::open(path); }, {}});
+        } else {
+            top.append({entry.fileName(), fileicons::forFile(entry), [path] { programs::open(path); }, {}});
+        }
+    }
     top.append({tr("Set Program Access and Defaults"), spad, [] { applets::open(QStringLiteral("programs")); }, {}});
     QList<Row> middle;
     middle.append({word(CMD_PROGRAMS, "&Programs"), big(ICON_PROGRAMS), {}, [this] { return allPrograms(); }});

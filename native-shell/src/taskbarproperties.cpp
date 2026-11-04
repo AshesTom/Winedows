@@ -11,6 +11,8 @@
 #include <QDateTime>
 #include <QLabel>
 #include <QLineEdit>
+#include <QFileDialog>
+#include <QInputDialog>
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
@@ -260,9 +262,30 @@ static void showClassicCustomize(QWidget *parent)
         item->setData(0, Qt::UserRole, int(option.first));
     }
     // Add/Remove/Advanced/Sort/Clear change the Start Menu folder; their files are not read here.
-    for (int id : {1126, 1127, 1128, 1124})
+    for (int id : {1128, 1124})
         if (QWidget *control = page.controls.value(id))
             control->setEnabled(false);
+    const QString startFolder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
+    if (auto *add = qobject_cast<QPushButton *>(page.controls.value(1126)))
+        QObject::connect(add, &QPushButton::clicked, &dialog, [&, startFolder] {
+            const QString chosen = QFileDialog::getOpenFileName(&dialog, QObject::tr("Add"), QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
+            if (chosen.isEmpty())
+                return;
+            QDir().mkpath(startFolder);
+            const QString target = QDir(startFolder).filePath(QFileInfo(chosen).fileName());
+            if (!QFileInfo::exists(target))
+                QFile::link(chosen, target);
+        });
+    if (auto *remove = qobject_cast<QPushButton *>(page.controls.value(1127)))
+        QObject::connect(remove, &QPushButton::clicked, &dialog, [&, startFolder] {
+            const QStringList entries = QDir(startFolder).entryList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+            if (entries.isEmpty())
+                return;
+            bool ok = false;
+            const QString chosen = QInputDialog::getItem(&dialog, QObject::tr("Remove"), QObject::tr("Item to remove:"), entries, 0, false, &ok);
+            if (ok && !chosen.isEmpty())
+                QFile::remove(QDir(startFolder).filePath(chosen));
+        });
     if (auto *clear = qobject_cast<QPushButton *>(page.controls.value(1125)))
         QObject::connect(clear, &QPushButton::clicked, &dialog, [] {
             QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat)
