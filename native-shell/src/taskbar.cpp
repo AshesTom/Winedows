@@ -2402,6 +2402,18 @@ void Taskbar::hotkey(int key, int modifiers)
     case HOTKEY_FIND_FILES:
         FileBrowser::open(places::Search);
         break;
+    case HOTKEY_HELP:
+        // command 503: the Help and Support Center; Linux's when there is one
+        for (const char *name : {"khelpcenter", "yelp"})
+            if (const QString help = QStandardPaths::findExecutable(QLatin1String(name)); !help.isEmpty()) {
+                QProcess::startDetached(help, {});
+                return;
+            }
+        break;
+    case HOTKEY_FIND_COMPUTERS:
+        // Search for Computers: no network browser here, so the Search folder stands in
+        FileBrowser::open(places::Search);
+        break;
     case HOTKEY_NEXT_TASK:
     case HOTKEY_PREVIOUS_TASK:
         // the tray comes forward, the taskband moves its hot item by one (message 0x43d, +1 or -1)
@@ -2420,7 +2432,6 @@ void Taskbar::hotkey(int key, int modifiers)
             keyboardStep(Hit::TrayIcon, 1);
         break;
     default:
-        // Help and Support (command 503) and Search for Computers (0xa086) have nothing to open here
         break;
     }
 }
