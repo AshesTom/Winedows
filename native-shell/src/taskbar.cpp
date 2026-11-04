@@ -1288,6 +1288,12 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
 {
     leaveKeyboard();
     const Hit hit = hitAt(event->position().toPoint());
+    // The open chevron closes on a click elsewhere on the bar (traynot.cpp's chevron state).
+    if (m_trayOpen && hit.kind != Hit::TrayIcon && hit.kind != Hit::Chevron && hit.kind != Hit::Clock) {
+        m_trayOpen = false;
+        relayout();
+        update();
+    }
     m_activeAtPress = m_windows->activeAtPress();
     if (event->button() == Qt::LeftButton && hit.kind == Hit::Start) {
         // The press that closes the open menu must not open it again.
