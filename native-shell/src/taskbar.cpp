@@ -1100,10 +1100,10 @@ void Taskbar::drawTray(QPainter &painter)
     for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
         if (!m_trayIconRects[i].isNull())
             painter.drawImage(m_trayIconRects[i], icons[i].image);
-    // Win+B: the icon with the keyboard has the toolbar's focus rectangle, DrawFocusRect's dots
-    // inverted on its 18-pixel button (not measured against XP)
+    // Win+B: the icon with the keyboard has the toolbar's focus rectangle, DrawFocusRect on the
+    // button's own 18-pixel rect (traynot.cpp's custom draw).
     if (m_keyboard && m_hover.kind == Hit::TrayIcon && m_hover.index < m_trayIconRects.size()) {
-        const QRect focus = m_trayIconRects[m_hover.index].adjusted(-1, -1, 1, 1);
+        const QRect focus = m_trayIconRects[m_hover.index];
         painter.save();
         painter.setCompositionMode(QPainter::RasterOp_SourceXorDestination);
         for (int x = focus.left(); x <= focus.right(); ++x)
@@ -1596,6 +1596,9 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
             m_undoString = STRING_TILE;
             break;
         case CMD_UNDO:
+            // Show Desktop's undo also turns _NET_SHOWING_DESKTOP off.
+            if (m_undoString == STRING_MINIMIZE_ALL)
+                x11::sendToManager(x11::root(), "_NET_SHOWING_DESKTOP", {0});
             arrange::undo(m_undo);
             m_undo.clear();
             break;
@@ -2200,6 +2203,13 @@ void Taskbar::toggleDesktop()
 {
     const QList<quint32> showing = x11::property32(x11::root(), x11::atom("_NET_SHOWING_DESKTOP"));
     const bool shown = !showing.isEmpty() && showing.first();
+    // XP's Minimize All leaves "&Undo Minimize All" behind; the window manager does the minimizing.
+    if (shown) {
+        m_undo.clear();
+    } else {
+        m_undo = arrange::remember(m_windows->arrangeable());
+        m_undoString = STRING_MINIMIZE_ALL;
+    }
     x11::sendToManager(x11::root(), "_NET_SHOWING_DESKTOP", {quint32(shown ? 0 : 1)});
 }
 

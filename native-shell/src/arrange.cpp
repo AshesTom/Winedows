@@ -101,6 +101,17 @@ Undo tile(const QList<xcb_window_t> &windows, bool horizontal)
     return place(places);
 }
 
+Undo remember(const QList<xcb_window_t> &windows)
+{
+    Undo undo;
+    for (xcb_window_t window : windows) {
+        const QRect frame = x11::frameGeometry(window);
+        if (!frame.isNull())
+            undo.append({window, frame, maximized(window)});
+    }
+    return undo;
+}
+
 Undo minimizeAll(const QList<xcb_window_t> &windows)
 {
     Undo undo;
