@@ -9,8 +9,8 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPlainTextEdit>
-#include <QMenu>
 #include <QMouseEvent>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegularExpression>
@@ -1982,8 +1982,20 @@ void SkinView::mousePressEvent(QMouseEvent *event)
         fireMouse(target, QStringLiteral("onmousedown"), event);
         if (target->tag == QLatin1String("slider") || target->tag == QLatin1String("customslider"))
             dragSlider(target, event->position().toPoint());
-        else if (target->tag == QLatin1String("playlist"))
-            m_playlistSelected = playlistRow(target, event->position().toPoint());
+        else if (target->tag == QLatin1String("playlist")) {
+            const int row = playlistRow(target, event->position().toPoint());
+            m_playlistSelected = row;
+            if (event->button() == Qt::RightButton && row >= 0) {
+                QMenu menu;
+                QAction *remove = menu.addAction(QObject::tr("Remove from Playlist"));
+                QAction *clear = menu.addAction(QObject::tr("Clear Playlist"));
+                QAction *chosen = menu.exec(event->globalPosition().toPoint());
+                if (chosen == remove)
+                    m_model->call(QStringLiteral("player"), QStringLiteral("playlistremove"), {row});
+                else if (chosen == clear)
+                    m_model->call(QStringLiteral("player"), QStringLiteral("playlistclear"), {});
+            }
+        }
         update();
         return;
     }

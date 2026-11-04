@@ -623,7 +623,8 @@ bool MediaPlayer::isMethod(const QString &object, const QString &name) const
     static const QHash<QString, QSet<QString>> methods{
         {QStringLiteral("player"), {QStringLiteral("launchurl"), QStringLiteral("close"), QStringLiteral("newmedia"),
                                     QStringLiteral("newplaylist"), QStringLiteral("openplayer"), QStringLiteral("playlistnames"),
-                                    QStringLiteral("playlistcurrent"), QStringLiteral("playlistplay")}},
+                                    QStringLiteral("playlistcurrent"), QStringLiteral("playlistplay"), QStringLiteral("playlistremove"),
+                                    QStringLiteral("playlistclear")}},
         {QStringLiteral("player.controls"), {QStringLiteral("play"), QStringLiteral("pause"), QStringLiteral("stop"), QStringLiteral("next"),
                                              QStringLiteral("previous"), QStringLiteral("fastforward"), QStringLiteral("fastreverse"),
                                              QStringLiteral("isavailable"), QStringLiteral("playitem"), QStringLiteral("step"),
@@ -984,6 +985,26 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
             return names;
         } else if (name == QLatin1String("playlistcurrent")) {
             return m_current;
+        } else if (name == QLatin1String("playlistremove")) {
+            const int index = arguments.value(0).toInt();
+            if (index >= 0 && index < m_items.size()) {
+                if (index == m_current) {
+                    m_player->stop();
+                    m_current = -1;
+                } else if (index < m_current) {
+                    --m_current;
+                }
+                m_items.removeAt(index);
+                emit fired(QStringLiteral("player"), QStringLiteral("playlistchange"), {1});
+            }
+            return {};
+        } else if (name == QLatin1String("playlistclear")) {
+            m_player->stop();
+            m_items.clear();
+            m_current = -1;
+            emit fired(QStringLiteral("player"), QStringLiteral("playlistchange"), {1});
+            emit fired(QStringLiteral("player"), QStringLiteral("currentplaylistchange"), {1});
+            return {};
         } else if (name == QLatin1String("playlistplay")) {
             const int index = arguments.value(0).toInt();
             if (index >= 0 && index < m_items.size())
