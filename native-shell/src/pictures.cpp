@@ -26,6 +26,7 @@
 #include <QImageReader>
 #include <QSettings>
 #include <QImageWriter>
+#include <QImageWriter>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QPainter>
@@ -540,6 +541,44 @@ Viewer::Viewer(const QString &path)
     setBackgroundRole(QPalette::Window);
     connect(&m_frames, &QTimer::timeout, this, &Viewer::nextFrame);
     m_toolbar->adjustSize();
+    // XP's annotations: a small toolbar of its own over the picture. Here pen, highlighter, eraser,
+    // clear and Save; the ink is kept in a transparent image over the picture.
+    m_annotationBar = new QWidget(this);
+    auto *annotationRow = new QHBoxLayout(m_annotationBar);
+    annotationRow->setContentsMargins(4, 2, 4, 2);
+    annotationRow->setSpacing(4);
+    const auto addAnnotation = [this, annotationRow](const QString &text, const QColor &colour, int width, bool eraser) {
+        auto *button = new QToolButton(m_annotationBar);
+        button->setText(text);
+        button->setAutoRaise(true);
+        annotationRow->addWidget(button);
+        connect(button, &QToolButton::clicked, this, [this, colour, width, eraser] {
+            m_inkColour = colour;
+            m_inkWidth = width;
+            m_inkEraser = eraser;
+        });
+    };
+    addAnnotation(tr("Pen"), Qt::black, 3, false);
+    addAnnotation(tr("Highlighter"), QColor(255, 220, 0, 150), 12, false);
+    addAnnotation(tr("Eraser"), Qt::transparent, 20, true);
+    auto *clear = new QToolButton(m_annotationBar);
+    clear->setText(tr("Clear"));
+    annotationRow->addWidget(clear);
+    connect(clear, &QToolButton::clicked, this, [this] { if (!m_ink.isNull()) m_ink.fill(Qt::transparent); update(); });
+    auto *save = new QToolButton(m_annotationBar);
+    save->setText(tr("Save"));
+    annotationRow->addWidget(save);
+    connect(save, &QToolButton::clicked, this, &Viewer::saveAnnotations);
+    m_annotationBar->adjustSize();
+    m_annotationBar->hide();
+    auto *annotate = new QToolButton(m_toolbar);
+    annotate->setText(QStringLiteral("✎"));
+    annotate->setToolTip(tr("Annotate"));
+    annotate->setAutoRaise(true);
+    annotate->setCheckable(true);
+    row->addWidget(annotate);
+    connect(annotate, &QToolButton::toggled, this, &Viewer::toggleAnnotations);
+    m_toolbar->adjustSize();
     const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
     resize(qMin(800, screen.width() * 2 / 3), qMin(600, screen.height() * 2 / 3));
     // As XP's viewer keeps them under Explorer\\ShellImageView (seen in Wine's registry after it closed): its
@@ -572,6 +611,8 @@ void Viewer::show(int index)
     m_pages = qMax(1, m_reader->imageCount());
     m_animated = m_reader->supportsAnimation() && m_pages > 1;
     m_image = m_reader->read();
+    m_ink = QImage(m_image.size(), QImage::Format_ARGB32_Premultiplied);
+    m_ink.fill(Qt::transparent);
     // an animated picture plays (GIF); one of pages keeps the first and gets the page buttons
     m_frames.stop();
     if (m_animated)
@@ -797,6 +838,43 @@ void Viewer::paintEvent(QPaintEvent *)
     const int margin = ShellTheme::instance()->scaled(TOOLBAR_BOTTOM_MARGIN);
     painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - margin - ShellTheme::instance()->scaled(PICTURE_TOOLBAR_GAP)));
     painter.drawImage(imageRect(), m_image);
+    if (!m_ink.isNull() && !m_ink.isNull())
+        painter.drawImage(imageRect(), m_ink);
+}
+
+void Viewer::toggleAnnotations(bool on)
+{
+    m_annotating = on;
+    if (m_annotationBar)
+        m_annotationBar->setVisible(on);
+    update();
+}
+
+QPointF Viewer::inkPoint(QPoint at) const
+{
+    const QRect rect = imageRect();
+    return QPointF((at.x() - rect.x()) / m_scale, (at.y() - rect.y()) / m_scale);
+}
+
+void Viewer::saveAnnotations()
+{
+    if (m_image.isNull() || m_ink.isNull())
+        return;
+    QImage out = m_image.convertToFormat(QImage::Format_ARGB32);
+    QPainter painter(&out);
+    painter.drawImage(0, 0, m_ink);
+    painter.end();
+    const QFileInfo info(m_paths.value(m_index));
+    const QString base = info.dir().filePath(info.completeBaseName() + tr(" (annotated)") + QLatin1Char('.') + info.suffix());
+    QString target = base;
+    for (int i = 2; QFileInfo::exists(target); ++i)
+        target = info.dir().filePath(info.completeBaseName() + tr(" (annotated %1)").arg(i) + QLatin1Char('.') + info.suffix());
+    QImageWriter writer(target);
+    if (!writer.write(out))
+        QMessageBox::warning(this, tr("Annotations"), writer.errorString());
+    else
+        m_ink.fill(Qt::transparent);
+    update();
 }
 
 void Viewer::closeEvent(QCloseEvent *event)
@@ -835,6 +913,15 @@ void Viewer::keyPressEvent(QKeyEvent *event)
 
 void Viewer::mousePressEvent(QMouseEvent *event)
 {
+    if (m_annotating && event->button() == Qt::LeftButton) {
+        m_inkFrom = inkPoint(event->position().toPoint());
+        QPainter painter(&m_ink);
+        painter.setCompositionMode(m_inkEraser ? QPainter::CompositionMode_Clear : QPainter::CompositionMode_SourceOver);
+        painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPoint(m_inkFrom);
+        update();
+        return;
+    }
     // Ctrl or the middle button moves the picture; a click zooms, Shift the other way round
     m_dragFrom = event->position().toPoint();
     m_panning = event->button() == Qt::MiddleButton || (event->modifiers() & Qt::ControlModifier);

@@ -131,6 +131,9 @@ private:
     double fitScale() const;
     QRect imageRect() const;
     void updateTitle();
+    void toggleAnnotations(bool on);
+    void saveAnnotations();
+    QPointF inkPoint(QPoint at) const;
 
     QStringList m_paths;
     int m_index = 0;
@@ -146,7 +149,14 @@ private:
     bool m_panning = false;
     bool m_clickZoomsOut = false;   // after Zoom Out, a click zooms out (the zoom window's mode 2)
     QWidget *m_toolbar = nullptr;
+    QWidget *m_annotationBar = nullptr;
     QHash<int, QWidget *> m_buttons;
+    bool m_annotating = false;
+    QImage m_ink;
+    QPointF m_inkFrom;
+    int m_inkWidth = 3;
+    bool m_inkEraser = false;
+    QColor m_inkColour = Qt::black;
 };
 
 } // namespace pictures
