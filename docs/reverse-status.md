@@ -394,10 +394,10 @@ bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`p
 
 ## 13. What explorer.exe does that is not ported yet
 
-The largest blocks still open, across the sections: Windows Media Player's visualizations and remaining library, Show in
-the Picture and Fax Viewer's annotations, printing wizard and help, moving and sizing the
-taskbar, the file Properties sheet's height (58 pixels short), and the remaining parts of the Customize Start Menu
-dialogs (Sort) and of Open With.
+The largest blocks still open, across the sections: Windows Media Player's own visualization rendering and the
+closed service pages, Show in Groups for icons and tiles, the taskbar's left and right edges, resizing and deskbands,
+Open With from XP's registry and shell-extension handlers, the Picture and Fax Viewer's XP tools and its comparison
+with the real viewer under Wine, and the file Properties' drives' page.
 
 Values from other contributors are kept only once checked in XP's binaries or measured on XP running in Wine;
 where that was not possible the row says "not measured" or "unverified".
