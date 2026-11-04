@@ -91,6 +91,7 @@ const int TRAY_COLLAPSE_MS = 5000;
 const int START_BALLOON_DELAY_MS = 1500;
 const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START_BALLOON = 801, START_BALLOON_MS = 10000;
 const int STRING_TOUR_BALLOON_TITLE = 821, STRING_TOUR_BALLOON = 822, TOUR_BALLOON_DELAY_MS = 6000;
+const int STRING_HIDDEN_BALLOON_TITLE = 590, STRING_HIDDEN_BALLOON = 591, STRING_NEW_PROGRAMS = 8229;
 const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_MINIMIZE_ALL = 537, STRING_SHOW_OPEN_WINDOWS = 850;
 // explorer.exe's hotkeys: the table at 0x10114c4 (virtual key, modifiers with MOD_WIN), registered as
 // IDs 500 to 511 by sub_101146e; WM_HOTKEY goes to sub_1021388's jump table.
@@ -456,6 +457,8 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
     QTimer::singleShot(START_BALLOON_DELAY_MS, this, &Taskbar::startButtonBalloon);
     QTimer::singleShot(TOUR_BALLOON_DELAY_MS, this, &Taskbar::tourBalloon);
+    QTimer::singleShot(12000, this, &Taskbar::inactiveIconsBalloon);
+    QTimer::singleShot(16000, this, &Taskbar::newProgramsBalloon);
     m_dragTimer.setSingleShot(true);
     connect(&m_dragTimer, &QTimer::timeout, this, [this] {
         if (m_dragHit.kind == Hit::Task && m_dragHit.index < m_buttons.size()) {
@@ -2453,6 +2456,75 @@ void Taskbar::tourBalloon()
             QProcess::startDetached(wine, {tour}, QDir::homePath());
         else if (const QString link = xpfiles::find(QStringLiteral("Tour Windows XP.lnk")); !link.isEmpty())
             programs::open(link);
+    });
+    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
+    balloon->show();
+}
+
+// explorer.exe's first balloon about the chevron (strings 590/591), once, while icons are hidden.
+void Taskbar::inactiveIconsBalloon()
+{
+    if (!m_settings.hideInactive || m_trayHidden.isEmpty() || !isVisible())
+        return;
+    const QString key = QStringLiteral("TrayNotify/InactiveBalloonShown");
+    QSettings shown(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"),
+                    QSettings::IniFormat);
+    if (shown.value(key, false).toBool())
+        return;
+    shown.setValue(key, true);
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!explorer)
+        return;
+    BalloonTip tip;
+    tip.title = xpfiles::string(*explorer, STRING_HIDDEN_BALLOON_TITLE);
+    tip.text = xpfiles::string(*explorer, STRING_HIDDEN_BALLOON);
+    tip.kind = BalloonTip::Info;
+    tip.timeout = 10000;
+    tip.sound = false;
+    auto *balloon = new BalloonWindow(tip);
+    balloon->setAttribute(Qt::WA_DeleteOnClose);
+    const QRect chevron(mapToGlobal(m_chevronRect.topLeft()), m_chevronRect.size());
+    balloon->place(QRect(chevron.center().x(), chevron.top(), 1, 1));
+    connect(balloon, &BalloonWindow::clicked, balloon, [this, balloon] {
+        balloon->close();
+        m_trayOpen = true;
+        relayout();
+        update();
+    });
+    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
+    balloon->show();
+}
+
+// explorer.exe's "New programs installed." (string 8229): once when a desktop entry appears that
+// this shell had not seen before; the first run only records the list.
+void Taskbar::newProgramsBalloon()
+{
+    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"),
+                       QSettings::IniFormat);
+    QStringList ids;
+    for (const programs::Program &program : programs::allPrograms())
+        ids.append(program.id);
+    ids.sort();
+    const QStringList known = settings.value(QStringLiteral("StartMenu/KnownPrograms")).toStringList();
+    settings.setValue(QStringLiteral("StartMenu/KnownPrograms"), ids);
+    if (known.isEmpty() || !isVisible())
+        return;
+    const bool added = std::any_of(ids.cbegin(), ids.cend(), [&known](const QString &id) { return !known.contains(id); });
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!added || !explorer)
+        return;
+    BalloonTip tip;
+    tip.title = xpfiles::string(*explorer, STRING_NEW_PROGRAMS);
+    tip.text = QObject::tr("Click here to see the new programs.");
+    tip.kind = BalloonTip::Info;
+    tip.timeout = 10000;
+    auto *balloon = new BalloonWindow(tip);
+    balloon->setAttribute(Qt::WA_DeleteOnClose);
+    const QRect start(mapToGlobal(m_startRect.topLeft() + QPoint(0, m_top)), m_startRect.size());
+    balloon->place(QRect(start.center().x(), start.top(), 1, 1));
+    connect(balloon, &BalloonWindow::clicked, balloon, [this, balloon] {
+        balloon->close();
+        showStartMenu(true);
     });
     connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
     balloon->show();
