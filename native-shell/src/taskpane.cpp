@@ -13,7 +13,7 @@
 namespace {
 
 // At 96 DPI, from the shell style's UI file
-const int MARGIN = 12, GROUP_GAP = 15, HEADER = 25, BODY_PADDING_X = 13, BODY_PADDING_Y = 10, ROW_GAP = 4, ICON = 16, ICON_GAP = 6;
+const int MARGIN = 12, GROUP_GAP = 15, HEADER = 25, BODY_PADDING_X = 13, BODY_PADDING_Y = 10, ROW_GAP = 4, ICON = 16, ICON_GAP = 7;
 // The header bitmaps and arrows of blue_ss.dll, home_ss.dll and metal_ss.dll
 const int BITMAP_PRIMARY_HEADER = 110, BITMAP_HEADER = 112;
 const int ARROW_UP = 100, ARROW_UP_HOT = 101, ARROW_DOWN = 102, ARROW_DOWN_HOT = 103;
@@ -109,6 +109,9 @@ QSize TaskPane::sizeHint() const
 void TaskPane::setGroups(const QList<PaneGroup> &groups)
 {
     m_groups = groups;
+    for (const PaneGroup &group : groups)
+        if (!m_collapsed.contains(group.title))
+            m_collapsed.insert(group.title, group.collapsed);
     m_hot = {-1, -1};
     layoutGroups();
     update();
@@ -190,24 +193,31 @@ void TaskPane::paintEvent(QPaintEvent *)
         const QImage &art = group.primary ? m_primaryHeader : m_header;
         const bool hotHeader = m_hot == qMakePair(g, -1);
         if (!art.isNull()) {
-            // Its 6 pixels at each end stay, the middle stretches.
+            // The shell style's rcbmp(112, 6, ...): a nine-grid of 6 pixels on every side over the whole
+            // header (25 rows from the bitmap's 21, as XP's shell32 draws it)
             const int edge = 6, w = art.width(), h = art.height();
-            painter.drawImage(QRect(header.x(), header.y() + header.height() - h, edge, h), art, QRect(0, 0, edge, h));
-            painter.drawImage(QRect(header.x() + edge, header.y() + header.height() - h, header.width() - 2 * edge, h), art, QRect(edge, 0, w - 2 * edge, h));
-            painter.drawImage(QRect(header.right() + 1 - edge, header.y() + header.height() - h, edge, h), art, QRect(w - edge, 0, edge, h));
+            const int xs[] = {0, edge, w - edge, w}, ys[] = {0, edge, h - edge, h};
+            const int dx[] = {header.x(), header.x() + edge, header.right() + 1 - edge, header.right() + 1};
+            const int dy[] = {header.y(), header.y() + edge, header.bottom() + 1 - edge, header.bottom() + 1};
+            for (int row = 0; row < 3; ++row)
+                for (int column = 0; column < 3; ++column)
+                    painter.drawImage(QRect(dx[column], dy[row], dx[column + 1] - dx[column], dy[row + 1] - dy[row]), art,
+                                      QRect(xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row]));
         } else {
             painter.fillRect(header, group.primary ? theme->system(QStringLiteral("highlight"), Qt::darkBlue) : theme->system(QStringLiteral("window"), Qt::white));
         }
         painter.setFont(bold);
         const QColor title = group.primary ? QColor(Qt::white) : m_link;
         painter.setPen(hotHeader ? m_hotLink : title);
-        const int titleX = group.icon.isNull() ? theme->scaled(12) : theme->scaled(TITLE_ICON);
-        painter.drawText(header.adjusted(titleX, art.isNull() ? 0 : header.height() - art.height(), -theme->scaled(25), 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+        // Inside the header's border (borderthickness: rect(2,2,2,0)): the title after its padding of 10
+        // and a pixel, centred in the rows under the top border; the arrow 2 from the right.
+        const int titleX = group.icon.isNull() ? theme->scaled(13) : theme->scaled(TITLE_ICON);
+        painter.drawText(header.adjusted(titleX, theme->scaled(2), -theme->scaled(25), 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                          painter.fontMetrics().elidedText(group.title, Qt::ElideRight, header.width() - theme->scaled(35)));
         const bool collapsed = m_collapsed.value(group.title);
         const int arrow = (group.primary ? 4 : 0) + (collapsed ? 2 : 0) + (hotHeader ? 1 : 0);
         if (!m_arrows[arrow].isNull())
-            painter.drawImage(header.right() - m_arrows[arrow].width() - 1, header.y() + header.height() - m_arrows[arrow].height(), m_arrows[arrow]);
+            painter.drawImage(header.right() - m_arrows[arrow].width() - theme->scaled(2), header.y() + header.height() - m_arrows[arrow].height(), m_arrows[arrow]);
         if (!group.icon.isNull())
             group.icon.paint(&painter, QRect(header.x(), header.y(), theme->scaled(TITLE_ICON), theme->scaled(TITLE_ICON)));
         if (collapsed)

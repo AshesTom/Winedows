@@ -270,6 +270,35 @@ void drawBand(QPainter &painter, QWidget *row, w4w::Renderer *renderer)
     renderer->draw(&painter, QRect(0, -top, row->width(), bottom), w4w::Part{QStringLiteral("rebar"), {}, {}, 0, {}});
 }
 
+// XP's folder menu bar is no user32 menu bar but shell32's menu band, a comctl32 toolbar of text-only
+// buttons with the default padding: each its words and 16 pixels (the words 8 in) and 19 tall, 2 under
+// the band's top, the first 2 in from the window's client edge (measured on XP's explorer: File 6 to 37
+// from the frame's edge and 31 to 49 from its top, Edit's words at 46, View's at 80).
+class MenuBandStyle : public QProxyStyle
+{
+public:
+    QSize sizeFromContents(ContentsType type, const QStyleOption *option, const QSize &size, const QWidget *widget) const override
+    {
+        if (type == CT_MenuBarItem)
+            return QSize(size.width() + 16, 19);
+        return QProxyStyle::sizeFromContents(type, option, size, widget);
+    }
+    int pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const override
+    {
+        switch (metric) {
+        case PM_MenuBarHMargin:
+            return 2;
+        case PM_MenuBarVMargin:
+            return 1;   // (the bar's own row starts a pixel under the band's top)
+        case PM_MenuBarItemSpacing:
+        case PM_MenuBarPanelWidth:
+            return 0;
+        default:
+            return QProxyStyle::pixelMetric(metric, option, widget);
+        }
+    }
+};
+
 // The menu bar as XP's: its row, the flag's white tile at its right end, and the band's two lines under
 // it (the first in the style's Rebar.Band EdgeShadowColor, as along the tile's left side)
 class BrandMenuBar : public QMenuBar
@@ -278,6 +307,8 @@ public:
     explicit BrandMenuBar(QWidget *parent)
         : QMenuBar(parent)
     {
+        static MenuBandStyle *style = new MenuBandStyle;
+        setStyle(style);
         if (const auto shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll"))))
             m_flag = xpfiles::bitmap(*shell32, BITMAP_FLAG).copy(0, 0, FLAG_SIZE, FLAG_SIZE);
     }
@@ -1709,12 +1740,13 @@ void FileBrowser::buildToolbars()
     rowLayout->setSpacing(4);
     auto *addressLabel = new QLabel(tr("Address"), row);
     addressLabel->setForegroundRole(QPalette::PlaceholderText);
-    // Grey on Luna's band, the buttons' text under Windows Classic (as XP's)
+    // The style's Rebar TextColor on its band (127 124 115 in Luna), the buttons' text under Windows Classic (as XP's)
     addressLabel->setPalette([&] {
         QPalette palette = addressLabel->palette();
         ShellTheme *theme = ShellTheme::instance();
-        palette.setColor(QPalette::PlaceholderText, theme->renderer() ? theme->system(QStringLiteral("graytext"), QColor(128, 128, 128))
-                                                                      : theme->system(QStringLiteral("btntext"), Qt::black));
+        const w4w::Renderer *renderer = theme->renderer();
+        palette.setColor(QPalette::PlaceholderText, renderer ? renderer->colour(w4w::Part{QStringLiteral("rebar"), {}, {}, 0, {}}, QStringLiteral("textcolor")).value_or(QColor(127, 124, 115))
+                                                             : theme->system(QStringLiteral("btntext"), Qt::black));
         return palette;
     }());
     rowLayout->addWidget(addressLabel);
@@ -2398,6 +2430,8 @@ void FileBrowser::updatePane()
     const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     PaneGroup others{xpfiles::shellString(STRING_OTHER_PLACES, "Other Places"), false, {}};
     PaneGroup details{xpfiles::shellString(STRING_DETAILS, "Details"), false, {}};
+    // Collapsed until opened, as XP's own shell32 shows it
+    details.collapsed = true;
     if (m_location == places::Computer) {
         groups.append({xpfiles::shellString(STRING_SYSTEM_TASKS, "System Tasks"), true, {
             {xpfiles::shellString(STRING_SYSTEM_INFO, "View system information"), fileicons::shell(fileicons::SystemInfo), [] { controlpanel::open(QStringLiteral("system")); }},
@@ -2491,7 +2525,9 @@ void FileBrowser::updatePane()
             if (!pictureTasks.tasks.isEmpty())
                 groups.append(pictureTasks);
         }
-        PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), !isSystemFolder(m_location) && groups.isEmpty(), {}};
+        // An ordinary section, as XP's own shell32 shows it: only special ones (System Tasks, Picture Tasks)
+        // have the blue header.
+        PaneGroup tasks{xpfiles::shellString(STRING_FILE_TASKS, "File and Folder Tasks"), false, {}};
         if (selected.isEmpty()) {
             tasks.tasks.append({xpfiles::shellString(STRING_NEW_FOLDER, "Make a new folder"), fileicons::shell(fileicons::NewFolder), [this] { newFolder(); }});
         } else {

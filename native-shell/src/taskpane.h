@@ -25,6 +25,7 @@ struct PaneGroup
     bool primary = false;            // the blue header of a folder's main tasks
     QList<PaneTask> tasks;
     QIcon icon = {};                 // 32 pixels, beside the title and above the header (mainsection)
+    bool collapsed = false;          // how it first shows: XP's shell32 starts Details collapsed
 };
 
 class TaskPane : public QWidget
