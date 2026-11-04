@@ -26,6 +26,7 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QCoreApplication>
 #include <QSettings>
 #include <QCursor>
@@ -76,7 +77,7 @@ const int GROUP_ARROW_WIDTH = 13, GROUP_ARROW_GAP = 4;   // SM_CYMENUCHECK, the 
 // explorer.exe's menus: the taskbar's (205) and a group's (210), their commands, and Undo's words
 const int MENU_TASKBAR = 205, MENU_GROUP = 210;
 // browselc.dll's band site menu (Toolbars) and its Quick Launch
-const int MENU_BANDS = 268, CMD_BAND_QUICK_LAUNCH = 4, CMD_BAND_DESKTOP = 3;
+const int MENU_BANDS = 268, CMD_BAND_QUICK_LAUNCH = 4, CMD_BAND_DESKTOP = 3, CMD_BAND_NEW_TOOLBAR = 1;
 enum {
     CMD_CASCADE = 403, CMD_TILE_HORIZONTALLY = 404, CMD_TILE_VERTICALLY = 405, CMD_SHOW_DESKTOP = 407, CMD_ADJUST_TIME = 408,
     CMD_PROPERTIES = 413, CMD_UNDO = 416, CMD_TASK_MANAGER = 420, CMD_CUSTOMIZE_NOTIFICATIONS = 421, CMD_LOCK = 424,
@@ -456,7 +457,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         if (settings.group == m_settings.group && settings.groupSize == m_settings.groupSize
             && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
             && settings.quickLaunch == m_settings.quickLaunch && settings.desktopBand == m_settings.desktopBand
-            && settings.locked == m_settings.locked
+            && settings.customToolbar == m_settings.customToolbar && settings.locked == m_settings.locked
             && settings.onTop == m_settings.onTop
             && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle
             && settings.quickLaunchLargeIcons == m_settings.quickLaunchLargeIcons
@@ -470,6 +471,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         if (icons)
             loadQuickLaunch();
         loadDesktopBand();
+        loadCustomToolbar();
         setOnTop();
         updateTrayHiding();
         if (autoHide) {
@@ -495,6 +497,12 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     m_desktopWatcher.addPath(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation));
     connect(&m_desktopWatcher, &QFileSystemWatcher::directoryChanged, this, [this] {
         loadDesktopBand();
+        relayout();
+        update();
+    });
+    loadCustomToolbar();
+    connect(&m_customWatcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        loadCustomToolbar();
         relayout();
         update();
     });
@@ -716,6 +724,19 @@ void Taskbar::relayout()
         }
         m_desktopBand = QRect(first, 0, int(m_desktopItems.size()) * width, barHeight());
         bandStart = first + int(m_desktopItems.size()) * width + theme()->scaled(QUICK_BAND_END);
+    }
+    m_customBand = QRect();
+    for (QuickItem &item : m_customItems)
+        item.rect = QRect();
+    if (!m_customItems.isEmpty()) {
+        const int first = bandStart;
+        const int width = theme()->scaled(QUICK_WIDTH);
+        for (int i = 0; i < m_customItems.size(); ++i) {
+            const int height = renderer ? barHeight() : theme()->scaled(22);
+            m_customItems[i].rect = QRect(first + i * width, renderer ? 0 : (barHeight() - height) / 2, width, height);
+        }
+        m_customBand = QRect(first, 0, int(m_customItems.size()) * width, barHeight());
+        bandStart = first + int(m_customItems.size()) * width + theme()->scaled(QUICK_BAND_END);
     }
     if (header) {
         m_grippers.append(QRect(bandStart, 0, header, barHeight()));
@@ -1255,6 +1276,25 @@ void Taskbar::paintEvent(QPaintEvent *)
                                                        (item.rect.height() - theme()->scaled(ICON_SIZE)) / 2);
         painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
     }
+    for (int i = 0; i < m_customItems.size(); ++i) {
+        const QuickItem &item = m_customItems[i];
+        if (item.rect.isNull())
+            continue;
+        const Hit hit{Hit::Custom, i};
+        const bool pressed = m_pressed == hit && m_hover == hit;
+        if (pressed || m_hover == hit) {
+            if (w4w::Renderer *renderer = theme()->renderer()) {
+                if (!renderer->draw(&painter, item.rect, withState(QUICK_BUTTON, pressed ? Pressed : Hot)))
+                    theme()->raised(painter, item.rect, pressed);
+            } else {
+                theme()->raised(painter, item.rect, pressed);
+            }
+        }
+        const int shift = pressed ? 1 : 0;
+        const QPoint at = item.rect.topLeft() + QPoint((item.rect.width() - theme()->scaled(ICON_SIZE)) / 2,
+                                                       (item.rect.height() - theme()->scaled(ICON_SIZE)) / 2);
+        painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
+    }
     for (int i = 0; i < m_buttons.size(); ++i)
         drawButton(painter, i);
     drawScrollbar(painter);
@@ -1282,6 +1322,12 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
     for (int i = 0; i < m_desktopItems.size(); ++i)
         if (m_desktopItems[i].rect.contains(at)) {
             hit.kind = Hit::Desktop;
+            hit.index = i;
+            return hit;
+        }
+    for (int i = 0; i < m_customItems.size(); ++i)
+        if (m_customItems[i].rect.contains(at)) {
+            hit.kind = Hit::Custom;
             hit.index = i;
             return hit;
         }
@@ -1363,7 +1409,7 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
             showStartMenu(false);
         return;
     }
-    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Desktop || hit.kind == Hit::Chevron
+    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Desktop || hit.kind == Hit::Custom || hit.kind == Hit::Chevron
                                                || hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown)) {
         m_pressed = hit;
         update();
@@ -1391,6 +1437,11 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     if (hit.kind == Hit::Desktop && hit.index < m_desktopItems.size()) {
         if (event->button() == Qt::LeftButton && pressed == hit)
             runDesktopItem(hit.index);
+        return;
+    }
+    if (hit.kind == Hit::Custom && hit.index < m_customItems.size()) {
+        if (event->button() == Qt::LeftButton && pressed == hit)
+            runCustomItem(hit.index);
         return;
     }
     if (hit.kind == Hit::Quick && hit.index < m_quickItems.size()) {
@@ -1625,7 +1676,18 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
         QMenu *toolbars = holder->actions().isEmpty() ? nullptr : holder->actions().first()->menu();
         for (auto it = bands.begin(); it != bands.end(); ++it)
             if (!it.value()->menu())
-                it.value()->setEnabled(it.key() == CMD_BAND_QUICK_LAUNCH || it.key() == CMD_BAND_DESKTOP);
+                it.value()->setEnabled(it.key() == CMD_BAND_QUICK_LAUNCH || it.key() == CMD_BAND_DESKTOP || it.key() == CMD_BAND_NEW_TOOLBAR);
+        if (QAction *newToolbar = bands.value(CMD_BAND_NEW_TOOLBAR)) {
+            newToolbar->setEnabled(true);
+            connect(newToolbar, &QAction::triggered, this, [this] {
+                const QString folder = QFileDialog::getExistingDirectory(this, tr("New Toolbar"), QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
+                if (folder.isEmpty())
+                    return;
+                TaskbarSettings settings = TaskbarSettings::load();
+                settings.customToolbar = folder;
+                settings.save();
+            });
+        }
         if (QAction *desktop = bands.value(CMD_BAND_DESKTOP)) {
             desktop->setCheckable(true);
             desktop->setChecked(m_settings.desktopBand);
@@ -1793,6 +1855,58 @@ void Taskbar::loadDesktopBand()
             item.icon = fileicons::image(file, size);
         m_desktopItems.append(item);
     }
+}
+
+void Taskbar::loadCustomToolbar()
+{
+    m_customItems.clear();
+    const QString folder = m_settings.customToolbar;
+    if (folder.isEmpty()) {
+        if (!m_customWatcher.directories().isEmpty())
+            m_customWatcher.removePaths(m_customWatcher.directories());
+        return;
+    }
+    if (!m_customWatcher.directories().contains(folder)) {
+        if (!m_customWatcher.directories().isEmpty())
+            m_customWatcher.removePaths(m_customWatcher.directories());
+        m_customWatcher.addPath(folder);
+    }
+    const int size = theme()->scaled(ICON_SIZE);
+    const QFileInfoList files = QDir(folder).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &file : files) {
+        QuickItem item;
+        item.path = file.filePath();
+        item.name = file.completeBaseName();
+        if (file.suffix() == QLatin1String("desktop")) {
+            if (const auto program = programs::fromFile(file.filePath())) {
+                item.name = program->name;
+                item.icon = programs::iconOf(*program).pixmap(size).toImage();
+            }
+        }
+        if (item.icon.isNull())
+            item.icon = fileicons::image(file, size);
+        m_customItems.append(item);
+    }
+}
+
+void Taskbar::runCustomItem(int index)
+{
+    if (index < 0 || index >= m_customItems.size())
+        return;
+    const QuickItem &item = m_customItems[index];
+    const QFileInfo file(item.path);
+    if (file.suffix().compare(QLatin1String("scf"), Qt::CaseInsensitive) == 0) {
+        const QSettings scf(item.path, QSettings::IniFormat);
+        if (scf.value(QStringLiteral("Taskbar/Command")).toString().compare(QLatin1String("ToggleDesktop"), Qt::CaseInsensitive) == 0)
+            toggleDesktop();
+        return;
+    }
+    if (file.suffix() == QLatin1String("desktop")) {
+        if (const auto program = programs::fromFile(item.path))
+            programs::launch(*program);
+        return;
+    }
+    programs::open(item.path);
 }
 
 void Taskbar::runDesktopItem(int index)

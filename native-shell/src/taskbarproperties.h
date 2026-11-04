@@ -8,6 +8,7 @@
 #include <QDialog>
 #include <QHash>
 #include <QStringList>
+#include <QString>
 #include <QImage>
 
 #include <functional>
@@ -31,6 +32,7 @@ struct TaskbarSettings
     bool autoHide = false;   // StuckRects2's ABS_AUTOHIDE
     bool quickLaunch = false;
     bool desktopBand = false;   // the Toolbars menu's Desktop band
+    QString customToolbar;      // the Toolbars menu's New Toolbar... folder
     bool locked = true;
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
