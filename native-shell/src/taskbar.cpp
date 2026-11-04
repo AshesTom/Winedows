@@ -85,6 +85,7 @@ enum {
 // DragOver's delays (sub_102f663): 250 ms on a button, 500 on the band's empty part, then 10 s more
 const int DRAG_BUTTON_MS = 250, DRAG_BAND_MS = 500, DRAG_AGAIN_MS = 10000;
 const int STRING_TASKBAR = 518, STRING_NO_DROP = 711;
+const int TRAY_COLLAPSE_MS = 5000;
 // (once the desktop is up: XP posts it from the tray's creation)
 const int START_BALLOON_DELAY_MS = 1500;
 const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START_BALLOON = 801, START_BALLOON_MS = 10000;
@@ -384,6 +385,15 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     m_demoteTimer.setInterval(TRAY_DEMOTE_TICK_MS);
     connect(&m_demoteTimer, &QTimer::timeout, this, &Taskbar::updateTrayHiding);
     m_demoteTimer.start();
+    m_trayCollapseTimer.setSingleShot(true);
+    m_trayCollapseTimer.setInterval(TRAY_COLLAPSE_MS);
+    connect(&m_trayCollapseTimer, &QTimer::timeout, this, [this] {
+        if (!m_trayOpen || geometry().contains(QCursor::pos()))
+            return;
+        m_trayOpen = false;
+        relayout();
+        update();
+    });
     m_tray->balloons()->setLocator([this](quint32 id) {
         const QList<TrayIcon> &icons = m_tray->icons();
         for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
@@ -1116,7 +1126,9 @@ void Taskbar::drawTray(QPainter &painter)
         const Hit hit{Hit::Chevron, -1};
         const int state = m_pressed == hit && m_hover == hit ? Pressed : m_hover == hit ? Hot : Normal;
         if (!renderer || !renderer->draw(&painter, m_chevronRect, withState(m_trayOpen ? TRAY_CHEVRON_OPEN : TRAY_CHEVRON, state))) {
-            theme()->raised(painter, m_chevronRect, state == Pressed);
+            // Windows Classic: the notification area's flat toolbar button, an edge only while hot or pressed
+            if (state != Normal)
+                theme()->raised(painter, m_chevronRect, state == Pressed);
             painter.setPen(theme()->system(QStringLiteral("btntext"), Qt::black));
             painter.drawText(m_chevronRect, Qt::AlignCenter, m_trayOpen ? QStringLiteral("\u00bb") : QStringLiteral("\u00ab"));
         }
@@ -1282,6 +1294,9 @@ void Taskbar::mouseMoveEvent(QMouseEvent *event)
 void Taskbar::leaveEvent(QEvent *)
 {
     setHover(Hit());
+    // TrayNotify's timer 3 (sub_1021370): the hidden icons shown go back 5 s after the pointer has left
+    if (m_trayOpen)
+        m_trayCollapseTimer.start();
 }
 
 void Taskbar::mousePressEvent(QMouseEvent *event)

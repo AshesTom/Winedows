@@ -360,8 +360,24 @@ void show(const QStringList &paths, QWidget *parent)
         }
         if (QLabel *opens = label(OPENS); opens && !program)
             opens->move(page.controls.value(OPENS_ICON) ? page.controls.value(OPENS_ICON)->x() : opens->x(), opens->y());
-        if (QWidget *change = page.controls.value(CHANGE))
-            change->setEnabled(false);
+        // Change... is XP's Open With (shell32's PickIcon/open-with dialog here): it makes the
+        // chosen program the MIME type's default and updates the Opens with line.
+        if (auto *change = qobject_cast<QPushButton *>(page.controls.value(CHANGE))) {
+            change->setEnabled(true);
+            QLabel *opens = label(OPENS), *opensIcon = label(OPENS_ICON);
+            QObject::connect(change, &QPushButton::clicked, dialog, [dialog, path = first.absoluteFilePath(), opens, opensIcon] {
+                const auto chosen = programs::chooseProgram(path, dialog);
+                if (!chosen)
+                    return;
+                if (opens)
+                    opens->setText(chosen->name);
+                if (opensIcon) {
+                    opensIcon->setVisible(true);
+                    opensIcon->setPixmap(programs::iconOf(*chosen).pixmap(16, 16));
+                }
+                programs::setDefaultFor(path, *chosen);
+            });
+        }
     }
 
     if (one && !folder) {

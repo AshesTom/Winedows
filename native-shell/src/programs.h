@@ -31,6 +31,12 @@ QIcon iconOf(const Program &program);
 void launch(const Program &program);
 // Starts it with FILES, filling %f, %F, %u, %U and %% (or appending them).
 void launchWith(const Program &program, const QStringList &files);
+// All installed desktop entries, deduplicated by id and sorted by name.
+QList<Program> allPrograms();
+// XP's Open With dialog: returns the chosen program (without starting it), or nullopt.
+std::optional<Program> chooseProgram(const QString &path, QWidget *parent);
+// Makes PROGRAM the default for PATH's MIME type through xdg-mime.
+void setDefaultFor(const QString &path, const Program &program);
 // Programs by their uses, most used first.
 QList<Program> mostUsed(int count);
 // The user's default programs, through xdg-settings and xdg-mime.

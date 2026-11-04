@@ -7,6 +7,13 @@
 #include <QCoreApplication>
 #include <QXmlStreamReader>
 #include <QDir>
+#include <QDialog>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QListWidget>
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QMimeDatabase>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -223,6 +230,70 @@ void launchWith(const Program &program, const QStringList &files)
     if (!inserted)
         command += files;
     QProcess::startDetached(command.first(), command.mid(1), QDir::homePath());
+}
+
+QList<Program> allPrograms()
+{
+    QList<Program> all;
+    QSet<QString> seen;
+    for (const QList<Program> &group : folders())
+        for (const Program &program : group)
+            if (!seen.contains(program.id)) {
+                seen.insert(program.id);
+                all.append(program);
+            }
+    std::sort(all.begin(), all.end(), [](const Program &a, const Program &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return all;
+}
+
+std::optional<Program> chooseProgram(const QString &path, QWidget *parent)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("Open With - %1").arg(QFileInfo(path).fileName()));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(QObject::tr("Choose the program you want to use to open this file:"), &dialog));
+    auto *list = new QListWidget(&dialog);
+    const QList<Program> all = allPrograms();
+    for (const Program &program : all) {
+        auto *item = new QListWidgetItem(iconOf(program), program.name, list);
+        item->setToolTip(program.comment);
+    }
+    layout->addWidget(list, 1);
+    auto *row = new QHBoxLayout;
+    row->addStretch(1);
+    auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    ok->setDefault(true);
+    row->addWidget(ok);
+    row->addWidget(cancel);
+    layout->addLayout(row);
+    std::optional<Program> chosen;
+    QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
+        const int index = list->currentRow();
+        if (index >= 0 && index < all.size())
+            chosen = all[index];
+        dialog.accept();
+    });
+    QObject::connect(list, &QListWidget::itemDoubleClicked, &dialog, [&] {
+        const int index = list->currentRow();
+        if (index >= 0 && index < all.size())
+            chosen = all[index];
+        dialog.accept();
+    });
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    if (list->count())
+        list->setCurrentRow(0);
+    dialog.exec();
+    return chosen;
+}
+
+void setDefaultFor(const QString &path, const Program &program)
+{
+    const QString mime = QMimeDatabase().mimeTypeForFile(path).name();
+    if (!mime.isEmpty() && !program.id.isEmpty())
+        QProcess::startDetached(QStringLiteral("xdg-mime"), {QStringLiteral("default"), program.id, mime});
 }
 
 QList<Program> mostUsed(int count)

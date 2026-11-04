@@ -359,7 +359,7 @@ Binary: `shell32.dll`. Port: [`fileproperties.cpp`](../native-shell/src/fileprop
 | Version page: dialog 1043, `VS_VERSIONINFO` read from the file, the item names 8752–8765 sorted, Language as VerLanguageName | `shell32.dll` | Done |
 | Etched separators (`SS_ETCHEDHORZ`, `SS_ETCHEDVERT`, `SS_ETCHEDFRAME`) | dialog 1041 | Done: the dialog builder makes a sunken `QFrame` (HLine, VLine, Box) for the Static control's 0x10, 0x11 and 0x12 kinds |
 | The sheet's size and caption | XP in Wine: 58 px taller; no caption icon | Partial: the caption has no icon; the 58 pixels are not added |
-| Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Missing (drives keep the earlier hand-made page) |
+| Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Partial: Change... opens the Open With list and makes the chosen program the MIME type's default (xdg-mime), updating Opens with; Advanced attributes, Summary and the drives' shell32 page remain (drives keep the earlier hand-made page) |
 
 ---
 
@@ -436,3 +436,21 @@ Binary: `explorer.exe` (menu 204, banners 158–167), `shell32.dll` (icons), mea
 | The Start Menu folder's own items | XP: Set Program Access and Defaults, Windows Catalog, Windows Update | Partial: Set Program Access and Defaults only |
 | Customize Classic Start Menu (dialog 9) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | dialog 9; `trayprop.cpp` | Partial: dialog 9 opens and its Display Favorites, Display Log Off, Display Run and Show Small Icons options change the classic menu; Add/Remove/Advanced/Sort/Clear are greyed and the other Advanced options are not wired |
 | The desktop's icons in classic mode (XP keeps HideDesktopIcons per mode: ClassicStartMenu shows them) | XP in Wine (icons shown) | Done: `desktop/hideIcons` for the Start panel and `desktop/hideIconsClassic` for the classic menu, chosen by `StartMenu/Classic` |
+
+---
+
+## 15. Windows Classic
+
+Binaries: `user32.dll` (DrawFrameControl), `explorer.exe`, XP's `hivedef.inf` (the schemes' SCHEMEDATA). Port:
+[`frames.cpp`](../native-shell/src/frames.cpp), [`taskbar.cpp`](../native-shell/src/taskbar.cpp),
+[`taskbarproperties.cpp`](../native-shell/src/taskbarproperties.cpp).
+
+| Item | Source | Status |
+|---|---|---|
+| Windows Standard's metrics: iBorderWidth 1, iScrollWidth/Height 16, iCaptionWidth/Height 18, small caption 12, menu 18 (Large 21/22, Extra Large 24) | SCHEMEDATA's NONCLIENTMETRICS in `hivedef.inf` | Read: the native caption is 18 rows and a line, the frame 4, the menu bar 19, as these give |
+| Caption buttons: DrawFrameControl(DFC_CAPTION) (`sub_7e43e7c4`) draws DrawEdge EDGE_RAISED (EDGE_SUNKEN pressed) with BF_SOFT \| BF_ADJUST (`sub_7e432712`), fills the face, then Marlett as high as the inside's smaller side in a centred square, a pixel down and right when pressed, embossed in the highlight then shadow colour when inactive (`sub_7e437327`); glyphs r (Close), 0, 1, 2, s (Help) (`sub_7e46d69e`) | `user32.dll` | Done: the soft edge's inner shadow, the glyph's size and place, and Help's "?" (it was drawn as Close's cross) |
+| Their places: SM_CXSIZE - 2 by SM_CYSIZE - 4, Close 2 inside the caption's right and top, Maximize (or Help) 2 left of it, Minimize against Maximize | Windows' nonclient layout | Done (Close was against the frame and a row high) |
+| The Taskbar and Start Menu sheet's previews: LoadImage with LR_LOADMAP3DCOLORS (`sub_1037f98`), the same Luna bitmaps under Windows Classic, their colour tables' 128/192/223 greys mapped to the 3D colours | `explorer.exe` | Done |
+| The notification area's chevron: a flat toolbar button under Windows Classic, its edge only while hot or pressed; the hidden icons shown go back 5 s after the pointer leaves (TrayNotify's timer 3, `sub_1021370`) | `explorer.exe` | Done; the code that clears the open state on that timer was not located (the 5 s and the pointer test are what was read) |
+| Drop shadows under menus | win32k's xxxAddShadow (section 13) | Missing |
+

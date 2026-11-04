@@ -160,6 +160,7 @@ private:
     QSet<quint32> m_trayHidden;
     QRect m_chevronRect;
     bool m_trayOpen = false;
+    QTimer m_trayCollapseTimer;
     QTimer m_demoteTimer;
     void trayChanged();
     void updateTrayHiding();
