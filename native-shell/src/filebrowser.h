@@ -119,6 +119,7 @@ private:
     void deleteSelected(bool permanent);
     void showProperties();
     void recycleBinProperties();
+    void customizeFolder();
     void moveOrCopyTo(bool move);
     void startSearch(const SearchQuery &query);
     void continueSearch();

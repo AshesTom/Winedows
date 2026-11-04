@@ -2408,8 +2408,12 @@ void FileBrowser::navigate(const QString &location, bool remember)
     } else {
         showVirtual(target);
     }
-    // Picture folders have Filmstrip, which then stays theirs.
-    const bool pictureFolder = !web && !folder.startsWith(QLatin1String("::")) && target != places::RecycleBin && pictures::isPictureFolder(folder);
+    // Picture folders have Filmstrip, which then stays theirs; Customize This Folder can say so.
+    QString folderTemplate;
+    if (!web && !folder.startsWith(QLatin1String("::")) && target != places::RecycleBin)
+        folderTemplate = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("folder/template/") + folder).toString();
+    const bool pictureFolder = !web && !folder.startsWith(QLatin1String("::")) && target != places::RecycleBin
+        && (pictures::isPictureFolder(folder) || folderTemplate == QLatin1String("Pictures") || folderTemplate == QLatin1String("Photo Album"));
     if (pictureFolder != m_pictureFolder || (m_view == Filmstrip && !folder.startsWith(QLatin1String("::")))) {
         m_pictureFolder = pictureFolder;
         setView(m_view);
@@ -2587,6 +2591,53 @@ void FileBrowser::openPath(const QString &path)
         return;
     }
     programs::open(path);
+}
+
+// XP's Customize This Folder template: its wizard's templates, kept for this folder (or its
+// subfolders), which change whether the picture tasks and Filmstrip apply.
+void FileBrowser::customizeFolder()
+{
+    const QString folder = currentFolder();
+    if (folder.isEmpty())
+        return;
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Customize This Folder"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Choose a template for this folder:"), &dialog));
+    auto *templates = new QComboBox(&dialog);
+    templates->addItem(tr("(None)"), QString());
+    templates->addItem(tr("Documents"), QStringLiteral("Documents"));
+    templates->addItem(tr("Pictures"), QStringLiteral("Pictures"));
+    templates->addItem(tr("Photo Album"), QStringLiteral("Photo Album"));
+    templates->addItem(tr("Music"), QStringLiteral("Music"));
+    templates->addItem(tr("Videos"), QStringLiteral("Videos"));
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    const QString current = settings.value(QStringLiteral("folder/template/") + folder).toString();
+    const int index = templates->findData(current);
+    templates->setCurrentIndex(index < 0 ? 0 : index);
+    layout->addWidget(templates);
+    auto *subfolders = new QCheckBox(tr("Also apply this template to all subfolders"), &dialog);
+    layout->addWidget(subfolders);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        const QString chosen = templates->currentData().toString();
+        const auto apply = [&settings, chosen](const QString &path) {
+            if (chosen.isEmpty())
+                settings.remove(QStringLiteral("folder/template/") + path);
+            else
+                settings.setValue(QStringLiteral("folder/template/") + path, chosen);
+        };
+        apply(folder);
+        if (subfolders->isChecked())
+            for (const QFileInfo &child : QDir(folder).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
+                apply(child.absoluteFilePath());
+        settings.sync();
+        dialog.accept();
+        navigate(m_location, false);
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.exec();
 }
 
 void FileBrowser::activate(const QModelIndex &index)
@@ -3084,10 +3135,11 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
             configureList(m_list, shownView());
         });
     }
+    if (QAction *customize = items.value(CMD_CUSTOMIZE))
+        connect(customize, &QAction::triggered, this, &FileBrowser::customizeFolder);
     // What this window does not have yet
-    for (int command : {CMD_ALIGN, CMD_CUSTOMIZE})
-        if (QAction *action = items.value(command))
-            action->setEnabled(false);
+    if (QAction *align = items.value(CMD_ALIGN))
+        align->setEnabled(false);
     if (QAction *undo = items.value(CMD_UNDO)) {
         undo->setEnabled(bool(m_undo));
         connect(undo, &QAction::triggered, this, [this] { m_undoAction->trigger(); });
