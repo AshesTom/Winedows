@@ -1901,8 +1901,12 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         auto *library = new QWidget(parent);
         auto *layout = new QVBoxLayout(library);
         layout->setContentsMargins(8, 8, 8, 8);
+        auto *searchRow = new QHBoxLayout;
         auto *search = new QLineEdit(library);
         search->setPlaceholderText(QObject::tr("Search"));
+        auto *newAuto = new QPushButton(QObject::tr("New Auto Playlist..."), library);
+        searchRow->addWidget(search, 1);
+        searchRow->addWidget(newAuto);
         auto *split = new QSplitter(Qt::Horizontal, library);
         auto *categories = new QTreeWidget(split);
         categories->setHeaderHidden(true);
@@ -1912,7 +1916,7 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         split->addWidget(categories);
         split->addWidget(list);
         split->setStretchFactor(1, 1);
-        layout->addWidget(search);
+        layout->addLayout(searchRow);
         layout->addWidget(split, 1);
         struct Track { QString path, title, artist, album; QDateTime modified; int plays = 0; qint64 played = 0; };
         QList<Track> tracks;
@@ -1940,6 +1944,10 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         addCategory(QObject::tr("Recently Added"), 1, QString(), automatic);
         addCategory(QObject::tr("Recently Played"), 4, QString(), automatic);
         addCategory(QObject::tr("Most Played"), 5, QString(), automatic);
+        QSettings librarySettings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+        const QVariantMap savedRules = librarySettings.value(QStringLiteral("library/autoPlaylists")).toMap();
+        for (auto it = savedRules.cbegin(); it != savedRules.cend(); ++it)
+            addCategory(it.key(), 7, it.value().toStringList().join(QChar(0x1f)), automatic);
         auto *artists = addCategory(QObject::tr("Artist"), 2, QString());
         auto *albums = addCategory(QObject::tr("Album"), 3, QString());
         QStringList artistNames, albumNames;
@@ -1976,6 +1984,12 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
                 if (kind == 1) match = item->data(0, Qt::UserRole + 1).toLongLong() >= recent;
                 else if (kind == 4) match = item->data(0, Qt::UserRole + 5).toLongLong() >= recent;
                 else if (kind == 5) match = item->data(0, Qt::UserRole + 4).toInt() > 0;
+                else if (kind == 7) {
+                    const QStringList rule = value.split(QChar(0x1f));
+                    match = (rule.value(0).isEmpty() || item->text(0).contains(rule.value(0), Qt::CaseInsensitive))
+                        && (rule.value(1).isEmpty() || item->text(1).contains(rule.value(1), Qt::CaseInsensitive))
+                        && (rule.value(2).isEmpty() || item->text(2).contains(rule.value(2), Qt::CaseInsensitive));
+                }
                 else if (kind == 2) match = item->data(0, Qt::UserRole + 2).toString() == value;
                 else if (kind == 3) match = item->data(0, Qt::UserRole + 3).toString() == value;
                 if (match && !text.isEmpty())
@@ -1996,6 +2010,33 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         };
         QObject::connect(categories, &QTreeWidget::currentItemChanged, library, [applyFilter] { applyFilter(); });
         QObject::connect(search, &QLineEdit::textChanged, library, [applyFilter] { applyFilter(); });
+        QObject::connect(newAuto, &QPushButton::clicked, library, [library, automatic, addCategory, applyFilter] {
+            QDialog dialog(library);
+            dialog.setWindowTitle(QObject::tr("New Auto Playlist"));
+            auto *form = new QFormLayout(&dialog);
+            auto *name = new QLineEdit(&dialog);
+            auto *title = new QLineEdit(&dialog);
+            auto *artist = new QLineEdit(&dialog);
+            auto *album = new QLineEdit(&dialog);
+            form->addRow(QObject::tr("Name:"), name);
+            form->addRow(QObject::tr("Title contains:"), title);
+            form->addRow(QObject::tr("Artist contains:"), artist);
+            form->addRow(QObject::tr("Album contains:"), album);
+            auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            form->addRow(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted || name->text().trimmed().isEmpty())
+                return;
+            const QStringList rule{title->text().trimmed(), artist->text().trimmed(), album->text().trimmed()};
+            QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+            QVariantMap rules = settings.value(QStringLiteral("library/autoPlaylists")).toMap();
+            rules.insert(name->text().trimmed(), rule);
+            settings.setValue(QStringLiteral("library/autoPlaylists"), rules);
+            addCategory(name->text().trimmed(), 7, rule.join(QChar(0x1f)), automatic);
+            automatic->setExpanded(true);
+            applyFilter();
+        });
         const auto play = [this, list](QTreeWidgetItem *item) {
             if (item && item->data(0, Qt::UserRole).isValid())
                 open({item->data(0, Qt::UserRole).toString()});
