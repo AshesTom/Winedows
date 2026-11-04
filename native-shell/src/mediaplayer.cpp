@@ -27,6 +27,8 @@
 #include <QMediaPlayer>
 #include <QMenu>
 #include <QMenuBar>
+#include <QCursor>
+#include <QMenuBar>
 #include <QVBoxLayout>
 #include <QMimeData>
 #include <QRandomGenerator>
@@ -377,6 +379,9 @@ MediaPlayer::MediaPlayer(const QStringList &files)
         emit videoChanged();
     });
     m_decay.start(50);
+    m_barHideTimer.setSingleShot(true);
+    m_barHideTimer.setInterval(500);
+    connect(&m_barHideTimer, &QTimer::timeout, this, &MediaPlayer::barHideCheck);
 }
 
 MediaPlayer::~MediaPlayer()
@@ -389,6 +394,7 @@ MediaPlayer::~MediaPlayer()
     if (m_window)
         settings.setValue(QStringLiteral("geometry"), QRect(m_window->mapToGlobal(QPoint()), m_window->size()));
     settings.setValue(QStringLiteral("titleBarVisible"), !m_menuFrame.isNull());
+    settings.setValue(QStringLiteral("titleBarAutoHide"), m_autoHideBar);
     delete m_window;
     delete m_menuFrame;
 }
@@ -462,6 +468,8 @@ void MediaPlayer::show()
     m_pending.clear();
     if (settings.value(QStringLiteral("titleBarVisible")).toBool())
         set(QStringLiteral("app"), QStringLiteral("titlebarvisible"), true);
+    if (settings.value(QStringLiteral("titleBarAutoHide"), false).toBool())
+        set(QStringLiteral("app"), QStringLiteral("titlebarautohide"), true);
     // wmp.dll opens in the mode it was left in
     if (settings.value(QStringLiteral("mode")).toString() == QLatin1String("skin"))
         showSkin(currentSkin());
@@ -913,6 +921,10 @@ bool MediaPlayer::set(const QString &object, const QString &name, const QVariant
         emit changed(object, name);
         if (name == QLatin1String("titlebarvisible"))
             QTimer::singleShot(0, this, [this, shown = value.toBool()] { setMenuBarShown(shown); });
+        if (name == QLatin1String("titlebarautohide")) {
+            m_autoHideBar = value.toBool();
+            QTimer::singleShot(0, this, [this] { setAutoBarVisible(!m_autoHideBar); });
+        }
         if (name == QLatin1String("currenttask")) {
             m_task = value.toString();
             emit taskChanged();
@@ -1307,6 +1319,20 @@ bool MediaPlayer::eventFilter(QObject *watched, QEvent *event)
     }
     const bool ours = watched == m_window || (m_skinWindow && watched == m_skinWindow) || (m_fullScreen && watched == m_fullScreen)
         || (m_menuFrame && watched == m_menuFrame);
+    if (m_autoHideBar && m_menuFrame && ours && (event->type() == QEvent::MouseMove || event->type() == QEvent::Enter)) {
+        if (watched == m_window) {
+            const QPoint at = m_window->mapFromGlobal(QCursor::pos());
+            if (at.y() >= 0 && at.y() <= 3)
+                setAutoBarVisible(true);
+        }
+        if (watched == m_menuFrame) {
+            const QPoint at = m_menuFrame->mapFromGlobal(QCursor::pos());
+            if (m_menuBar && m_menuBar->geometry().contains(at))
+                setAutoBarVisible(true);
+        }
+        if (m_barShown)
+            m_barHideTimer.start(500);
+    }
     if (m_menuFrame && watched == m_menuFrame && event->type() == QEvent::Close) {
         // the frame's close button: the player's Exit
         m_player->stop();
@@ -1607,6 +1633,8 @@ void MediaPlayer::setMenuBarShown(bool shown)
         QWidget *frame = m_menuFrame;
         m_menuFrame.clear();
         m_window->setParent(nullptr, Qt::Window | Qt::FramelessWindowHint);
+        m_menuBar.clear();
+        m_barShown = false;
         m_window->setGeometry(client);
         if (visible)
             m_window->show();
@@ -1635,6 +1663,8 @@ void MediaPlayer::setMenuBarShown(bool shown)
             });
     }
     layout->setMenuBar(bar);
+    m_menuBar = bar;
+    m_barShown = true;
     m_window->setParent(frame);
     layout->addWidget(m_window);
     m_menuFrame = frame;
@@ -1644,6 +1674,42 @@ void MediaPlayer::setMenuBarShown(bool shown)
     frame->move(client.topLeft() - QPoint(0, bar->sizeHint().height()));
     if (visible)
         frame->show();
+    if (m_autoHideBar)
+        setAutoBarVisible(false);
+}
+
+void MediaPlayer::setAutoBarVisible(bool show)
+{
+    if (!m_menuFrame || !m_menuBar || show == m_barShown)
+        return;
+    const int height = m_menuBar->sizeHint().height();
+    m_menuBar->setVisible(show);
+    m_barShown = show;
+    // The menu bar grows up from the skin's top: the skin stays where it is.
+    if (show) {
+        m_menuFrame->resize(m_menuFrame->width(), m_menuFrame->height() + height);
+        m_menuFrame->move(m_menuFrame->x(), m_menuFrame->y() - height);
+    } else {
+        m_menuFrame->resize(m_menuFrame->width(), qMax(0, m_menuFrame->height() - height));
+        m_menuFrame->move(m_menuFrame->x(), m_menuFrame->y() + height);
+    }
+    m_app.insert(QStringLiteral("titlebarcurrentlyvisible"), show);
+    emit changed(QStringLiteral("app"), QStringLiteral("titlebarcurrentlyvisible"));
+}
+
+void MediaPlayer::barHideCheck()
+{
+    if (!m_autoHideBar || !m_menuFrame || !m_menuBar || !m_barShown)
+        return;
+    const QPoint at = m_menuFrame->mapFromGlobal(QCursor::pos());
+    const bool overBar = m_menuBar->geometry().contains(at);
+    const QPoint skin = m_window ? m_window->mapFromGlobal(QCursor::pos()) : QPoint(-1, -1);
+    const bool atTop = m_window && skin.y() >= 0 && skin.y() <= 3 && skin.x() >= 0 && skin.x() < m_window->width();
+    if (overBar || atTop) {
+        m_barHideTimer.start(500);
+    } else {
+        setAutoBarVisible(false);
+    }
 }
 
 void MediaPlayer::connectMenu(const QHash<int, QAction *> &actions)

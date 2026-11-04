@@ -22,6 +22,7 @@ class QAudioBufferOutput;
 class QAudioOutput;
 class QMediaPlayer;
 class QMenu;
+class QMenuBar;
 class QVideoSink;
 
 class MediaPlayer : public wmp::Model
@@ -109,6 +110,11 @@ private:
     QPointer<wmp::SkinView> m_skinWindow;
     QPointer<QWidget> m_fullScreen;
     QPointer<QWidget> m_menuFrame;
+    QPointer<QMenuBar> m_menuBar;
+    bool m_autoHideBar = false, m_barShown = false;
+    QTimer m_barHideTimer;
+    void setAutoBarVisible(bool shown);
+    void barHideCheck();
     QPointer<wmp::SkinView> m_fullScreenTop, m_fullScreenBottom;
     QTimer *m_fullScreenIdle = nullptr;
     QList<QPointer<wmp::SkinView>> m_skinViews;   // its other views (theme.openView)

@@ -88,7 +88,7 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Media Guide and Radio Tuner (RT_HTML pages of `wmploc.dll`; the online services are gone) | Partial: their task pages say the online service has closed; the RT_HTML pages are not shown |
 | Copy from CD, Copy to CD or Device, CD and DVD playback | Partial: the CD task page says to insert an audio CD; no drive is enumerated and no copy/playback is done |
 | Premium Services | Partial: its task page says no premium services are available |
-| Full-mode menu bar (show, hide, auto-hide) | Partial: `app.titleBarVisible` ("Show menu bar", `appautohidebtn`) puts the skin in a framed window under menu 102, remembered between runs; the auto-hidden bar does not appear on hovering the top |
+| Full-mode menu bar (show, hide, auto-hide) | Done: `app.titleBarVisible` ("Show menu bar", `appautohidebtn`) puts the skin in a framed window under menu 102, remembered between runs; `app.titleBarAutoHide` (`titleBarAutoHide`) hides the bar, the pointer within the skin's top 3 pixels brings it back, and 500 ms after leaving the bar/skin it hides again |
 | Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Missing (an approximate FFT bar display stands in) |
 | Audio effect of the equalizer, SRS WOW, crossfading, auto volume levelling | Missing |
 | Full metadata (`WM/Lyrics`, `getItemInfoByType`) | Partial (title, artist, album, duration; album art from the file's tags or its folder's `Folder.jpg` / `AlbumArtSmall.jpg`, as `WMPImage_AlbumArtLarge` / `Small`) |
