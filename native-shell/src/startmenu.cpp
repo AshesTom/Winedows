@@ -2,6 +2,7 @@
 #include "startmenu.h"
 
 #include "applets.h"
+#include "balloon.h"
 
 #include "xpdialog.h"
 #include <functional>
@@ -489,6 +490,13 @@ static QList<MenuEntry> connections()
         entries.append({{}, {}, {}, {}, true});
     entries.append({QObject::tr("Show all connections"), icon, [] { applets::open(QStringLiteral("network")); }, {}, false});
     return entries;
+}
+
+namespace {
+QString knownProgramsFile()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf");
+}
 }
 
 StartPanel::StartPanel(QPoint bottomLeft, std::function<void()> logOff, std::function<void()> turnOff, std::function<void()> controlPanel)
@@ -1415,6 +1423,13 @@ void StartPanel::openChildren(int level)
         bool upward = false;
         if (m_openWanted == -2) {
             entries = allPrograms();
+            // opening All Programs makes them known: the balloon goes and does not come back for them
+            if (m_newProgramsBalloon)
+                m_newProgramsBalloon->close();
+            QStringList ids;
+            for (const programs::Program &program : programs::allPrograms())
+                ids.append(program.id);
+            QSettings(knownProgramsFile(), QSettings::IniFormat).setValue(QStringLiteral("StartMenu/KnownPrograms"), ids);
             corner = mapToGlobal(QPoint(moreArrow().right() + 1, m_more.bottom() + 1));
             upward = true;
         } else if (m_openWanted >= 0 && m_openWanted < m_items.size() && m_items[m_openWanted].children) {
@@ -1962,8 +1977,52 @@ void StartPanel::keyPressEvent(QKeyEvent *event)
     QWidget::keyPressEvent(event);
 }
 
+// The programs that came since All Programs was last opened; the first run only records them.
+QStringList StartPanel::newPrograms() const
+{
+    QSettings settings(knownProgramsFile(), QSettings::IniFormat);
+    QStringList ids;
+    for (const programs::Program &program : programs::allPrograms())
+        ids.append(program.id);
+    if (!settings.contains(QStringLiteral("StartMenu/KnownPrograms"))) {
+        settings.setValue(QStringLiteral("StartMenu/KnownPrograms"), ids);
+        return {};
+    }
+    const QStringList known = settings.value(QStringLiteral("StartMenu/KnownPrograms")).toStringList();
+    QStringList added;
+    for (const QString &id : std::as_const(ids))
+        if (!known.contains(id))
+            added.append(id);
+    return added;
+}
+
+// XP's balloon is a comctl32 tooltip (TTS_BALLOON) with no title, its words in the bold menu font, its
+// stem on All Programs' middle row; it closes itself after 10 s
+void StartPanel::showEvent(QShowEvent *)
+{
+    if (m_classicMenu || newPrograms().isEmpty())
+        return;
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!explorer)
+        return;
+    BalloonTip tip;
+    tip.title = xpfiles::string(*explorer, 8229);
+    tip.sound = false;
+    auto *balloon = new BalloonWindow(tip);
+    balloon->setAttribute(Qt::WA_DeleteOnClose);
+    const QRect band = moreBand();
+    balloon->place(QRect(mapToGlobal(QPoint(moreArrow().x(), band.center().y())), QSize(1, 1)));
+    connect(balloon, &BalloonWindow::clicked, balloon, &QWidget::close);
+    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
+    QTimer::singleShot(10000, balloon, &QWidget::close);
+    m_newProgramsBalloon = balloon;
+    balloon->show();
+}
+
 void StartPanel::hideEvent(QHideEvent *)
 {
+    if (m_newProgramsBalloon)
+        m_newProgramsBalloon->close();
     hideInfoTip();
     closeCascades(0);
     Q_EMIT closed();

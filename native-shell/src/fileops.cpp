@@ -229,6 +229,18 @@ QString shortcutTarget(const QString &path)
         stringData();
     if ((flags & 0x8) && target.isEmpty())
         target = stringData();
+    // A link made on Windows names a drive ("C:\Program Files\…"): the Wine prefix's dosdevices maps
+    // the letter, and without a prefix the target cannot be found
+    target.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (target.size() >= 2 && target.at(1) == QLatin1Char(':') && target.at(0).isLetter()) {
+        QString prefix = qEnvironmentVariable("WINEPREFIX");
+        if (prefix.isEmpty())
+            prefix = QDir::homePath() + QStringLiteral("/.wine");
+        const QString drive = prefix + QStringLiteral("/dosdevices/") + target.left(2).toLower();
+        if (!QFileInfo::exists(drive))
+            return QString();
+        return QFileInfo(drive).canonicalFilePath() + target.mid(2);
+    }
     if (!target.isEmpty() && QDir::isRelativePath(target))
         target = QFileInfo(path).absoluteDir().filePath(target);
     return target;

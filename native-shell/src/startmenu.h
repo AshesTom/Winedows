@@ -78,6 +78,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool event(QEvent *event) override;
 
 private:
@@ -131,6 +132,9 @@ private:
     void paintClassicMenu(QPainter &painter);
     QList<MenuEntry> classicDocuments() const;
     bool m_classicMenu = false;
+    // "New programs installed." (explorer.exe's sub_1012d9e, string 8229) at All Programs while the panel is up
+    QPointer<QWidget> m_newProgramsBalloon;
+    QStringList newPrograms() const;
     QImage m_banner;
     static void etch(QPainter &painter, const QRect &rect);
     void addLeft(int &y, const QString &text, const QString &subtitle, const QIcon &icon, std::function<void()> action, bool big);

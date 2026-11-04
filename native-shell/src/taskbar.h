@@ -11,6 +11,8 @@
 #include <QFileSystemWatcher>
 
 #include "arrange.h"
+
+#include <functional>
 #include "tray.h"
 #include "windowlist.h"
 
@@ -114,9 +116,10 @@ private:
     // At logon (sub_100eb38): the Start panel opens by itself the first time; with the classic menu, balloon
     // 800/801 points at the Start button for 10 s (sub_1030259) until the button has been used
     void startButtonBalloon();
+    // The post-boot reminders, one after the other: NEXT runs when this one has gone or was not needed
+    void lowResolutionBalloon(std::function<void()> next);
     void tourBalloon();
     void inactiveIconsBalloon();
-    void newProgramsBalloon();
     QPointer<QWidget> m_startBalloon;
     // XP's hotkeys with the Windows key (explorer.exe's IDs 500 to 511), by virtual key and RegisterHotKey's modifiers
     void hotkey(int key, int modifiers);

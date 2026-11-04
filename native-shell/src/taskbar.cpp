@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "taskbar.h"
+#include "displayproperties.h"
 #include "taskbarproperties.h"
 
 #include <QDir>
@@ -90,8 +91,16 @@ const int TRAY_COLLAPSE_MS = 5000;
 // (once the desktop is up: XP posts it from the tray's creation)
 const int START_BALLOON_DELAY_MS = 1500;
 const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START_BALLOON = 801, START_BALLOON_MS = 10000;
-const int STRING_TOUR_BALLOON_TITLE = 821, STRING_TOUR_BALLOON = 822, TOUR_BALLOON_DELAY_MS = 6000;
-const int STRING_HIDDEN_BALLOON_TITLE = 590, STRING_HIDDEN_BALLOON = 591, STRING_NEW_PROGRAMS = 8229;
+// XP's first-logon balloons are post-boot reminders (sub_101389f, sub_101343b): explorer.exe files them under
+// PostBootReminders and shell32's PostBootReminder shows them one after the other, in the keys' order
+// (Microsoft.FixScreenResolution, then Microsoft.OfferTour), once the tray starts its shell service objects.
+// The tour's ShowTime is 60000; the low-resolution one opens desk.cpl. When those objects start is not read
+// here: REMINDERS_DELAY_MS stands for it.
+const int REMINDERS_DELAY_MS = 6000;
+const int STRING_LOW_RESOLUTION_TITLE = 811, STRING_LOW_RESOLUTION = 812;
+const int STRING_TOUR_BALLOON_TITLE = 821, STRING_TOUR_BALLOON = 822, TOUR_SHOW_MS = 60000;
+// The chevron's balloon (sub_101d6b6): when the chevron is first shown, 30 s
+const int STRING_HIDDEN_BALLOON_TITLE = 590, STRING_HIDDEN_BALLOON = 591, HIDDEN_BALLOON_MS = 30000;
 const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_MINIMIZE_ALL = 537, STRING_SHOW_OPEN_WINDOWS = 850;
 // explorer.exe's hotkeys: the table at 0x10114c4 (virtual key, modifiers with MOD_WIN), registered as
 // IDs 500 to 511 by sub_101146e; WM_HOTKEY goes to sub_1021388's jump table.
@@ -187,12 +196,21 @@ ShellTheme *theme()
     return ShellTheme::instance();
 }
 
-// A window that ignores WM_CLOSE gets XP's end-program question (strings 603/604); the X client is
-// killed only if the user says yes.
+// Close on a button is EndTask(window, FALSE, Ctrl held) (sub_102fea7): with Ctrl the window's client is
+// killed at once; otherwise it gets WM_CLOSE, and only a window that has not gone and has not answered
+// with a dialog of its own after HungAppTimeout (5000 in hivedef.inf) is offered to be ended, with
+// explorer.exe's strings 603/604. X has no IsHungAppWindow; an owned window stands for the answer.
+const int HUNG_APP_TIMEOUT_MS = 5000;
+
 void closeWithForce(xcb_window_t window)
 {
+    if (QGuiApplication::queryKeyboardModifiers() & Qt::ControlModifier) {
+        xcb_kill_client(x11::connection(), window);
+        xcb_flush(x11::connection());
+        return;
+    }
     WindowList::close(window);
-    QTimer::singleShot(2000, qApp, [window] {
+    QTimer::singleShot(HUNG_APP_TIMEOUT_MS, qApp, [window] {
         xcb_generic_error_t *error = nullptr;
         xcb_get_window_attributes_reply_t *attributes =
             xcb_get_window_attributes_reply(x11::connection(), xcb_get_window_attributes(x11::connection(), window), &error);
@@ -200,18 +218,21 @@ void closeWithForce(xcb_window_t window)
         if (!attributes)
             return;
         free(attributes);
-        QString title = QObject::tr("End Program"), text = QObject::tr("This program is not responding. To end it now, click End Now.");
-        if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")))) {
-            const QString foundTitle = xpfiles::string(*explorer, 603), foundText = xpfiles::string(*explorer, 604);
-            if (!foundTitle.isEmpty()) title = foundTitle;
-            if (!foundText.isEmpty()) text = foundText;
+        for (quint32 other : x11::property32(x11::root(), x11::atom("_NET_CLIENT_LIST")))
+            if (x11::property32(other, XCB_ATOM_WM_TRANSIENT_FOR).value(0) == window)
+                return;
+        const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+        QString busy = QObject::tr("The application is either too busy or unable to respond to your request to close.");
+        QString force = QObject::tr("Forcing it to close may cause that application to lose data.  Do you want to force it to close?");
+        if (explorer) {
+            if (const QString found = xpfiles::string(*explorer, 603); !found.isEmpty()) busy = found;
+            if (const QString found = xpfiles::string(*explorer, 604); !found.isEmpty()) force = found;
         }
-        QMessageBox box(QMessageBox::Warning, title, text, QMessageBox::NoButton);
-        QPushButton *end = box.addButton(QObject::tr("End Now"), QMessageBox::AcceptRole);
-        box.addButton(QMessageBox::Cancel);
-        box.exec();
-        if (box.clickedButton() == end)
+        const QString title = QString::fromUtf8(x11::property(window, x11::atom("_NET_WM_NAME")));
+        QMessageBox box(QMessageBox::Warning, title, busy + QStringLiteral("\n\n") + force, QMessageBox::Yes | QMessageBox::No);
+        if (box.exec() == QMessageBox::Yes)
             xcb_kill_client(x11::connection(), window);
+        xcb_flush(x11::connection());
     });
 }
 
@@ -435,30 +456,9 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         return QRect();
     });
     connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
-    // A screen below XP's 800 x 600 minimum gets explorer.exe's low-resolution balloon (strings 811/812).
-    QTimer::singleShot(2500, this, [this] {
-        const QSize screen = QGuiApplication::primaryScreen()->geometry().size();
-        const QList<TrayIcon> icons = m_tray->icons();
-        if (icons.isEmpty() || (screen.width() >= 800 && screen.height() >= 600))
-            return;
-        BalloonTip tip;
-        tip.icon = icons.first().id;
-        tip.kind = BalloonTip::Warning;
-        tip.timeout = 10000;
-        tip.title = QStringLiteral("Low screen resolution");
-        tip.text = QStringLiteral("Your screen resolution is below 800 by 600. Some programs may not display correctly.");
-        if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")))) {
-            const QString title = xpfiles::string(*explorer, 811), text = xpfiles::string(*explorer, 812);
-            if (!title.isEmpty()) tip.title = title;
-            if (!text.isEmpty()) tip.text = text;
-        }
-        m_tray->balloons()->show(tip);
-    });
     connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
     QTimer::singleShot(START_BALLOON_DELAY_MS, this, &Taskbar::startButtonBalloon);
-    QTimer::singleShot(TOUR_BALLOON_DELAY_MS, this, &Taskbar::tourBalloon);
-    QTimer::singleShot(12000, this, &Taskbar::inactiveIconsBalloon);
-    QTimer::singleShot(16000, this, &Taskbar::newProgramsBalloon);
+    QTimer::singleShot(REMINDERS_DELAY_MS, this, [this] { lowResolutionBalloon([this] { tourBalloon(); }); });
     m_dragTimer.setSingleShot(true);
     connect(&m_dragTimer, &QTimer::timeout, this, [this] {
         if (m_dragHit.kind == Hit::Task && m_dragHit.index < m_buttons.size()) {
@@ -2404,9 +2404,12 @@ void Taskbar::updateTrayHiding()
         }
     if (hidden.isEmpty())
         m_trayOpen = false;
+    const bool chevronShown = m_trayHidden.isEmpty() && !hidden.isEmpty();
     m_trayHidden = hidden;
     relayout();
     update();
+    if (chevronShown)
+        QTimer::singleShot(0, this, &Taskbar::inactiveIconsBalloon);
 }
 
 QString Taskbar::chevronTip() const
@@ -2456,7 +2459,45 @@ void Taskbar::startButtonBalloon()
     balloon->show();
 }
 
-// explorer.exe's first-logon tour balloon (strings 821/822), once: its text opens Tour Windows XP.
+namespace {
+// A reminder's balloon: shell32 shows it from a notification icon of its own, which this shell does
+// not add, so its stem is on the notification area's left end.
+BalloonWindow *reminderBalloon(const BalloonTip &tip, const QRect &tray)
+{
+    auto *balloon = new BalloonWindow(tip);
+    balloon->setAttribute(Qt::WA_DeleteOnClose);
+    balloon->place(QRect(tray.x() + 8, tray.top(), 1, 1));
+    QTimer::singleShot(tip.timeout, balloon, &QWidget::close);
+    return balloon;
+}
+}
+
+// Microsoft.FixScreenResolution (strings 811/812, icon explorer.exe,9): XP's check (sub_100e569) compares
+// the display's modes; here a screen under 800 x 600. Its click opens Display Properties' Settings.
+void Taskbar::lowResolutionBalloon(std::function<void()> next)
+{
+    const QSize screen = QGuiApplication::primaryScreen()->geometry().size();
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!explorer || !isVisible() || (screen.width() >= 800 && screen.height() >= 600)) {
+        next();
+        return;
+    }
+    BalloonTip tip;
+    tip.title = xpfiles::string(*explorer, STRING_LOW_RESOLUTION_TITLE);
+    tip.text = xpfiles::string(*explorer, STRING_LOW_RESOLUTION);
+    tip.kind = BalloonTip::Info;
+    tip.timeout = 10000;
+    BalloonWindow *balloon = reminderBalloon(tip, QRect(mapToGlobal(m_trayRect.topLeft() + QPoint(0, m_top)), m_trayRect.size()));
+    connect(balloon, &BalloonWindow::clicked, balloon, [balloon] {
+        balloon->close();
+        DisplayProperties::showTab(DisplayProperties::Settings);
+    });
+    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
+    connect(balloon, &QObject::destroyed, this, [next] { next(); });
+    balloon->show();
+}
+
+// Microsoft.OfferTour (strings 821/822, icon tourstart.exe,0), once: its click runs tourstart.exe.
 void Taskbar::tourBalloon()
 {
     const QString key = QStringLiteral("StartMenu/TourBalloonShown");
@@ -2474,12 +2515,9 @@ void Taskbar::tourBalloon()
     if (tip.title.isEmpty() && tip.text.isEmpty())
         return;
     tip.kind = BalloonTip::Info;
-    tip.timeout = 15000;
-    auto *balloon = new BalloonWindow(tip);
-    balloon->setAttribute(Qt::WA_DeleteOnClose);
-    const QRect start(mapToGlobal(m_startRect.topLeft() + QPoint(0, m_top)), m_startRect.size());
-    balloon->place(QRect(start.center().x(), start.top(), 1, 1));
-    connect(balloon, &BalloonWindow::clicked, balloon, [this, balloon] {
+    tip.timeout = TOUR_SHOW_MS;
+    BalloonWindow *balloon = reminderBalloon(tip, QRect(mapToGlobal(m_trayRect.topLeft() + QPoint(0, m_top)), m_trayRect.size()));
+    connect(balloon, &BalloonWindow::clicked, balloon, [balloon] {
         balloon->close();
         // The tour is an XP program: Wine runs it when it is there, the Start menu's shortcut otherwise.
         const QString tour = xpfiles::find(QStringLiteral("tourstart.exe"));
@@ -2493,7 +2531,7 @@ void Taskbar::tourBalloon()
     balloon->show();
 }
 
-// explorer.exe's first balloon about the chevron (strings 590/591), once, while icons are hidden.
+// explorer.exe's balloon about the chevron (strings 590/591), once, when it is first shown.
 void Taskbar::inactiveIconsBalloon()
 {
     if (!m_settings.hideInactive || m_trayHidden.isEmpty() || !isVisible())
@@ -2511,7 +2549,7 @@ void Taskbar::inactiveIconsBalloon()
     tip.title = xpfiles::string(*explorer, STRING_HIDDEN_BALLOON_TITLE);
     tip.text = xpfiles::string(*explorer, STRING_HIDDEN_BALLOON);
     tip.kind = BalloonTip::Info;
-    tip.timeout = 10000;
+    tip.timeout = HIDDEN_BALLOON_MS;
     tip.sound = false;
     auto *balloon = new BalloonWindow(tip);
     balloon->setAttribute(Qt::WA_DeleteOnClose);
@@ -2522,41 +2560,6 @@ void Taskbar::inactiveIconsBalloon()
         m_trayOpen = true;
         relayout();
         update();
-    });
-    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
-    balloon->show();
-}
-
-// explorer.exe's "New programs installed." (string 8229): once when a desktop entry appears that
-// this shell had not seen before; the first run only records the list.
-void Taskbar::newProgramsBalloon()
-{
-    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"),
-                       QSettings::IniFormat);
-    QStringList ids;
-    for (const programs::Program &program : programs::allPrograms())
-        ids.append(program.id);
-    ids.sort();
-    const QStringList known = settings.value(QStringLiteral("StartMenu/KnownPrograms")).toStringList();
-    settings.setValue(QStringLiteral("StartMenu/KnownPrograms"), ids);
-    if (known.isEmpty() || !isVisible())
-        return;
-    const bool added = std::any_of(ids.cbegin(), ids.cend(), [&known](const QString &id) { return !known.contains(id); });
-    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
-    if (!added || !explorer)
-        return;
-    BalloonTip tip;
-    tip.title = xpfiles::string(*explorer, STRING_NEW_PROGRAMS);
-    tip.text = QObject::tr("Click here to see the new programs.");
-    tip.kind = BalloonTip::Info;
-    tip.timeout = 10000;
-    auto *balloon = new BalloonWindow(tip);
-    balloon->setAttribute(Qt::WA_DeleteOnClose);
-    const QRect start(mapToGlobal(m_startRect.topLeft() + QPoint(0, m_top)), m_startRect.size());
-    balloon->place(QRect(start.center().x(), start.top(), 1, 1));
-    connect(balloon, &BalloonWindow::clicked, balloon, [this, balloon] {
-        balloon->close();
-        showStartMenu(true);
     });
     connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
     balloon->show();
