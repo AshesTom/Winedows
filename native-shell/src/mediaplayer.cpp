@@ -353,6 +353,13 @@ MediaPlayer::MediaPlayer(const QStringList &files)
             item.artist = artist;
         if (const QString album = data.stringValue(QMediaMetaData::AlbumTitle); !album.isEmpty())
             item.album = album;
+        item.genre = data.stringValue(QMediaMetaData::Genre);
+        item.composer = data.stringValue(QMediaMetaData::Composer);
+        item.lyrics = data.stringValue(QMediaMetaData::Comment);
+        item.year = data.value(QMediaMetaData::Date).toDate().year();
+        item.track = data.value(QMediaMetaData::TrackNumber).toInt();
+        item.bitrate = data.value(QMediaMetaData::AudioBitRate).toInt();
+        item.size = QFileInfo(item.url.toLocalFile()).size();
         changedAll(QStringLiteral("player.currentmedia"), {"name"});
         emit fired(QStringLiteral("player"), QStringLiteral("mediachange"),
                    {QVariant::fromValue(wmp::ObjectRef{QStringLiteral("player.currentmedia")})});
@@ -673,8 +680,12 @@ QVariant MediaPlayer::mediaProperty(int index, const QString &name)
         return current && m_player->hasVideo() ? m_frame.width() : 0;
     if (name == QLatin1String("imagesourceheight"))
         return current && m_player->hasVideo() ? m_frame.height() : 0;
+    if (name == QLatin1String("bitrate"))
+        return item.bitrate;
+    if (name == QLatin1String("filesize"))
+        return item.size;
     if (name == QLatin1String("attributecount"))
-        return 4;
+        return 10;
     if (name == QLatin1String("markercount"))
         return 0;
     return {};
@@ -701,14 +712,30 @@ QVariant MediaPlayer::mediaCall(int index, const QString &name, const QVariantLi
             return index == m_current && m_player->hasVideo() ? QStringLiteral("video") : QStringLiteral("audio");
         if (attribute == QLatin1String("filetype"))
             return QFileInfo(item.url.path()).suffix().toLower();
+        if (attribute == QLatin1String("genre") || attribute == QLatin1String("wm/genre"))
+            return item.genre;
+        if (attribute == QLatin1String("year") || attribute == QLatin1String("wm/year"))
+            return item.year;
+        if (attribute == QLatin1String("track") || attribute == QLatin1String("wm/tracknumber"))
+            return item.track;
+        if (attribute == QLatin1String("composer") || attribute == QLatin1String("wm/composer"))
+            return item.composer;
+        if (attribute == QLatin1String("lyrics") || attribute == QLatin1String("wm/lyrics"))
+            return item.lyrics;
+        if (attribute == QLatin1String("bitrate"))
+            return item.bitrate;
+        if (attribute == QLatin1String("filesize"))
+            return item.size;
         return QString();
     }
     if (name == QLatin1String("getattributecountbytype"))
-        return 0;
+        return 10;
     if (name == QLatin1String("getiteminfobytype"))
-        return QString();
+        return mediaCall(index, QStringLiteral("getiteminfo"), arguments);
     if (name == QLatin1String("getattributename"))
-        return QStringList{QStringLiteral("Title"), QStringLiteral("Author"), QStringLiteral("WM/AlbumTitle"), QStringLiteral("Duration")}
+        return QStringList{QStringLiteral("Title"), QStringLiteral("Author"), QStringLiteral("WM/AlbumTitle"), QStringLiteral("Duration"),
+                           QStringLiteral("WM/Genre"), QStringLiteral("WM/Year"), QStringLiteral("WM/TrackNumber"),
+                           QStringLiteral("WM/Composer"), QStringLiteral("WM/Lyrics"), QStringLiteral("Bitrate")}
             .value(arguments.value(0).toInt());
     if (name == QLatin1String("isidentical"))
         return arguments.value(0).value<wmp::ObjectRef>().key == QStringLiteral("media:%1").arg(index);

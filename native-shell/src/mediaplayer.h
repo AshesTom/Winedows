@@ -62,8 +62,9 @@ private:
     struct Item
     {
         QUrl url;
-        QString title, artist, album;
-        qint64 duration = 0;   // ms, once known
+        QString title, artist, album, genre, composer, lyrics;
+        int year = 0, track = 0, bitrate = 0;
+        qint64 size = 0, duration = 0;   // ms, once known
     };
 
     std::optional<wmpskin::Node> skin(const QString &name) const;
