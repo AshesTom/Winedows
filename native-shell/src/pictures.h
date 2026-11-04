@@ -137,7 +137,7 @@ private:
     void toggleAnnotations(bool on);
     void saveAnnotations();
     QPointF inkPoint(QPoint at) const;
-    enum InkTool { InkPen, InkHighlighter, InkEraser, InkLine, InkRectangle, InkEllipse, InkArrow, InkText };
+    enum InkTool { InkPen, InkHighlighter, InkEraser, InkLine, InkRectangle, InkEllipse, InkArrow, InkText, InkStamp };
     void drawInkShape(QPainter &painter, const QPointF &from, const QPointF &to) const;
 
     QStringList m_paths;
@@ -164,6 +164,7 @@ private:
     int m_inkTool = InkPen;
     bool m_inkEraser = false, m_inkDrawing = false;
     QColor m_inkColour = Qt::black;
+    QString m_inkStamp;
     QList<QImage> m_inkUndo;
 };
 

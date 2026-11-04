@@ -579,6 +579,21 @@ Viewer::Viewer(const QString &path)
     addAnnotation(tr("Ellipse"), InkEllipse, Qt::black, 3);
     addAnnotation(tr("Arrow"), InkArrow, Qt::black, 3);
     addAnnotation(tr("Text"), InkText, Qt::black, 3);
+    auto *stamp = new QToolButton(m_annotationBar);
+    stamp->setText(tr("Stamp"));
+    annotationRow->addWidget(stamp);
+    connect(stamp, &QToolButton::clicked, this, [this] {
+        bool ok = false;
+        const QString text = QInputDialog::getItem(this, tr("Stamp"), tr("Stamp:"),
+                                                   {tr("Approved"), tr("Draft"), tr("Reviewed"), tr("Confidential")}, 0, true, &ok);
+        if (ok && !text.isEmpty()) {
+            m_inkTool = InkStamp;
+            m_inkStamp = text;
+            m_inkColour = QColor(200, 0, 0);
+            m_inkWidth = 3;
+            m_inkEraser = false;
+        }
+    });
     auto *undo = new QToolButton(m_annotationBar);
     undo->setText(tr("Undo"));
     annotationRow->addWidget(undo);
@@ -1219,6 +1234,17 @@ void Viewer::mouseReleaseEvent(QMouseEvent *event)
                 painter.setPen(m_inkColour);
                 painter.drawText(m_inkFrom, text);
             }
+        } else if (m_inkTool == InkStamp) {
+            QPainter painter(&m_ink);
+            QFont font(QStringLiteral("Tahoma"));
+            font.setPointSizeF(qMax(9.0, m_inkWidth * 4.0));
+            font.setBold(true);
+            painter.setFont(font);
+            const QFontMetrics metrics(font);
+            const QRect box(QPoint(int(m_inkFrom.x()), int(m_inkFrom.y())), metrics.size(Qt::TextSingleLine, m_inkStamp) + QSize(16, 10));
+            painter.setPen(QPen(m_inkColour, 2));
+            painter.drawRect(box);
+            painter.drawText(box, Qt::AlignCenter, m_inkStamp);
         } else if (m_inkTool != InkPen && m_inkTool != InkHighlighter && m_inkTool != InkEraser) {
             QPainter painter(&m_ink);
             drawInkShape(painter, m_inkFrom, m_inkTo);
