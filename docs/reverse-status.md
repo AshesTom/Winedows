@@ -98,7 +98,7 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Full-screen mode with `FullScreenTopLayout` and `FullScreenBottomLayout` | Partial: the display fills the screen under both layouts, which hide after 3 s unless `pinFullScreenControls`; `fullScreenRequest`, Alt+Enter, Esc and `view.returnToMediaCenter` enter and leave it. The Customize button's full-screen playlist (`showFullScreenPlaylist`) is drawn as a black 300 px pane down the right side, its items white and the playing one green, and a double-click plays one; it is not wmp.dll's own drawing |
 | `theme.openDialog`; additional theme views beyond a plain window | Partial |
 | Options, Properties and Statistics dialogs | Partial: Tools > Options opens a basic sheet (Shuffle, Repeat, Mute, Volume, Visualization, Equalizer..., Statistics...); Properties shows the current item's Title/Artist/Album/Duration/Location, play state and volume. Statistics counts each track's plays and last play from the player's history and can reset them; wmploc.dll's own options pages and counters are not read |
-| Pixel comparison with the real WMP 9 running in Wine | Missing |
+| Pixel comparison with the real WMP 9 running in Wine | Partial: XP's `wmplayer.exe` runs under Wine and shows the same skin, task list and controls; a full pixel diff is not automated, and folders/preferences were not checked side by side |
 
 ---
 
