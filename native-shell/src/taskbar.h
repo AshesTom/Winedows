@@ -146,7 +146,7 @@ private:
 
     QRect m_startRect, m_trayRect, m_clockRect, m_bandRect;
     // The taskband's scrollbar when the buttons do not fit at their least width (explorer.exe's
-    // _CheckNeedScrollbars: a vertical scrollbar at the band's right, one toolbar row a page)
+    // sub_102de3e: a vertical scrollbar at the band's right, one toolbar row a page)
     QRect m_scrollRect, m_scrollUp, m_scrollDown;
     int m_scrollPage = 0, m_scrollPages = 1, m_scrollColumns = 1;
     QTimer m_scrollRepeat;

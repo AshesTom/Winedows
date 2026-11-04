@@ -73,7 +73,7 @@ const int TASK_MAX_WIDTH = 160, EDGE = 2, GROUP_CHARS = 8, BAND_END = 3;
 const double TASK_MIN_FACTOR = 1.8;
 const int CLASSIC_SPACING = 3;      // TB_SETMETRICS' cxButtonSpacing without a visual style; 0 with one
 const int TASK_ICON_X = 10, TASK_ICON_Y = 7, TASK_TEXT_GAP = 3, TASK_TEXT_END = 7;
-const int GROUP_ARROW_WIDTH = 13, GROUP_ARROW_GAP = 4;   // SM_CYMENUCHECK, the toolbar's dxDDArrowChar
+const int GROUP_ARROW_WIDTH = 13, GROUP_ARROW_GAP = 4;   // not measured on XP (it never groups under Wine)
 // explorer.exe's menus: the taskbar's (205) and a group's (210), their commands, and Undo's words
 const int MENU_TASKBAR = 205, MENU_GROUP = 210;
 // browselc.dll's band site menu (Toolbars) and its Quick Launch
@@ -163,7 +163,7 @@ const Part CLOCK{QStringLiteral("clock"), {}, {}, 0, QStringLiteral("traynotify"
 const Part GROUP_COUNT{QStringLiteral("taskband"), QStringLiteral("groupcount"), {}, 0, {}};
 const Part GROUP_LIST{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("taskbandgroupmenu")};
 const Part GROUP_LIST_ITEM{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 2, QStringLiteral("taskbandgroupmenu")};
-// explorer.exe's _CheckNeedScrollbars: a vertical scrollbar at the band's right when the buttons do
+// explorer.exe's sub_102de3e: a vertical scrollbar at the band's right when the buttons do
 // not fit at their least width; its parts are the style's TaskBand::Scrollbar (SBP_ARROWBTN's 16
 // states: up 1-4, down 5-8, left 9-12, right 13-16).
 const int SCROLL_WIDTH = 17, CLASSIC_SCROLL_WIDTH = 16;
@@ -925,7 +925,7 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
             for (int i : windows)
                 m_buttons.append({{i}, false, {}});
     }
-    // The taskband's scrollbar, as _CheckNeedScrollbars computes it: when the buttons do not fit at
+    // The taskband's scrollbar, as sub_102de3e computes it: when the buttons do not fit at
     // their least width, reserve SM_CXVSCROLL at the band's right and show one toolbar row (a page) at
     // a time; the scrollbar's arrows move to the next page.
     const int step = width + spacing;
@@ -1080,8 +1080,8 @@ void Taskbar::drawButton(QPainter &painter, int index)
         painter.setPen(renderer ? renderer->colour(GROUP_COUNT, QStringLiteral("textcolor")).value_or(QColor(255, 204, 109)) : text);
         painter.drawText(countRect, Qt::AlignCenter | Qt::TextSingleLine, count);
         textX = countRect.right() + 1;
-        // comctl32's dropdown arrow: DrawScrollArrow in a dxDDArrowChar-wide (SM_CYMENUCHECK) rect at
-        // the button's right, in Marlett (pager.cpp: DrawCharButton).
+        // The drop-down arrow: Marlett's '6' in a 13-pixel rect at the button's right (not checked against
+        // XP, whose explorer never groups under Wine).
         const int arrowWidth = theme()->scaled(GROUP_ARROW_WIDTH);
         const QRect arrowRect(textEnd - arrowWidth + 1 + down, rect.y() + textRaise, arrowWidth, rect.height() - textRaise);
         QFont glyphs(QStringLiteral("Marlett"));
@@ -1167,7 +1167,7 @@ void Taskbar::drawTray(QPainter &painter)
         if (!m_trayIconRects[i].isNull())
             painter.drawImage(m_trayIconRects[i], icons[i].image);
     // Win+B: the icon with the keyboard has the toolbar's focus rectangle, DrawFocusRect on the
-    // button's own 18-pixel rect (traynot.cpp's custom draw).
+    // button's own 18-pixel rect (not measured against XP).
     if (m_keyboard && m_hover.kind == Hit::TrayIcon && m_hover.index < m_trayIconRects.size()) {
         const QRect focus = m_trayIconRects[m_hover.index];
         painter.save();
@@ -1409,7 +1409,7 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
 {
     leaveKeyboard();
     const Hit hit = hitAt(event->position().toPoint());
-    // The open chevron closes on a click elsewhere on the bar (traynot.cpp's chevron state).
+    // The open chevron closes on a click elsewhere on the bar (not checked against XP).
     if (m_trayOpen && hit.kind != Hit::TrayIcon && hit.kind != Hit::Chevron && hit.kind != Hit::Clock) {
         m_trayOpen = false;
         relayout();
@@ -2017,7 +2017,7 @@ void Taskbar::addBandItems(QMenu *menu, const w4w::PeResources &browselc)
         items.append(showTitle);
     if (QAction *closeToolbar = close.value(CMD_CLOSE_TOOLBAR))
         items.append(closeToolbar);
-    // View: Logos is the Links band's; Large Icons is the band's 24-pixel pictures (itbar.cpp).
+    // View: Logos is the Links band's; Large Icons shows the 32-pixel icons (measured on XP's taskbar).
     if (QAction *logos = isf.value(CMD_VIEW_LOGOS); logos && logos->parentWidget())
         logos->parentWidget()->removeAction(logos);
     auto *sizes = new QActionGroup(menu);
@@ -2358,7 +2358,7 @@ void Taskbar::keyboardStep(Hit::Kind kind, int step)
     } else {
         next = at < 0 ? (step > 0 ? 0 : items.size() - 1) : (at + step + items.size()) % items.size();
     }
-    // _ScrollIntoView: a button on another page brings its page in first.
+    // The keys reaching a button on another page bring its page in first.
     if (kind == Hit::Task && !m_scrollRect.isNull() && m_scrollColumns > 0) {
         const int page = items[next] / m_scrollColumns;
         if (page != m_scrollPage) {

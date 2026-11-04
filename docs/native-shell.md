@@ -265,14 +265,8 @@ no kerning and monochrome glyphs at every UI size, including large headings.
 The themed Start button alone uses grayscale antialiasing for its Franklin
 Gothic label. Other text stays monochrome; subpixel antialiasing is disabled.
 
-XP source references (under `Source/XPSP1/NT` in the reference checkout):
-- `windows/core/ntgdi/gre/lfntobj.cxx`, around line 191: `FE_AA_ON` and the
-  requested quality gate `FO_GRAY16`; `NONANTIALIASED_QUALITY` excludes smoothing.
-- `windows/core/ntuser/kernel/rare.c`, around line 1924: `SPI_SETFONTSMOOTHING`
-  toggles `FE_AA_ON` independently of the smoothing type.
-- `shell/cpls/plus/store.cpp`, around line 390: the Effects dialog saves the
-  smoothing type and its enabled state separately. Standard smoothing and
-  smoothing disabled are different settings.
+Display Properties' Effects keeps font smoothing on or off apart from its type (Standard or ClearType):
+smoothing off and Standard smoothing are different settings.
 
 Appearance's Normal, Large and Extra Large sizes supply menu, message, status
 and desktop icon fonts. The Start panel grows for larger labels. Registry
