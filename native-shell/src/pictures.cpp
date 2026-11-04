@@ -445,7 +445,9 @@ enum {
     // the arrows (as table 50 calls them): the pictures, or the picture's parts when it is bigger
     VIEW_LEFT = 554, VIEW_RIGHT = 555, VIEW_UP = 556, VIEW_DOWN = 557,
 };
-const double ZOOM_STEP = 1.2, ZOOM_MOST = 16;
+// Zoom In multiplies the shown size by 1.2 (0x5cb03fa8), up to 16 times the picture; Zoom Out by 0.833
+// (0x5cb03fb0), and once the picture fits both the window and its own size, back to Best Fit.
+const double ZOOM_IN = 1.2, ZOOM_OUT = 0.833, ZOOM_MOST = 16;
 const int ACCELERATORS = 50, STRING_TITLE = 200, STRING_COPY_TO = 222;
 
 } // namespace
@@ -581,10 +583,12 @@ void Viewer::command(int id)
         setScale(1);
         break;
     case VIEW_ZOOM_IN:
-        setScale(m_scale * ZOOM_STEP);
+        m_clickZoomsOut = false;
+        zoomIn();
         break;
     case VIEW_ZOOM_OUT:
-        setScale(m_scale / ZOOM_STEP);
+        m_clickZoomsOut = true;
+        zoomOut();
         break;
     case VIEW_SLIDES:
         SlideShow::start(m_paths, m_index);
@@ -635,6 +639,36 @@ void Viewer::command(int id)
     }
 }
 
+void Viewer::zoomIn()
+{
+    setScale(qMin(m_scale * ZOOM_IN, ZOOM_MOST));
+}
+
+void Viewer::zoomOut()
+{
+    const QSize shown = (QSizeF(m_image.size()) * m_scale).toSize();
+    const QSize room(width(), height() - m_toolbar->height() - 4);
+    if (shown.width() <= qMin(room.width(), m_image.width()) && shown.height() <= qMin(room.height(), m_image.height())) {
+        command(VIEW_BEST_FIT);
+        return;
+    }
+    setScale(m_scale * ZOOM_OUT);
+}
+
+void Viewer::zoomAt(QPoint at, bool in)
+{
+    // the zoom window's click (0x5cb21e16): the picture's point under the mouse comes to the middle
+    const QRect rect = imageRect();
+    if (rect.width() > 0 && rect.height() > 0) {
+        const QPointF picture((at.x() - rect.x()) / m_scale, (at.y() - rect.y()) / m_scale);
+        in ? zoomIn() : zoomOut();
+        m_offset = (QPointF(m_image.width() / 2.0, m_image.height() / 2.0) - picture) * m_scale;
+        if (m_bestFit)
+            m_offset = {};
+        update();
+    }
+}
+
 void Viewer::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -670,13 +704,19 @@ void Viewer::keyPressEvent(QKeyEvent *event)
 
 void Viewer::mousePressEvent(QMouseEvent *event)
 {
+    // Ctrl or the middle button moves the picture; a click zooms, Shift the other way round
     m_dragFrom = event->position().toPoint();
+    m_panning = event->button() == Qt::MiddleButton || (event->modifiers() & Qt::ControlModifier);
+    if (m_panning || event->button() != Qt::LeftButton || !imageRect().contains(m_dragFrom))
+        return;
+    const bool shift = event->modifiers() & Qt::ShiftModifier;
+    zoomAt(m_dragFrom, shift == m_clickZoomsOut);
 }
 
 void Viewer::mouseMoveEvent(QMouseEvent *event)
 {
     // a picture bigger than the window follows the mouse
-    if (!(event->buttons() & Qt::LeftButton))
+    if (!m_panning || !(event->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
         return;
     const QPoint at = event->position().toPoint();
     m_offset += at - m_dragFrom;
@@ -686,7 +726,11 @@ void Viewer::mouseMoveEvent(QMouseEvent *event)
 
 void Viewer::wheelEvent(QWheelEvent *event)
 {
-    command(event->angleDelta().y() > 0 ? VIEW_PREVIOUS : VIEW_NEXT);
+    // the zoom window's wheel (0x5cb21d34): up zooms in, down out
+    if (event->angleDelta().y() > 0)
+        zoomIn();
+    else if (event->angleDelta().y() < 0)
+        zoomOut();
 }
 
 } // namespace pictures

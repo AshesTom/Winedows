@@ -15,6 +15,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QProcess>
@@ -1210,6 +1211,15 @@ void MediaPlayer::setPreference(const QString &name, const QString &value)
 bool MediaPlayer::eventFilter(QObject *watched, QEvent *event)
 {
     const bool ours = watched == m_window || (m_skinWindow && watched == m_skinWindow);
+    // wmploc.dll's keys: accelerator table 102 in full mode, 4002 in skin mode
+    if (ours && event->type() == QEvent::KeyPress && m_loc) {
+        static const QList<xpprogram::Accelerator> full = xpprogram::accelerators(*m_loc, QStringLiteral("102")),
+                                                   skinned = xpprogram::accelerators(*m_loc, QStringLiteral("4002"));
+        if (const int id = xpprogram::command(watched == m_window ? full : skinned, static_cast<QKeyEvent *>(event))) {
+            command(id);
+            return true;
+        }
+    }
     if (ours && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
         auto *drag = static_cast<QDragMoveEvent *>(event);
         if (drag->mimeData()->hasUrls()) {

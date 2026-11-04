@@ -1216,7 +1216,7 @@ QImage SkinView::imageOf(const Element *element, const QString &name) const
         for (const Element *child : element->children)
             if (child->tag == QLatin1String("buttonelement") && (key = toColor(property(child, QStringLiteral("transparencycolor")))).isValid())
                 break;
-    // "auto", a button's default: wmploc.dll's pictures have magenta where they are not
+    // "auto", which buttons and buttongroups start with
     const QString keyText = property(element, QStringLiteral("transparencycolor")).toString().trimmed().toLower();
     const bool automatic = keyText == QLatin1String("auto")
         || (keyText.isEmpty() && !key.isValid() && (element->tag == QLatin1String("button") || element->tag == QLatin1String("buttongroup")));
@@ -1227,8 +1227,10 @@ QImage SkinView::imageOf(const Element *element, const QString &name) const
     if (it != cache.constEnd())
         return *it;
     const QImage source = m_model->image(url, m_folder);
-    if (automatic && !mapping && !source.isNull() && (source.pixel(0, 0) & 0xffffff) == 0xff00ff)
-        key = QColor(0xff, 0, 0xff);
+    // "auto" is the picture's top-left pixel, whatever its colour (0x4b60df5f reads it with the DIB's
+    // GetPixel, 0x4b61b905)
+    if (automatic && !mapping && !source.isNull())
+        key = QColor::fromRgb(source.pixel(0, 0));
     const QImage result = mapping ? source : prepared(source, key, hue, saturation);
     cache.insert(id, result);
     return result;
@@ -1436,8 +1438,17 @@ void SkinView::paintSlider(QPainter &painter, Element *element, const QRect &rec
     const double value = toDouble(property(element, QStringLiteral("value")));
     const double fraction = max > min ? qBound(0.0, (value - min) / (max - min), 1.0) : 0;
     if (element->tag == QLatin1String("customslider")) {
-        // positionImage's colours give each value its place in image; the drawn one is the image
-        drawImage(painter, rect, imageOf(element, m_hover == element ? QStringLiteral("hoverimage") : QStringLiteral("image")), false, false);
+        // image is a strip of the slider at each of its values, as wide as the element each (Pyrite's
+        // volume: 399 pixels, 21 of 19); the value picks the one shown
+        QImage strip = imageOf(element, m_pressed == element ? QStringLiteral("downimage")
+                                        : m_hover == element ? QStringLiteral("hoverimage") : QStringLiteral("image"));
+        if (strip.isNull())
+            strip = imageOf(element, QStringLiteral("image"));
+        if (!enabled(element) && !imageOf(element, QStringLiteral("disabledimage")).isNull())
+            strip = imageOf(element, QStringLiteral("disabledimage"));
+        const int frames = rect.width() > 0 ? qMax(1, strip.width() / rect.width()) : 1;
+        const int frame = qBound(0, int(std::lround(fraction * (frames - 1))), frames - 1);
+        painter.drawImage(rect.topLeft(), strip, QRect(frame * rect.width(), 0, rect.width(), rect.height()));
         return;
     }
     const bool vertical = property(element, QStringLiteral("direction")).toString().toLower() == QLatin1String("vertical");
@@ -1732,6 +1743,9 @@ void SkinView::mouseReleaseEvent(QMouseEvent *event)
     int button = -1;
     Element *target = hit(m_view, event->position().toPoint(), QPoint(), &button);
     fireMouse(pressed, QStringLiteral("onmouseup"), event);
+    // a slider's ondragend: the skins' seek bars move the player only then (Revert, Splat)
+    if (pressed->tag == QLatin1String("slider") || pressed->tag == QLatin1String("customslider"))
+        runHandler(keyOf(pressed), QStringLiteral("ondragend"));
     if (target == pressed && button == pressedButton && event->button() == Qt::LeftButton && enabled(pressed)) {
         if (pressed->tag == QLatin1String("buttongroup")) {
             int index = 0;
@@ -1799,6 +1813,26 @@ void SkinView::dragSlider(Element *slider, const QPoint &point)
 {
     const QRect rect = rectOf(slider);
     const double min = toDouble(property(slider, QStringLiteral("min"))), max = toDouble(property(slider, QStringLiteral("max")), 100);
+    if (slider->tag == QLatin1String("customslider")) {
+        // positionImage: a grey map of the element, black the least value and white the most; its
+        // other colours are not the slider's
+        const QImage map = m_model->image(property(slider, QStringLiteral("positionimage")).toString(), m_folder);
+        const QPoint at = point - rect.topLeft();
+        if (map.isNull() || !QRect(QPoint(), map.size()).contains(at))
+            return;
+        const QRgb pixel = map.pixel(at);
+        if (qRed(pixel) != qGreen(pixel) || qGreen(pixel) != qBlue(pixel))
+            return;
+        const double value = min + qRed(pixel) / 255.0 * (max - min);
+        setProperty(slider, QStringLiteral("value"), value);
+        for (const auto &binding : std::as_const(m_bindings))
+            if (binding->element == slider && binding->name == QLatin1String("value") && !binding->mode) {
+                m_js.globalObject().setProperty(QStringLiteral("__value"), value);
+                evaluate(binding->expression + QStringLiteral(" = __value"), keyOf(slider));
+            }
+        runHandler(keyOf(slider), QStringLiteral("onchange"));
+        return;
+    }
     const bool vertical = property(slider, QStringLiteral("direction")).toString().toLower() == QLatin1String("vertical");
     const QImage thumb = imageOf(slider, QStringLiteral("thumbimage"));
     double fraction;

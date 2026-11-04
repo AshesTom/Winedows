@@ -96,8 +96,9 @@ private:
 
 // Windows Picture and Fax Viewer: a picture in a window of its own, the folder's others a key away,
 // with shimgvw.dll's toolbar (its TBBUTTON table: the buttons it shows for a picture, its strip 105, its
-// commands, which are its tooltips' strings), its keys (accelerator table 50) and its zoom (1.2 a step,
-// as its Zoom In multiplies, up to 16 times the picture's size).
+// commands, which are its tooltips' strings), its keys (accelerator table 50) and its zoom window's ways:
+// Zoom In ×1.2 up to 16 times the picture, Zoom Out ×0.833 back to Best Fit, the wheel zooming, a click
+// zooming about its point (Shift the other way), Ctrl or the middle button moving the picture.
 class Viewer : public QWidget
 {
 public:
@@ -116,6 +117,9 @@ private:
     void show(int index);
     void command(int id);
     void setScale(double scale);
+    void zoomIn();
+    void zoomOut();
+    void zoomAt(QPoint at, bool in);
     double fitScale() const;
     QRect imageRect() const;
     void updateTitle();
@@ -127,6 +131,8 @@ private:
     bool m_bestFit = true;
     QPointF m_offset;      // the picture's middle from the view's, while it is bigger than the view
     QPoint m_dragFrom;
+    bool m_panning = false;
+    bool m_clickZoomsOut = false;   // after Zoom Out, a click zooms out (the zoom window's mode 2)
     QWidget *m_toolbar = nullptr;
     QHash<int, QWidget *> m_buttons;
 };
