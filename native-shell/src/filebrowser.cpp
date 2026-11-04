@@ -71,6 +71,7 @@
 #include <QScrollArea>
 #include <QSortFilterProxyModel>
 #include <QSettings>
+#include <QSysInfo>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardItemModel>
@@ -2641,6 +2642,28 @@ void FileBrowser::customizeFolder()
     dialog.exec();
 }
 
+// My Computer's Manage: the desktop's system monitor when it has one, otherwise a summary sheet.
+void FileBrowser::manageComputer()
+{
+    for (const char *name : {"plasma-systemmonitor", "gnome-system-monitor", "ksysguard", "xfce4-taskmanager"})
+        if (const QString monitor = QStandardPaths::findExecutable(QLatin1String(name)); !monitor.isEmpty()) {
+            QProcess::startDetached(monitor, {});
+            return;
+        }
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Computer Management"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("System: %1").arg(QSysInfo::prettyProductName()), &dialog));
+    layout->addWidget(new QLabel(tr("Machine: %1").arg(QSysInfo::machineHostName()), &dialog));
+    for (const QStorageInfo &disk : QStorageInfo::mountedVolumes())
+        if (disk.isValid() && disk.isReady() && !disk.isReadOnly())
+            layout->addWidget(new QLabel(tr("%1: %2 free of %3").arg(disk.rootPath(), xpSize(disk.bytesAvailable()), xpSize(disk.bytesTotal())), &dialog));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.exec();
+}
+
 void FileBrowser::activate(const QModelIndex &index)
 {
     if (index.model() == m_virtual || index.model() == m_virtualFilter) {
@@ -2709,6 +2732,7 @@ void FileBrowser::updatePane()
             {xpfiles::shellString(STRING_SYSTEM_INFO, "View system information"), fileicons::shell(fileicons::SystemInfo), [] { controlpanel::open(QStringLiteral("system")); }},
             {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::AddRemove), [] { controlpanel::open(QStringLiteral("programs")); }},
             {xpfiles::shellString(STRING_CHANGE, "Change a setting"), fileicons::shell(fileicons::ControlPanel), [this] { navigate(places::ControlPanel); }},
+            {tr("Manage"), fileicons::shell(fileicons::Computer), [this] { manageComputer(); }},
         }});
         others.tasks = {place(documents), place(places::ControlPanel)};
         details.tasks = {{places::title(places::Computer), {}, {}, true}, {tr("System Folder"), {}, {}}};
@@ -2987,6 +3011,7 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
             menu->addAction(tr("P&roperties"), this, &FileBrowser::recycleBinProperties);
         if (m_location == places::Computer) {
             menu->addSeparator();
+            menu->addAction(tr("&Manage"), this, &FileBrowser::manageComputer);
             menu->addAction(tr("P&roperties"), this, [] { controlpanel::open(QStringLiteral("system")); });
         }
     }

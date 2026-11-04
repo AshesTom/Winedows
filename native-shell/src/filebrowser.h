@@ -120,6 +120,7 @@ private:
     void showProperties();
     void recycleBinProperties();
     void customizeFolder();
+    void manageComputer();
     void moveOrCopyTo(bool move);
     void startSearch(const SearchQuery &query);
     void continueSearch();
