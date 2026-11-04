@@ -2,8 +2,9 @@
 
 This document tracks the parts of the native shell that were reverse-engineered from Windows XP's own
 binaries and ported: Windows Media Player 9, Taskbar and Start Menu Properties, shell32's shortcut
-menus (folder windows and the desktop), Windows Picture and Fax Viewer, and the frame manager's handling
-of undecorated windows. For each component it records:
+menus (folder windows and the desktop), Windows Picture and Fax Viewer, the frame manager's handling
+of undecorated windows, the taskband and its menus, the Start panel's keys, the notification area and
+the folder windows' bands, the caption animation (`win32k.sys`), desktop icons and file Properties. For each component it records:
 
 - what was recovered from XP's files, and from where (function, address, resource or string ID);
 - what the port implements;
@@ -221,3 +222,134 @@ Port: [`frames.cpp`](../native-shell/src/frames.cpp).
 | Item | Status |
 |---|---|
 | Windows that ask for no decorations (`_MOTIF_WM_HINTS`) get no frame, matching bridge-wm | Done (checked in the native session with Windows Media Player) |
+
+---
+
+## 6. The taskband: task buttons, grouping and the taskbar's menus
+
+Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/src/taskbar.cpp),
+[`windowlist.cpp`](../native-shell/src/windowlist.cpp), [`arrange.cpp`](../native-shell/src/arrange.cpp),
+`bridge-wm/wm.py`. Committed in `5ca90ee`.
+
+### Recovered
+
+| Item | Source | Status |
+|---|---|---|
+| Grouping settings: `TaskbarGlomming` (on unless 0, or SHRestricted `NoTaskGrouping` 0x40000056) at taskband `+0x34`, `TaskbarGroupSize` at `+0x38` | `sub_1015ddf` | Done for the default (`TaskbarGroupSize` 0) |
+| Button width: the band over the visible buttons (less `cxButtonSpacing` with more than one), at most SM_CXMINIMIZED; `TB_SETBUTTONWIDTH` | `sub_1004e4c`, `sub_1004fe2`; globals filled by `sub_101a001` (SM_CYSIZE `+0xbc`, SM_CXEDGE `+0xc0`, SM_CXMINIMIZED `+0xc4`) | Done |
+| Least width: `_ftol((SM_CYSIZE + 2 SM_CXEDGE) x 1.8)` (constant at `0x1004c88`) plus `8 x tmAveCharWidth` of the toolbar's font while grouping is on (`+0x70`, `0x1009f61`) | `sub_10049a7`, `sub_1004f6b` | Done (92 px with Luna) |
+| Which program groups: the one with two windows or more whose most recent window was chosen least recently (`sub_102eae3`: the maximum of the items' `+0xc`); ungrouping when two more buttons fit, the most recent group with fewer windows than that | `sub_10050ec`, branch `0x1023dc8` | Done; modes 1 (most windows) and 2+ (at least N windows) are not ported |
+| "Chosen": an item's `+0xc` is set at creation and before `SwitchToThisWindow` only, not on every activation | `sub_1005cf7`, `sub_102e07c` | Done |
+| Metrics: `cxButtonSpacing` 0 and `cxPad` 20 with a style, 3 and 8 without (`TB_SETMETRICS`) | `sub_10163ba` | Done |
+| Group button: the count centred in a gap as wide as the count with a "0" more, in `TaskBand.GroupCount` (Tahoma 8 bold, 255 204 109), `DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX`; the text moved by `iListGap` | `sub_102ee02`, custom draw at `0x1023a91` and `0x1023b4a` | Done |
+| Group list in `TaskBandGroupMenu` (menu band) | `sub_102eee0`; `luna.msstyles` | Partial: rows from the style's margins, not measured |
+| Menu 210 (Cascade, Tile Horizontally, Tile Vertically, Minimize Group, Close Group) | `explorer.exe` MENUEX resource | Done |
+| Menu 205 prepared as `sub_10331c8` does: Adjust Date/Time and Customize Notifications only on the notification area, "&Undo %s" (534 with 535 Cascade / 536 Tile), Show Open Windows (850), Cascade and Tile greyed without windows | `sub_10331c8` | Done |
+| Cascade and Tile: user32's `CascadeWindows` (`sub_30054e2e`, position `sub_3002fae3`) and `TileWindows` (`sub_30055060`) | `user32.dll` | Done |
+| Band end 3 px before the notification area | XP's taskbar in Wine (5, 7, 11, 12 buttons) | Done |
+| Group names: the program file's `FileDescription` | `sub_1005cf7` (each `rundll32.exe` window on its own) | Done, by WM_CLASS here |
+
+### Missing
+
+| Original feature | Status |
+|---|---|
+| `TaskbarGroupSize` 1 and 2+ | Missing |
+| The taskband's extra rows and scroll arrows when buttons do not fit even grouped | Missing (extra buttons are not shown) |
+| Group visuals checked against XP | Not possible in Wine: XP's explorer never groups there (no exe path for a window) |
+| The drop-down arrow of a group button | Partial: drawn as a 5 x 3 triangle, not measured |
+
+---
+
+## 7. The Start panel's keyboard, selection and infotips
+
+Binary: `explorer.exe`. Port: [`startmenu.cpp`](../native-shell/src/startmenu.cpp). Committed in `5ca90ee`.
+
+### Recovered
+
+| Item | Source | Status |
+|---|---|---|
+| Arrow routing between panes (`GetNextDlgGroupItem`, the pane whose rectangle holds the item's height, the nearest item; Left/Right swapped right-to-left) | `DV2ControlHost`, `sub_103ea34` | Done |
+| `Start_MinMFU` 6 by default, policy 0x40000069 | `sub_1008c35` | Read; the ranking itself is not ported |
+| Keys watched on XP's own panel in Wine: nothing selected at opening, Down first / Up last, panes in a ring, letters by access key or first letter, Right into a cascade with its first entry, Left and Escape close it | XP's explorer in Wine, captured after each key | Done |
+| Access-key names (8236 My Recent Documents, 8234 Control Panel, 7020–7023, 730, 731) underlined only when the keys opened the panel | `explorer.exe` strings; XP in Wine | Done |
+| Selection in COLOR_HIGHLIGHT (not HotTracking), its rectangles; infotips (300–307, 7000–7005, 7015, 7016) and their places | XP in Wine, pixel-measured | Done: identical pixels |
+
+### Missing
+
+| Original feature | Status |
+|---|---|
+| The MFU ranking (UserAssist counts and their decay in `shell32.dll`) | Missing: the shell counts its own launches |
+| The infotip's own drawing (pale gradient, 6 px margin) | Missing: Qt's tooltip, 2 px margin |
+
+---
+
+## 8. Notification area, clock and the folder windows' bands
+
+Binaries: `explorer.exe`, `shell32.dll`, `comctl32.dll` 6.0, `luna.msstyles`. Port: [`taskbar.cpp`](../native-shell/src/taskbar.cpp),
+[`filebrowser.cpp`](../native-shell/src/filebrowser.cpp), [`taskpane.cpp`](../native-shell/src/taskpane.cpp),
+`qt-style/src/xpstyle.cpp`. Committed in `34bae1a`, `32bc7ae`, `5cb3d16`.
+
+### Recovered
+
+| Item | Source | Status |
+|---|---|---|
+| Clock width: the longer of 11:00 and 23:00 in the user's format with "00" (`0x101dd5c`) appended, measured with `GetThemeTextExtent`; the time centred | `sub_101e19c`, `sub_101df4f`, `sub_102029b` | Done (+1 px for uxtheme's extent) |
+| Tray layout: the style's content margins (19, 7), 18-pixel buttons, icons 1 inside | `luna.msstyles`; XP in Wine (4 and 5 icons) | Done |
+| Details columns: shell32's column tables (width in characters x the font's "0", LVCFMT_RIGHT) for folders, My Computer, Control Panel, search results | `shell32.dll` data tables (Name 30, Size 16 right, Type 20, Date Modified 20…) | Done: 180/96/120/120 px as XP |
+| Details header: 20 tall, words 12 in (right-aligned ending 7 in), sort arrow a 9 x 5 BtnShadow triangle 9 after the words | XP in Wine | Done: identical pixels (qt-style, every Qt program) |
+| Menu band: shell32's menu band is a comctl32 toolbar of text-only buttons (words + 16, 19 tall, 2 under the band's top, first 2 in) | XP in Wine | Done: identical pixels, hot item included |
+| "Address" in Rebar TextColor (127 124 115) | `luna.msstyles` | Done |
+| Task pane: `rcbmp(112/110, 6, …)` nine-grid over the 25-row header, the header's border of 2, title 13 in, arrow 2 from the right, words 7 after the icon; File and Folder Tasks ordinary, Details collapsed | shell style `blue_ss.dll`'s sheet; XP in Wine | Done: first section identical |
+
+### Missing
+
+| Original feature | Status |
+|---|---|
+| Task pane entries XP adds: Publish this folder to the Web, Local Disk / Documents / My Network Places in Other Places | Missing |
+| The caption under XP's own uxtheme | Not comparable in Wine (Wine draws it) |
+| The toolbar band's remaining differences | Wine's text rendering in the capture; not addressed |
+
+---
+
+## 9. Minimize, maximize and restore animation
+
+Binaries: `user32.dll` (only a system call, 0x1168), `win32k.sys` (extracted from the ISO's `WIN32K.SY_`). Port:
+[`captionanimation.cpp`](../native-shell/src/captionanimation.cpp). Committed in `c6d01ae`.
+
+| Item | Source | Status |
+|---|---|---|
+| Service table entry 0x168 (table at `0xbf999b80`, registered by `KeAddSystemServiceTable` in `entry`) | `win32k.sys` | Done |
+| `xxxDrawAnimatedRects` (`0xbf8cd733`, worker `0xbf8cd7ec`): frames while under 251 ms (`0xfb`) have passed, a 1 ms `KeDelayExecutionThread` (`0xbf855bfe`) between them, each value `start + (elapsed x change + 125) / 250`, the strip removed at the end | REA Ghidra decompilation | Done |
+| The strip: SM_CYCAPTION − 1 tall, the window's borders left out, DrawCaptionTemp's gradient, icon 2 in, title 2 after | Earlier work (`977d5ab`) | Done |
+
+---
+
+## 10. Desktop icons and Customize Desktop
+
+Binary: `shell32.dll`. Port: [`desktopicons.cpp`](../native-shell/src/desktopicons.cpp),
+[`displayproperties.cpp`](../native-shell/src/displayproperties.cpp). **Not committed**: these files are shared
+with the shortcut-menu work of section 3, still in progress in the tree.
+
+| Item | Source | Status |
+|---|---|---|
+| Desktop Items: My Documents (9227, icon 235), My Computer (9216, 16), My Network Places (9217, 18), Internet Explorer (9222; the default browser here), hidden by default | `shell32.dll` | Done, saved in `native-explorer.conf` `[desktop]` |
+| Customize Desktop: the Desktop Items sheet (string 30371), General (dialog 29953) and Web (29954); its check boxes are `BS_3STATE` | `shell32.dll` | Partial: the four check boxes work; the icon list is shown; Change Icon, Restore Default, the cleanup wizard and the Web page are greyed |
+| Icon spacing | comctl32 v6 uses SM_CXICONSPACING / SM_CYICONSPACING (`sub_30006d74`, `sub_3004487f`); the prefix says 75 x 75 | Partial: 75 px kept; XP in Wine showed 82 vertically, not explained |
+| Recycle Bin's corner place | XP in Wine (10 px left, 7 px higher than the native) | Missing |
+
+---
+
+## 11. File and folder Properties
+
+Binary: `shell32.dll`. Port: [`fileproperties.cpp`](../native-shell/src/fileproperties.cpp). **Not committed** (wired
+through `filebrowser.cpp` and `desktopicons.cpp`, see section 10).
+
+| Item | Source | Status |
+|---|---|---|
+| General page: dialog 1041 (a file), 1044 (a folder), 1042 (several items), filled with shell32's words (4113, 4118 sizes; 8705 Multiple Types; 8706 All in; 8711 Files, Folders; 28956 Unknown application) | `shell32.dll` | Done |
+| Opens with (the default application), Size on disk (allocated blocks), dates as GetDateFormat's long date and the time | XP in Wine | Done |
+| Read-only (write permissions) and renaming, applied by OK and Apply; Hidden (a leading dot) and Archive greyed, Advanced hidden | — | Done |
+| Version page: dialog 1043, `VS_VERSIONINFO` read from the file, the item names 8752–8765 sorted, Language as VerLanguageName | `shell32.dll` | Done |
+| Etched separators (`SS_ETCHEDHORZ`) | dialog 1041 | Missing: not drawn by the dialog builder |
+| The sheet's size and caption | XP in Wine: 58 px taller; no caption icon | Missing |
+| Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Missing (drives keep the earlier hand-made page) |
