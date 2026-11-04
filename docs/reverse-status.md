@@ -286,7 +286,7 @@ Binary: `explorer.exe`. Port: [`startmenu.cpp`](../native-shell/src/startmenu.cp
 | Original feature | Status |
 |---|---|
 | The MFU ranking (UserAssist counts and their decay in `shell32.dll`) | Missing: the shell counts its own launches |
-| The infotip's own drawing (pale gradient, 6 px margin) | Missing: Qt's tooltip, 2 px margin |
+| The infotip's own drawing (pale gradient, 6 px margin) | Done: a `QLabel` tooltip window with XP's pale gradient, a 1-pixel border and 6-pixel padding, placed at the item's words and under the selection (`StartPanel::showInfoTip`), instead of Qt's 2-pixel tooltip; the menus' shadow gives it XP's drop shadow |
 
 ---
 
@@ -413,7 +413,6 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Start menu | "Some items cannot be shown" when the panel is too small (8231, 8232); the panel's size values 8256–8260 | Strings |
 | Start menu | The Customize dialogs (1311; dialogs 9, 1036, 1135) | Dialogs |
 | Start menu | Help and Support (`helpctr.exe -FromStartHelp`, 732) | String 732 |
-| Start menu | The infotip's own drawing | Section 7 |
 | Session | Safe mode notice (538, 539); "could not load or run" for the Run key's programs (515) | Strings |
 | Menus | Drop shadows under menus, tooltips and the Start menu: win32k's xxxAddShadow (`sub_bf854347`) puts a layered SysShadow window (WS_EX_LAYERED, TRANSPARENT, TOOLWINDOW; TOPMOST with a topmost owner) behind a CS_DROPSHADOW window when SPI_GETDROPSHADOW is on; its picture (`sub_bf8544b3`) is the window's size plus 5 each way | `win32k.sys`; the profile measured on XP (wine/patches/0033-winex11-external-drop-shadow.patch: 0.442, 0.328, 0.168, 0.055, 0.012 across, fading 0.113 to 1.0 along, corners 0.882 to 0.018) | Done (`menushadow.cpp`: an override-redirect shadow window masked to the right and bottom strips, the screen beneath it darkened; `Effects/DropShadow` and `WIN4WINE_NO_MENU_SHADOW` turn it off; the Start panel has none). `sub_bf850d1b` itself is not decompiled; the profile is the measured one |
 

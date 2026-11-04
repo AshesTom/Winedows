@@ -11,6 +11,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QList>
+#include <QPointer>
 #include <QTimer>
 #include <QWidget>
 #include <functional>
@@ -99,6 +100,10 @@ private:
     static QRect keySelection(const QRect &button);
     // The infotip under a target's words, as XP shows it for a selection made with the keys
     void showTip(const Target &target);
+    // XP's infotip: the pale gradient and 6-pixel margin around the words (Qt's tooltip has 2).
+    void showInfoTip(const QPoint &at, const QString &text);
+    void hideInfoTip();
+    QPointer<QWidget> m_infoTip;
     void activate(const Target &target);
     void openByKeyboard(int wanted);
     bool cascadeKey(QKeyEvent *event);

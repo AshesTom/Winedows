@@ -509,7 +509,45 @@ StartPanel::StartPanel(QPoint bottomLeft, std::function<void()> logOff, std::fun
 
 StartPanel::~StartPanel()
 {
+    if (m_infoTip)
+        m_infoTip->deleteLater();
     closeCascades(0);
+}
+
+void StartPanel::showInfoTip(const QPoint &at, const QString &text)
+{
+    ShellTheme *theme = ShellTheme::instance();
+    auto *tip = qobject_cast<QLabel *>(m_infoTip.data());
+    if (!tip) {
+        tip = new QLabel(nullptr, Qt::ToolTip | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint
+                                     | Qt::WindowTransparentForInput | Qt::WindowDoesNotAcceptFocus);
+        tip->setAttribute(Qt::WA_ShowWithoutActivating);
+        tip->setAttribute(Qt::WA_TransparentForMouseEvents);
+        tip->setFocusPolicy(Qt::NoFocus);
+        tip->setWordWrap(true);
+        tip->setMaximumWidth(theme->scaled(300));
+        tip->setStyleSheet(QStringLiteral("QLabel { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                                          "stop:0 #ffffff, stop:1 #ffffe1); border: 1px solid #808080; padding: 6px; }"));
+        m_infoTip = tip;
+    }
+    tip->setText(text);
+    tip->adjustSize();
+    QRect room = tip->rect().translated(at);
+    const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+    QPoint place = at;
+    if (room.right() > screen.right())
+        place.setX(screen.right() - tip->width() + 1);
+    if (room.bottom() > screen.bottom())
+        place.setY(at.y() - tip->height() - theme->scaled(18));
+    tip->move(place);
+    tip->show();
+    tip->raise();
+}
+
+void StartPanel::hideInfoTip()
+{
+    if (m_infoTip)
+        m_infoTip->hide();
 }
 
 void StartPanel::addLeft(int &y, const QString &text, const QString &subtitle, const QIcon &icon, std::function<void()> action, bool big)
@@ -1458,7 +1496,7 @@ void StartPanel::showTip(const Target &target)
     ShellTheme *theme = ShellTheme::instance();
     const QString text = tipOf(target);
     if (text.isEmpty()) {
-        QToolTip::hideText();
+        hideInfoTip();
         return;
     }
     int x = target.rect.x(), bottom = target.rect.bottom();
@@ -1473,11 +1511,8 @@ void StartPanel::showTip(const Target &target)
         x = onLeft ? m_left.x() + theme->scaled(10) + icon + theme->scaled(4) : target.rect.x() + theme->scaled(3) + icon + theme->scaled(4);
         bottom -= theme->scaled(2);
     }
-    QToolTip::showText(mapToGlobal(QPoint(x, bottom + 1)), text, this);
-    // Qt puts a tip under and right of the point it is given, more or less: it goes where XP's was.
-    for (QWidget *tip : QApplication::topLevelWidgets())
-        if (tip->inherits("QTipLabel") && tip->isVisible())
-            tip->move(mapToGlobal(QPoint(x, bottom + 1)));
+    showInfoTip(mapToGlobal(QPoint(x, bottom + 1)), text);
+
 }
 
 bool StartPanel::event(QEvent *event)
@@ -1490,10 +1525,10 @@ bool StartPanel::event(QEvent *event)
             if (target.rect.contains(help->pos())) {
                 const QString text = tipOf(target);
                 if (!text.isEmpty())
-                    QToolTip::showText(help->globalPos(), text, this);
+                    showInfoTip(help->globalPos(), text);
                 return true;
             }
-        QToolTip::hideText();
+        hideInfoTip();
         return true;
     }
     return QWidget::event(event);
@@ -1719,7 +1754,7 @@ void StartPanel::keyPressEvent(QKeyEvent *event)
 
 void StartPanel::hideEvent(QHideEvent *)
 {
-    QToolTip::hideText();
+    hideInfoTip();
     closeCascades(0);
     Q_EMIT closed();
 }
