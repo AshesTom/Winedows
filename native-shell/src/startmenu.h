@@ -29,7 +29,9 @@ class Cascade : public QWidget
 {
     Q_OBJECT
 public:
-    Cascade(const QList<MenuEntry> &entries, QPoint corner, bool upward);
+    // FLAT: the classic Start menu's cascades, XP's flat menus (20-pixel rows, a 1-pixel border, words after an
+    // icon column and the entries' access keys) rather than the Start panel's All Programs.
+    Cascade(const QList<MenuEntry> &entries, QPoint corner, bool upward, bool flat = false);
     int entryAt(QPoint global) const;
     void setHot(int index);
     int hot() const { return m_hot; }
@@ -50,6 +52,7 @@ private:
     QList<MenuEntry> m_entries;
     QList<QRect> m_rects;
     int m_hot = -1, m_ownerRow = -1;
+    bool m_flat = false;
 };
 
 // XP's Run dialog
@@ -116,6 +119,12 @@ private:
     QRect moreArrow() const;
     QRect moreBand() const;
     void paintClassic(QPainter &painter);
+    // The classic Start menu: explorer.exe's menu 204 in a flat menu with the edition's banner (TaskbarSettings::classicStartMenu)
+    void buildClassicMenu(QPoint bottomLeft);
+    void paintClassicMenu(QPainter &painter);
+    QList<MenuEntry> classicDocuments() const;
+    bool m_classicMenu = false;
+    QImage m_banner;
     static void etch(QPainter &painter, const QRect &rect);
     void addLeft(int &y, const QString &text, const QString &subtitle, const QIcon &icon, std::function<void()> action, bool big);
     void addPlace(int &y, int iconId, const QString &text, bool bold, std::function<void()> action, bool arrow = false);

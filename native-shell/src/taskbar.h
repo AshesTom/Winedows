@@ -94,7 +94,18 @@ private:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
+    void dragLeaveEvent(QDragLeaveEvent *event) override;
+    // Dragging over the taskband (its DragOver, sub_102f663): a task button held 250 ms brings its window
+    // forward, the band's empty part held 500 ms shows the desktop; again only 10 s later. A drop on a
+    // button is refused with string 711.
+    void dragOverTasks(Hit hit);
+    Hit m_dragHit{Hit::None, -2};
+    QTimer m_dragTimer;
     void tickClock();
+    // At logon (sub_100eb38): the Start panel opens by itself the first time; with the classic menu, balloon
+    // 800/801 points at the Start button for 10 s (sub_1030259) until the button has been used
+    void startButtonBalloon();
+    QPointer<QWidget> m_startBalloon;
     // XP's hotkeys with the Windows key (explorer.exe's IDs 500 to 511), by virtual key and RegisterHotKey's modifiers
     void hotkey(int key, int modifiers);
     void minimizeAll();

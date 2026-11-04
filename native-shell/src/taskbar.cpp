@@ -80,6 +80,12 @@ enum {
     CMD_PROPERTIES = 413, CMD_UNDO = 416, CMD_TASK_MANAGER = 420, CMD_CUSTOMIZE_NOTIFICATIONS = 421, CMD_LOCK = 424,
     CMD_MINIMIZE_GROUP = 311, CMD_CLOSE_GROUP = 48913,
 };
+// DragOver's delays (sub_102f663): 250 ms on a button, 500 on the band's empty part, then 10 s more
+const int DRAG_BUTTON_MS = 250, DRAG_BAND_MS = 500, DRAG_AGAIN_MS = 10000;
+const int STRING_TASKBAR = 518, STRING_NO_DROP = 711;
+// (once the desktop is up: XP posts it from the tray's creation)
+const int START_BALLOON_DELAY_MS = 1500;
+const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START_BALLOON = 801, START_BALLOON_MS = 10000;
 const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_MINIMIZE_ALL = 537, STRING_SHOW_OPEN_WINDOWS = 850;
 // explorer.exe's hotkeys: the table at 0x10114c4 (virtual key, modifiers with MOD_WIN), registered as
 // IDs 500 to 511 by sub_101146e; WM_HOTKEY goes to sub_1021388's jump table.
@@ -363,6 +369,21 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     });
     connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
     connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
+    QTimer::singleShot(START_BALLOON_DELAY_MS, this, &Taskbar::startButtonBalloon);
+    m_dragTimer.setSingleShot(true);
+    connect(&m_dragTimer, &QTimer::timeout, this, [this] {
+        if (m_dragHit.kind == Hit::Task && m_dragHit.index < m_buttons.size()) {
+            const Button &button = m_buttons[m_dragHit.index];
+            if (!button.group)
+                m_windows->switchTo(m_windows->tasks()[button.tasks.first()].window);
+        } else if (m_dragHit.kind == Hit::Band) {
+            // sub_1002d65(1): the desktop shown
+            const QList<quint32> showing = x11::property32(x11::root(), x11::atom("_NET_SHOWING_DESKTOP"));
+            if (showing.isEmpty() || !showing.first())
+                toggleDesktop();
+        }
+        m_dragTimer.start(DRAG_AGAIN_MS);
+    });
     connect(theme(), &ShellTheme::changed, this, &Taskbar::themeChanged);
 
     m_autoHideTimer.setInterval(500);
@@ -1192,7 +1213,10 @@ bool Taskbar::event(QEvent *event)
             text = chevronTip();
         else if (hit.kind == Hit::Quick && hit.index < m_quickItems.size())
             text = m_quickItems[hit.index].name;
-        else if (hit.kind == Hit::Clock)
+        else if (hit.kind == Hit::Start) {
+            if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe"))))
+                text = xpfiles::string(*explorer, STRING_START_TIP);
+        } else if (hit.kind == Hit::Clock)
             text = QLocale::system().toString(QDate::currentDate(), QLocale::LongFormat);
         if (text.isEmpty())
             QToolTip::hideText();
@@ -1407,6 +1431,14 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
 
 void Taskbar::showStartMenu(bool keyboard)
 {
+    if (m_startBalloon) {
+        m_startBalloon->close();
+        TaskbarSettings settings = TaskbarSettings::load();
+        if (settings.startButtonBalloonTip == 0) {
+            settings.startButtonBalloonTip = 1;
+            settings.save();
+        }
+    }
     if (m_startPanel) {
         m_startPanel->close();
         return;
@@ -1618,21 +1650,62 @@ void Taskbar::showQuickItemMenu(int index, QPoint at)
 
 void Taskbar::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (m_settings.quickLaunch && event->mimeData()->hasUrls())
-        event->acceptProposedAction();
+    // anything dragged: over the task buttons it brings windows forward
+    m_dragHit = Hit{Hit::None, -2};
+    event->acceptProposedAction();
 }
 
 void Taskbar::dragMoveEvent(QDragMoveEvent *event)
 {
+    const QPoint at = event->position().toPoint();
     // dropped on the Quick Launch band, a shortcut goes into its folder
-    if (m_quickBand.adjusted(0, 0, theme()->scaled(QUICK_BAND_END), 0).contains(event->position().toPoint() - QPoint(0, m_top)))
+    if (m_settings.quickLaunch && event->mimeData()->hasUrls()
+        && m_quickBand.adjusted(0, 0, theme()->scaled(QUICK_BAND_END), 0).contains(at - QPoint(0, m_top))) {
+        dragOverTasks(Hit());
+        event->acceptProposedAction();
+        return;
+    }
+    const Hit hit = hitAt(at);
+    dragOverTasks(hit.kind == Hit::Task || hit.kind == Hit::Band ? hit : Hit());
+    // DROPEFFECT_MOVE over a button (whose drop is then refused), none elsewhere
+    if (hit.kind == Hit::Task)
         event->acceptProposedAction();
     else
         event->ignore();
 }
 
+void Taskbar::dragLeaveEvent(QDragLeaveEvent *)
+{
+    dragOverTasks(Hit());
+}
+
+void Taskbar::dragOverTasks(Hit hit)
+{
+    if (hit == m_dragHit)
+        return;
+    m_dragHit = hit;
+    m_dragTimer.stop();
+    if (hit.kind == Hit::Task)
+        m_dragTimer.start(DRAG_BUTTON_MS);
+    else if (hit.kind == Hit::Band)
+        m_dragTimer.start(DRAG_BAND_MS);
+}
+
 void Taskbar::dropEvent(QDropEvent *event)
 {
+    const Hit hit = hitAt(event->position().toPoint());
+    dragOverTasks(Hit());
+    if (hit.kind == Hit::Task) {
+        // message 0x436: ShellMessageBox(711, 518 "Taskbar", MB_ICONHAND)
+        event->acceptProposedAction();
+        QTimer::singleShot(0, this, [] {
+            const auto &explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+            if (!explorer)
+                return;
+            QMessageBox::critical(nullptr, xpfiles::string(*explorer, STRING_TASKBAR), xpfiles::string(*explorer, STRING_NO_DROP));
+        });
+        return;
+    }
     const QDir folder(quickLaunchFolder());
     for (const QUrl &url : event->mimeData()->urls()) {
         if (!url.isLocalFile())
@@ -1702,6 +1775,45 @@ QString Taskbar::chevronTip() const
     const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
     const QString tip = explorer ? xpfiles::string(*explorer, m_trayOpen ? STRING_CHEVRON_HIDE : STRING_CHEVRON_SHOW) : QString();
     return tip.isEmpty() ? QString::fromLatin1(m_trayOpen ? "Hide" : "Show hidden icons") : tip;
+}
+
+void Taskbar::startButtonBalloon()
+{
+    TaskbarSettings settings = TaskbarSettings::load();
+    // sub_100ebca: the Start panel's first logon until it is 2; the classic menu's while it is 0 (1 becomes 2)
+    if (!settings.classicStartMenu) {
+        if (settings.startButtonBalloonTip >= 2)
+            return;
+        settings.startButtonBalloonTip = 2;
+        settings.save();
+        showStartMenu(false);
+        return;
+    }
+    if (settings.startButtonBalloonTip != 0) {
+        if (settings.startButtonBalloonTip == 1) {
+            settings.startButtonBalloonTip = 2;
+            settings.save();
+        }
+        return;
+    }
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!explorer || !isVisible())
+        return;
+    BalloonTip tip;
+    tip.title = xpfiles::string(*explorer, STRING_START_BALLOON_TITLE);
+    tip.text = xpfiles::string(*explorer, STRING_START_BALLOON);
+    tip.kind = BalloonTip::Info;   // TTI_INFO
+    tip.sound = false;
+    auto *balloon = new BalloonWindow(tip);
+    balloon->setAttribute(Qt::WA_DeleteOnClose);
+    // its stem at the middle of the Start button's top
+    const QRect start(mapToGlobal(m_startRect.topLeft() + QPoint(0, m_top)), m_startRect.size());
+    balloon->place(QRect(start.center().x(), start.top(), 1, 1));
+    connect(balloon, &BalloonWindow::clicked, balloon, &QWidget::close);
+    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
+    QTimer::singleShot(START_BALLOON_MS, balloon, &QWidget::close);   // timer 0x16
+    m_startBalloon = balloon;
+    balloon->show();
 }
 
 void Taskbar::hotkey(int key, int modifiers)
@@ -1781,8 +1893,15 @@ void Taskbar::keyboardStep(Hit::Kind kind, int step)
     }
     if (items.isEmpty())
         return;
-    const qsizetype at = m_hover.kind == kind ? items.indexOf(m_hover.index) : -1;
-    const qsizetype next = at < 0 ? (step > 0 ? 0 : items.size() - 1) : (at + step + items.size()) % items.size();
+    qsizetype at = m_hover.kind == kind ? items.indexOf(m_hover.index) : -1;
+    qsizetype next;
+    if (kind == Hit::Task) {
+        // message 0x43d: from the hot button, or the first when none is (TB_GETHOTITEM under 1), one on,
+        // round the ends; the first press so lands on the second button
+        next = items.size() > 1 ? (qMax<qsizetype>(at, 0) + step + items.size()) % items.size() : 0;
+    } else {
+        next = at < 0 ? (step > 0 ? 0 : items.size() - 1) : (at + step + items.size()) % items.size();
+    }
     if (!m_keyboard) {
         if (m_hidden || m_slideTimer.isActive())
             setHidden(false, false);

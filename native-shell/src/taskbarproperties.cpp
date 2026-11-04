@@ -69,6 +69,8 @@ TaskbarSettings TaskbarSettings::load()
     loaded.quickLaunchText = settings.value(QStringLiteral("Taskbar/QuickLaunchText"), false).toBool();
     loaded.quickLaunchTitle = settings.value(QStringLiteral("Taskbar/QuickLaunchTitle"), false).toBool();
     loaded.hideInactive = settings.value(QStringLiteral("TrayNotify/EnableAutoTray"), true).toBool();
+    loaded.classicStartMenu = settings.value(QStringLiteral("StartMenu/Classic"), false).toBool();
+    loaded.startButtonBalloonTip = settings.value(QStringLiteral("StartMenu/StartButtonBalloonTip"), 0).toInt();
     return loaded;
 }
 
@@ -84,6 +86,8 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchText"), quickLaunchText);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchTitle"), quickLaunchTitle);
     settings.setValue(QStringLiteral("TrayNotify/EnableAutoTray"), hideInactive);
+    settings.setValue(QStringLiteral("StartMenu/Classic"), classicStartMenu);
+    settings.setValue(QStringLiteral("StartMenu/StartButtonBalloonTip"), startButtonBalloonTip);
 }
 
 TaskbarSettingsNotifier *TaskbarSettingsNotifier::instance()
@@ -171,14 +175,31 @@ QWidget *TaskbarProperties::startMenuPage()
     if (!explorer())
         return page;
     const xpdialog::Page dialog = xpdialog::build(*explorer(), DIALOG_START_MENU, page);
-    // This shell has XP's Start menu, not the classic one, nor their Customize dialogs.
-    if (auto *start = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_START_MENU)))
-        start->setChecked(true);
-    for (int id : {ID_CLASSIC, ID_CUSTOMIZE, ID_CUSTOMIZE_CLASSIC})
+    // The Start menu or the classic one; the preview is 170 or 171 (sub_1038a95). Their Customize dialogs
+    // are greyed.
+    m_startRadio = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_START_MENU));
+    m_classicRadio = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_CLASSIC));
+    auto *preview = qobject_cast<QLabel *>(dialog.controls.value(ID_START_PREVIEW));
+    const bool classic = TaskbarSettings::load().classicStartMenu;
+    if (m_startRadio && m_classicRadio) {
+        m_startRadio->setAutoExclusive(true);
+        m_classicRadio->setAutoExclusive(true);
+        (classic ? m_classicRadio : m_startRadio)->setChecked(true);
+    }
+    for (int id : {ID_CUSTOMIZE, ID_CUSTOMIZE_CLASSIC})
         if (QWidget *control = dialog.controls.value(id))
             control->setEnabled(false);
-    if (auto *preview = qobject_cast<QLabel *>(dialog.controls.value(ID_START_PREVIEW)))
-        preview->setPixmap(picture(BITMAP_START_MENU));
+    const auto follow = [this, preview] {
+        if (preview)
+            preview->setPixmap(picture(BITMAP_START_MENU + (m_classicRadio && m_classicRadio->isChecked() ? 1 : 0)));
+    };
+    follow();
+    for (QAbstractButton *radio : {m_startRadio, m_classicRadio})
+        if (radio)
+            connect(radio, &QAbstractButton::toggled, this, [this, follow] {
+                follow();
+                m_apply->setEnabled(true);
+            });
     return page;
 }
 
@@ -205,6 +226,8 @@ void TaskbarProperties::apply()
     settings.locked = m_checks.value(ID_LOCK) && m_checks.value(ID_LOCK)->isChecked();
     settings.onTop = m_checks.value(ID_ON_TOP) && m_checks.value(ID_ON_TOP)->isChecked();
     settings.hideInactive = m_checks.value(ID_HIDE_INACTIVE) && m_checks.value(ID_HIDE_INACTIVE)->isChecked();
+    if (m_classicRadio)
+        settings.classicStartMenu = m_classicRadio->isChecked();
     settings.save();
     m_apply->setEnabled(false);
     emit TaskbarSettingsNotifier::instance()->changed();

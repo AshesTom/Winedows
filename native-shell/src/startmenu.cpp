@@ -15,6 +15,8 @@
 #include "filebrowser.h"
 
 #include "programs.h"
+#include "taskbarproperties.h"
+#include "xpprogram.h"
 #include "theme.h"
 #include "xpfiles.h"
 
@@ -31,6 +33,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPainter>
 #include <QProcess>
 #include <QScreen>
@@ -89,6 +92,32 @@ const int CLASSIC_EDGE = 2, CLASSIC_HEADER = 40, CLASSIC_TOP = 2, CLASSIC_BODY_E
           CLASSIC_LOGOFF = 37, CLASSIC_DIVIDER = 193, CLASSIC_NAME_X = 12, CLASSIC_ICON_Y = 7, CLASSIC_RIGHT_MARGIN = 7,
           CLASSIC_MORE_TEXT = 40;
 const int CASCADE_ROW = 23, CASCADE_ICON = 16;
+// The classic Start menu, measured on XP's own (explorer.exe's menu 204 in a menu band): a 1-pixel border; the
+// edition's banner 21 wide down the left, at the bottom, the rest above it in the bitmap's top-left colour;
+// rows 32 tall, the words 42 after the banner; the Start Menu folder's items (32-pixel icons 2 after the
+// banner), a line
+// (9 rows, the line on the fifth), menu 204's items, a line (7 rows, on the fourth) and Log Off and Turn Off,
+// a row under them; menu 204's items have 24-pixel icons, 6 after the banner and 4 down. The menu is its
+// widest words and 91 wide. Its cascades: rows 20 tall, the icon 3 in and the
+// words 27 in, as wide as their widest words and 50; a separator 8 rows, its line on the fourth, 2 from each
+// side. Their arrows are 4 x 7, 9 from the right; a cascade covers the right border of the menu it opens from,
+// its top border a row above the row's.
+const int CLASSIC_MENU_BANNER = 21, CLASSIC_MENU_ROW = 32, CLASSIC_MENU_ICON_X = 2, CLASSIC_MENU_SMALL_ICON = 24,
+          CLASSIC_MENU_SMALL_ICON_X = 6, CLASSIC_MENU_TEXT_X = 42, CLASSIC_MENU_EXTRA = 91, CLASSIC_MENU_FIRST_LINE = 9, CLASSIC_MENU_SECOND_LINE = 7;
+const int FLAT_ROW = 20, FLAT_ICON_X = 3, FLAT_TEXT_X = 27, FLAT_EXTRA = 50, FLAT_SEPARATOR = 8, FLAT_ARROW_RIGHT = 9;
+// explorer.exe's banners (sub_1015839, by IsOS): 162 Whistler Server... 166 Home Edition, 167 Professional
+const int BITMAP_BANNER_PROFESSIONAL = 167;
+// Menu 204's commands
+enum { MENU_START = 204, CMD_PROGRAMS = 504, CMD_DOCUMENTS = 501, CMD_SETTINGS = 508, CMD_SEARCH = 520, CMD_HELP = 503,
+       CMD_RUN = 401, CMD_LOG_OFF = 402, CMD_CONTROL_PANEL = 505, CMD_NETWORK = 557, CMD_PRINTERS = 510, CMD_TASKBAR = 413 };
+const int NCPA_ICON = 1001, SHELL_FIND_FILES = 23232, ICON_SETTINGS = 22, ICON_SMALL_CONTROL_PANEL = 137, ICON_NETWORK = 18, ICON_TASKBAR = 40;
+
+// XP's menu arrow, 4 x 7, its point at the right
+void menuArrow(QPainter &painter, int x, int top, const QColor &colour)
+{
+    for (int k = 0; k < 4; ++k)
+        painter.fillRect(x + k, top + k, 1, 7 - 2 * k, colour);
+}
 
 // Classic's Log Off and Turn Off pictures, as XP shows them: the 16-colour images reduced to their main
 // colour at the VGA palette's half strength (olive, maroon), white and the greys, without the dithering
@@ -262,15 +291,35 @@ QString xdgDir(QStandardPaths::StandardLocation location)
 
 } // namespace
 
-Cascade::Cascade(const QList<MenuEntry> &entries, QPoint corner, bool upward)
+Cascade::Cascade(const QList<MenuEntry> &entries, QPoint corner, bool upward, bool flat)
     : QWidget(nullptr, Qt::ToolTip | Qt::X11BypassWindowManagerHint | Qt::FramelessWindowHint)
     , m_entries(entries)
+    , m_flat(flat)
 {
     setAttribute(Qt::WA_ShowWithoutActivating);
     setAttribute(Qt::WA_DeleteOnClose, false);
     setFocusPolicy(Qt::NoFocus);
     ShellTheme *theme = ShellTheme::instance();
     QFontMetrics metrics(theme->systemFont(QStringLiteral("menufont")));
+    if (flat) {
+        int textWidth = 0, height = 2;
+        for (const MenuEntry &entry : entries) {
+            textWidth = qMax(textWidth, metrics.horizontalAdvance(QString(entry.text).remove(QLatin1Char('&'))));
+            const int row = theme->scaled(entry.separator ? FLAT_SEPARATOR : FLAT_ROW);
+            m_rects.append(QRect(1, height - 1, 0, row));
+            height += row;
+        }
+        const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+        const int width = qMin(textWidth + theme->scaled(FLAT_EXTRA), screen.width() / 2);
+        for (QRect &r : m_rects)
+            r.setWidth(width - 2);
+        height = qMin(height, screen.height());
+        QPoint at = upward ? corner - QPoint(0, height) : corner;
+        at.setY(qBound(screen.top(), at.y(), screen.bottom() + 1 - height));
+        at.setX(qMin(at.x(), screen.right() + 1 - width));
+        setGeometry(QRect(at, QSize(width, height)));
+        return;
+    }
     int textWidth = 80;
     for (const MenuEntry &entry : entries)
         textWidth = qMax(textWidth, metrics.horizontalAdvance(entry.text));
@@ -327,8 +376,14 @@ QList<int> Cascade::entriesFor(QChar letter) const
 {
     QList<int> out;
     for (int i = 0; i < m_entries.size(); ++i)
-        if (!m_entries[i].separator && m_entries[i].enabled && !m_entries[i].text.isEmpty() && m_entries[i].text.at(0).toLower() == letter.toLower())
-            out.append(i);
+        if (!m_entries[i].separator && m_entries[i].enabled && !m_entries[i].text.isEmpty()) {
+            // its access key (&Programs), or else its first letter
+            const QString &text = m_entries[i].text;
+            const qsizetype amp = text.indexOf(QLatin1Char('&'));
+            const QChar key = amp >= 0 && amp + 1 < text.size() ? text.at(amp + 1) : text.at(0);
+            if (key.toLower() == letter.toLower())
+                out.append(i);
+        }
     return out;
 }
 
@@ -337,6 +392,40 @@ void Cascade::paintEvent(QPaintEvent *)
     QPainter painter(this);
     ShellTheme *theme = ShellTheme::instance();
     w4w::Renderer *renderer = theme->renderer();
+    if (m_flat) {
+        // COLOR_MENU, a COLOR_BTNSHADOW border (Windows Classic: the raised edge), COLOR_MENUHILIGHT under the hot row
+        painter.fillRect(rect(), theme->system(QStringLiteral("menu"), Qt::white));
+        if (renderer) {
+            painter.setPen(theme->system(QStringLiteral("btnshadow"), Qt::gray));
+            painter.drawRect(rect().adjusted(0, 0, -1, -1));
+        } else {
+            theme->raised(painter, rect());
+        }
+        painter.setFont(theme->systemFont(QStringLiteral("menufont")));
+        const QColor hilight = theme->system(renderer ? QStringLiteral("menuhilight") : QStringLiteral("highlight"), QColor(49, 106, 197));
+        const int icon = theme->scaled(CASCADE_ICON);
+        for (int i = 0; i < m_entries.size(); ++i) {
+            const QRect r = m_rects[i];
+            const MenuEntry &entry = m_entries[i];
+            if (entry.separator) {
+                painter.fillRect(QRect(r.x() + 2, r.y() + theme->scaled(3), r.width() - 4, 1), theme->system(QStringLiteral("btnshadow"), Qt::gray));
+                continue;
+            }
+            const bool hot = i == m_hot && entry.enabled;
+            if (hot)
+                painter.fillRect(r, hilight);
+            painter.drawPixmap(r.x() + theme->scaled(FLAT_ICON_X) - 1, r.y() + (r.height() - icon) / 2, entry.icon.pixmap(icon, icon));
+            const QColor text = !entry.enabled ? theme->system(QStringLiteral("graytext"), Qt::gray)
+                                : hot          ? theme->system(QStringLiteral("highlighttext"), Qt::white)
+                                               : theme->system(QStringLiteral("menutext"), Qt::black);
+            painter.setPen(text);
+            const int textX = r.x() + theme->scaled(FLAT_TEXT_X) - 1;
+            painter.drawText(QRect(textX, r.y() - 1, r.right() - textX, r.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine | Qt::TextHideMnemonic, entry.text);
+            if (entry.children)
+                menuArrow(painter, width() - theme->scaled(FLAT_ARROW_RIGHT) - 1, r.y() + (r.height() - 7) / 2, text);
+        }
+        return;
+    }
     const Part toolbar{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("startmenu")};
     if (renderer) {
         renderer->draw(&painter, rect(), toolbar);
@@ -484,8 +573,182 @@ QRect StartPanel::moreBand() const
     return m_more.adjusted(0, ShellTheme::instance()->scaled(ShellTheme::instance()->renderer() ? 1 : 2), 0, 0);
 }
 
+QList<MenuEntry> StartPanel::classicDocuments() const
+{
+    // My Documents and My Pictures, a line, then the recent documents (or (Empty)), as XP's
+    ShellTheme *theme = ShellTheme::instance();
+    const auto icon = [theme](int id) { return QIcon(QPixmap::fromImage(theme->shellIcon(id, theme->scaled(CASCADE_ICON)))); };
+    const auto opens = [](QStandardPaths::StandardLocation location) {
+        return [location] { programs::open(xdgDir(location)); };
+    };
+    QList<MenuEntry> out{{shellString(SHELL_DOCUMENTS, "My Documents"), icon(ICON_DOCUMENTS), opens(QStandardPaths::DocumentsLocation), {}},
+                         {shellString(SHELL_PICTURES, "My Pictures"), icon(ICON_PICTURES), opens(QStandardPaths::PicturesLocation), {}}};
+    MenuEntry line;
+    line.separator = true;
+    out.append(line);
+    out.append(recentDocuments());
+    return out;
+}
+
+void StartPanel::buildClassicMenu(QPoint bottomLeft)
+{
+    ShellTheme *theme = ShellTheme::instance();
+    m_classicMenu = true;
+    m_userName = userName();
+    // menu 204's words; its command IDs say which entry is which
+    QHash<int, QString> words;
+    if (explorer()) {
+        QMenu menu;
+        const QHash<int, QAction *> actions = xpprogram::fillMenu(&menu, *explorer(), MENU_START);
+        for (auto it = actions.cbegin(); it != actions.cend(); ++it)
+            words.insert(it.key(), it.value()->text());
+    }
+    const auto word = [words](int id, const char *fallback) { return words.value(id, QLatin1String(fallback)); };
+    if (explorer())
+        m_banner = xpfiles::bitmap(*explorer(), BITMAP_BANNER_PROFESSIONAL);
+
+    const auto big = [theme](int id) { return QIcon(QPixmap::fromImage(theme->shellIcon(id, theme->scaled(CLASSIC_MENU_SMALL_ICON)))); };
+    const auto small = [theme](int id) { return QIcon(QPixmap::fromImage(theme->shellIcon(id, theme->scaled(CASCADE_ICON)))); };
+    struct Row
+    {
+        QString text;
+        QIcon icon;
+        std::function<void()> action;
+        std::function<QList<MenuEntry>()> children;
+    };
+    // The Start Menu folder's own items above the line: XP's setup puts Set Program Access and Defaults there
+    QList<Row> top;
+    QIcon spad;
+    if (const auto moricons = xpfiles::resources(xpfiles::find(QStringLiteral("moricons.dll"))))
+        spad = QIcon(QPixmap::fromImage(xpfiles::icon(*moricons, MORICONS_SPAD, theme->scaled(32))));
+    top.append({tr("Set Program Access and Defaults"), spad, [] { applets::open(QStringLiteral("programs")); }, {}});
+    QList<Row> middle;
+    middle.append({word(CMD_PROGRAMS, "&Programs"), big(ICON_PROGRAMS), {}, [this] { return allPrograms(); }});
+    middle.append({word(CMD_DOCUMENTS, "&Documents"), big(ICON_RECENT), {}, [this] { return classicDocuments(); }});
+    const auto controlPanel = m_controlPanel;
+    middle.append({word(CMD_SETTINGS, "&Settings"), big(ICON_SETTINGS), {}, [=] {
+        QList<MenuEntry> settings{{word(CMD_CONTROL_PANEL, "&Control Panel"), small(ICON_SMALL_CONTROL_PANEL), controlPanel, {}}};
+        MenuEntry line;
+        line.separator = true;
+        settings.append(line);
+        // ncpa.cpl's icon, as the Control Panel shows it
+        QIcon network = small(ICON_NETWORK);
+        if (const auto ncpa = xpfiles::resources(xpfiles::find(QStringLiteral("ncpa.cpl"))))
+            if (const QImage image = xpfiles::icon(*ncpa, NCPA_ICON, theme->scaled(CASCADE_ICON)); !image.isNull())
+                network = QIcon(QPixmap::fromImage(image));
+        settings.append({word(CMD_NETWORK, "&Network Connections"), network, [] { applets::open(QStringLiteral("network")); }, {}});
+        const QString printers = QStandardPaths::findExecutable(QStringLiteral("system-config-printer"));
+        MenuEntry printersEntry{word(CMD_PRINTERS, "&Printers and Faxes"), small(ICON_PRINTERS), [] {
+            QProcess::startDetached(QStringLiteral("system-config-printer"), {}); }, {}};
+        printersEntry.enabled = !printers.isEmpty();
+        settings.append(printersEntry);
+        settings.append({word(CMD_TASKBAR, "&Taskbar and Start Menu"), small(ICON_TASKBAR), [] { applets::open(QStringLiteral("taskbar")); }, {}});
+        return settings;
+    }});
+    middle.append({word(CMD_SEARCH, "Sear&ch"), big(ICON_SEARCH), {}, [=] {
+        // the find extensions: shell32's own, For Files or Folders
+        return QList<MenuEntry>{{shellString(SHELL_FIND_FILES, "For &Files or Folders..."), small(ICON_SEARCH), [] { FileBrowser::open(places::Search); }, {}}};
+    }});
+    middle.append({word(CMD_HELP, "&Help and Support"), big(ICON_HELP), {}, {}});
+    middle.append({word(CMD_RUN, "&Run..."), big(ICON_RUN), [] { showRunDialog(); }, {}});
+    // Log Off %s... with the user's name; Shut Down... becomes Turn Off Computer... (string 731)
+    QList<Row> bottom;
+    bottom.append({word(CMD_LOG_OFF, "&Log Off %s...").replace(QLatin1String("%s"), m_userName), big(ICON_LOG_OFF), m_logOff, {}});
+    bottom.append({explorerString(EXPLORER_TURN_OFF, "T&urn Off Computer..."), big(ICON_TURN_OFF), m_turnOff, {}});
+
+    const QFontMetrics metrics(theme->systemFont(QStringLiteral("menufont")));
+    int textWidth = 0;
+    for (const QList<Row> *rows : {&top, &middle, &bottom})
+        for (const Row &row : *rows)
+            textWidth = qMax(textWidth, metrics.horizontalAdvance(QString(row.text).remove(QLatin1Char('&'))));
+    const int width = textWidth + theme->scaled(CLASSIC_MENU_EXTRA);
+    const int left = 1 + theme->scaled(CLASSIC_MENU_BANNER);
+    // the rows end one before the right border
+    const int rowWidth = width - left - 2;
+    int y = 1;
+    const auto add = [&](const QList<Row> &rows, int iconSize) {
+        for (const Row &row : rows) {
+            Item item;
+            item.rect = QRect(left, y, rowWidth, theme->scaled(CLASSIC_MENU_ROW));
+            item.text = row.text;
+            item.icon = row.icon.pixmap(theme->scaled(iconSize), theme->scaled(iconSize)).toImage();
+            item.action = row.action;
+            item.children = row.children;
+            item.arrow = bool(row.children);
+            item.enabled = true;
+            m_items.append(item);
+            y += item.rect.height();
+        }
+    };
+    const auto line = [&](int rows, int at) {
+        Item separator;
+        separator.separator = true;
+        separator.rect = QRect(left + 2, y + at, rowWidth - 3, 1);
+        m_items.append(separator);
+        y += rows;
+    };
+    add(top, 32);
+    line(theme->scaled(CLASSIC_MENU_FIRST_LINE), theme->scaled(4));
+    add(middle, CLASSIC_MENU_SMALL_ICON);
+    line(theme->scaled(CLASSIC_MENU_SECOND_LINE), theme->scaled(3));
+    add(bottom, CLASSIC_MENU_SMALL_ICON);
+    const int height = y + 2;
+    m_left = QRect(0, 0, width, height);
+    setGeometry(QRect(bottomLeft - QPoint(0, height), QSize(width, height)));
+}
+
+void StartPanel::paintClassicMenu(QPainter &painter)
+{
+    ShellTheme *theme = ShellTheme::instance();
+    w4w::Renderer *renderer = theme->renderer();
+    painter.fillRect(rect(), theme->system(QStringLiteral("menu"), Qt::white));
+    if (renderer) {
+        painter.setPen(theme->system(QStringLiteral("btnshadow"), Qt::gray));
+        painter.drawRect(rect().adjusted(0, 0, -1, -1));
+    } else {
+        theme->raised(painter, rect());
+    }
+    // The banner at the bottom, its top-left colour above it
+    const QRect band(1, 1, theme->scaled(CLASSIC_MENU_BANNER), height() - 2);
+    if (!m_banner.isNull()) {
+        painter.fillRect(band, m_banner.pixelColor(0, 0));
+        painter.drawImage(band.x(), band.bottom() + 1 - m_banner.height(), m_banner);
+    } else {
+        painter.fillRect(band, theme->system(QStringLiteral("activecaption"), Qt::darkBlue));
+    }
+    painter.setFont(theme->systemFont(QStringLiteral("menufont")));
+    const QColor hilight = theme->system(renderer ? QStringLiteral("menuhilight") : QStringLiteral("highlight"), QColor(49, 106, 197));
+    const int mnemonics = m_cues ? Qt::TextShowMnemonic : Qt::TextHideMnemonic;
+    for (int i = 0; i < m_items.size(); ++i) {
+        const Item &item = m_items[i];
+        if (item.separator) {
+            painter.fillRect(item.rect, theme->system(QStringLiteral("btnshadow"), Qt::gray));
+            continue;
+        }
+        const QRect r = item.rect;
+        const bool hot = i == m_hot && item.enabled;
+        if (hot)
+            painter.fillRect(r, hilight);
+        const bool large = item.icon.height() > theme->scaled(CLASSIC_MENU_SMALL_ICON);
+        painter.drawImage(r.x() + theme->scaled(large ? CLASSIC_MENU_ICON_X : CLASSIC_MENU_SMALL_ICON_X), r.y() + (r.height() - item.icon.height()) / 2, item.icon);
+        const QColor text = !item.enabled ? theme->system(QStringLiteral("graytext"), Qt::gray)
+                            : hot         ? theme->system(QStringLiteral("highlighttext"), Qt::white)
+                                          : theme->system(QStringLiteral("menutext"), Qt::black);
+        painter.setPen(text);
+        const int textX = r.x() + theme->scaled(CLASSIC_MENU_TEXT_X);
+        // (a row higher than Qt centres them)
+        painter.drawText(QRect(textX, r.y() - 1, r.right() - textX, r.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine | mnemonics, item.text);
+        if (item.arrow)
+            menuArrow(painter, width() - theme->scaled(FLAT_ARROW_RIGHT) - 1, r.y() + (r.height() - 7) / 2, text);
+    }
+}
+
 void StartPanel::build(QPoint bottomLeft)
 {
+    if (TaskbarSettings::load().classicStartMenu) {
+        buildClassicMenu(bottomLeft);
+        return;
+    }
     ShellTheme *theme = ShellTheme::instance();
     // Keep XP's normal columns; grow them for large fonts and translated labels.
     const QFontMetrics placeMetrics(theme->systemFont(QStringLiteral("menufont"), true));
@@ -705,6 +968,10 @@ void StartPanel::paintClassic(QPainter &painter)
 void StartPanel::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
+    if (m_classicMenu) {
+        paintClassicMenu(painter);
+        return;
+    }
     ShellTheme *theme = ShellTheme::instance();
     w4w::Renderer *renderer = theme->renderer();
     const QColor highlight = theme->system(QStringLiteral("highlight"), Qt::darkBlue);
@@ -980,12 +1247,14 @@ void StartPanel::openChildren(int level)
             upward = true;
         } else if (m_openWanted >= 0 && m_openWanted < m_items.size() && m_items[m_openWanted].children) {
             entries = m_items[m_openWanted].children();
-            corner = mapToGlobal(QPoint(m_items[m_openWanted].rect.right(), m_items[m_openWanted].rect.y()));
+            // the classic menu's cascade covers its right border, its top a row above the row's
+            corner = m_classicMenu ? mapToGlobal(QPoint(m_items[m_openWanted].rect.right() + 1, m_items[m_openWanted].rect.y() - 1))
+                                   : mapToGlobal(QPoint(m_items[m_openWanted].rect.right(), m_items[m_openWanted].rect.y()));
         }
         closeCascades(0);
         if (entries.isEmpty())
             return;
-        auto *cascade = new Cascade(entries, corner, upward);
+        auto *cascade = new Cascade(entries, corner, upward, m_classicMenu);
         m_cascades.append(cascade);
         cascade->show();
         cascade->raise();
@@ -999,7 +1268,7 @@ void StartPanel::openChildren(int level)
     const QRect row = parent->entryGlobalRect(parent->hot());
     const QList<MenuEntry> entries = parent->entry(parent->hot()).children();
     closeCascades(level);
-    auto *cascade = new Cascade(entries, QPoint(row.right() + 3, row.y() - 3), false);
+    auto *cascade = new Cascade(entries, m_classicMenu ? QPoint(row.right() + 1, row.y() - 1) : QPoint(row.right() + 3, row.y() - 3), false, m_classicMenu);
     cascade->setOwnerRow(parent->hot());
     m_cascades.append(cascade);
     cascade->show();
@@ -1237,9 +1506,13 @@ QList<StartPanel::Target> StartPanel::targets() const
         const Item &item = m_items[i];
         if (item.separator || !item.enabled)
             continue;
-        (item.rect.x() < m_right.x() ? left : places).append({item.rect.x() < m_right.x() ? LeftPane : PlacesPane, i, item.rect, item.text});
+        // the classic menu is one column, Log Off and Turn Off in it
+        const bool onLeft = m_classicMenu || item.rect.x() < m_right.x();
+        (onLeft ? left : places).append({onLeft ? LeftPane : PlacesPane, i, item.rect, item.text});
     }
     QList<Target> out = left;
+    if (m_classicMenu)
+        return out;
     out.append({MorePane, MoreItem, m_more, m_moreText});
     out.append(places);
     out.append({BottomPane, LogOffItem, m_logOffButton, m_logOffText});

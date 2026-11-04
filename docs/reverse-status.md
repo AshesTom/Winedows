@@ -137,7 +137,8 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: Large Icons, the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
 | Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog lists names without icons, and the open chevron does not close by itself |
-| Classic Start menu and both Customize dialogs (dialogs 9, 1036, 1135) | Missing |
+| Classic Start menu | Done (section 14) |
+| Both Customize dialogs (dialogs 9, 1036, 1135) | Missing (greyed) |
 | The "?" button and context help | Missing |
 
 ---
@@ -250,6 +251,8 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 | Band end 3 px before the notification area | XP's taskbar in Wine (5, 7, 11, 12 buttons) | Done |
 | Group names: the program file's `FileDescription` | `sub_1005cf7` (each `rundll32.exe` window on its own) | Done, by WM_CLASS here |
 | The shell hook (`SHELLHOOK` messages, `sub_1002819`): HSHELL_FLASH (0x8006) sets the item's flash bit (`sub_1004730`); HSHELL_REDRAW marks it and redraws on timer 4 after 100 ms; HSHELL_ENDTASK calls EndTask; HSHELL_WINDOWACTIVATED arms timer 5 (1000 ms) | `sub_1002819`, `sub_1004730` | Read; the flash bit follows `_NET_WM_STATE_DEMANDS_ATTENTION` here |
+| Dragging over the taskband (its IDropTarget at TaskBand+8, vtable at `0x1015b50`; DragOver `sub_102f663`): the button under the pointer held 250 ms brings its window forward (`sub_102f5aa`), the band's empty part held 500 ms shows the desktop (`sub_1002d65(1)`), then the delay grows by 10 s; DROPEFFECT_MOVE over a button. A drop there posts 0x436: ShellMessageBox(711, 518, MB_ICONHAND) | `sub_102f663`, `sub_10020e9` | Done; not tested by script (XTEST could not start a drag from a folder window) |
+| The taskband's window procedure: timer 2 (2000 ms, or 125 after a first try) waits for WM_NULL before switching to a window that may hang (`sub_102ed44`); timer 4 coalesces redraws; timers 5 to 9, armed by WM_WINDOWPOSCHANGED, retry each second to bring the right window forward | `sub_10020e9` | Read |
 | A window that starts flashing while another has the foreground (`sub_102d585`) gets flag 0x10 and brings the auto-hidden bar back (`sub_101f7be`); `sub_1002ab8` passes the flags to group buttons; the 500 ms check (`0x1025a26`) keeps the bar shown while the taskband answers message 0x439 | `sub_1004730`, `sub_1002ab8` | Done (`Taskbar::attentionChanged`) |
 
 ### Missing
@@ -339,6 +342,7 @@ with the shortcut-menu work of section 3, still in progress in the tree.
 | Customize Desktop: the Desktop Items sheet (string 30371), General (dialog 29953) and Web (29954); its check boxes are `BS_3STATE` | `shell32.dll` | Partial: the four check boxes work; the icon list is shown; Change Icon, Restore Default, the cleanup wizard and the Web page are greyed |
 | Icon spacing | comctl32 v6 uses SM_CXICONSPACING / SM_CYICONSPACING (`sub_30006d74`, `sub_3004487f`); the prefix says 75 x 75 | Partial: 75 px kept; XP in Wine showed 82 vertically, not explained |
 | Recycle Bin's corner place | XP in Wine (10 px left, 7 px higher than the native) | Missing |
+| Labels' drop shadow: the desktop's listview draws each label with comctl32's `DrawShadowText` (call at `0x7741a8de`: white text, black shadow, offset 2, 2). DrawShadowText (`0x77446973`) draws the text into a 32-bit DIB 10 larger, every lit pixel to 255, blurs it (`sub_774466d1`: the mean of the 4 pixels to the right, then the sum of 5 rows over 4, clamped, premultiplied with the shadow colour + 1) and AlphaBlends it at (-4, -8) plus the offset, then draws the text | `comctl32.dll` 6.0.2600.5512 | Done (`ShellTheme::drawShadowedText`, which already followed it, now used for the desktop's labels instead of a hard black copy 1 pixel off); the comparison with XP was limited by the icons' different places on the wallpaper |
 
 ---
 
@@ -375,11 +379,14 @@ bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`p
 | Win+Shift+M and the menu's Undo: the saved placements put back from the end of the list with SetWindowPlacement, animation off, the list freed. Cascade, Tile and Minimize All share the list, so Undo names whichever saved it last (534 with 535, 536 or 537) | `sub_10335c0`, `sub_10334d1`; command 0x19f | Done |
 | Win+E: ShellExecuteEx with the "explore" verb on CSIDL_DRIVES (0x11), unless restricted | `sub_103adad` | Partial: My Computer opens without the Folders pane (`filebrowser.cpp` was being changed elsewhere) |
 | Win+F: command 0xa085 (Search) unless REST_NOFIND (0x80). Win+Ctrl+F: 0xa086 (Search for Computers) | `0x102159e`, `0x10215b8` | Win+F Done; Win+Ctrl+F Missing (no network search) |
-| Win+Tab and Win+Shift+Tab: the tray to the foreground, then message 0x43d to the taskband with +1 or -1 (the hot button moves) | `0x10215dc` | Partial: the keyboard is grabbed on the task buttons, the arrows move the hot button, Enter chooses it, the menu key and Shift+F10 open its menu. The taskband's handler of 0x43d was not located |
+| Win+Tab and Win+Shift+Tab: the tray to the foreground, then message 0x43d to the taskband with +1 or -1. The taskband (`sub_10020e9`) sets the focus on its toolbar and moves the hot item (TB_GETHOTITEM, taken as 0 when under 1) by one, round the ends, skipping hidden buttons: the first press lands on the second button | `0x10215dc`, `sub_10020e9` | Done; the keyboard is grabbed on the task buttons, the arrows move the hot button, Enter chooses it, the menu key and Shift+F10 open its menu |
 | Win+Pause: SHRunControlPanel on sysdm.cpl | `0x102161a` | Done |
 | Win+D: Show Desktop's toggle (`sub_1002d89`): the foreground window is kept to give back; Minimize All with lParam 1, which posts 0x453 to the desktop; the second press undoes it | `sub_1002d89` | Partial: bridge-wm's `_NET_SHOWING_DESKTOP` (the same toggle as the taskbar's menu); XP's Minimize All there also leaves "Undo Minimize All" in the menu, which the native one does not |
 | Win+B: SwitchToThisWindow on the tray, the focus on the notification area (`sub_101cdac`) | `0x1021567` | Partial: arrows move between icons, Enter clicks one, the menu key opens its menu; the focus rectangle (DrawFocusRect on the 18-pixel button) is not measured |
 | Win+F1: command 503 (Help and Support) | `0x1021543` | Missing: there is no Help and Support Center |
+| The Start button's tooltip, string 533 "Click here to begin" | `explorer.exe` | Done |
+| At logon (`sub_100eb38`, `sub_100ebca`): `StartButtonBalloonTip` (Explorer\Advanced) decides. With the Start panel, while it is under 2, explorer.exe brings the tray forward and presses the Start button itself (BM_SETSTATE on control 0x130), then writes 2. With the classic menu, while it is 0, a balloon (`sub_1030259`: tooltips_class32 with TTS_BALLOON, 300 wide, TTI_INFO, title 800, text 801) points at the Start button's top middle and goes after 10 s (timer 0x16); 1 becomes 2 at the next logon. Policy 0x40000042 turns it off | `sub_100eb38`, `sub_1030259` | Done (`StartMenu/StartButtonBalloonTip` in `native-explorer.conf`); 1 is written when the Start button is used with the balloon up |
+| Tray balloons' timeout: clamped to 10 000–60 000 ms (`sub_101fcc8`) | `sub_101fcc8` | Read (the native balloons clamp to 10–30 s, from Shell_NotifyIcon's documentation) |
 | Shift and Ctrl held with the Windows key | bridge-wm wrote only the keys | Done: written as VK_SHIFT and VK_CONTROL before the key; `proxy.c` holds them for Wine (needs a MinGW rebuild of `proxy.exe`) |
 | A keyboard layout set after the window manager started (Xwayland starts with the host's) | bridge-wm kept the first key map: Win+M was lost under a layout change | Done: MappingNotify refreshes the map and the shortcuts' grabs |
 
@@ -393,20 +400,40 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 
 | Area | Original feature | Evidence |
 |---|---|---|
-| Taskbar | Dragging an item over a task button brings its window forward after a delay; dropping on it shows 711 ("You cannot drop an item onto a button on the taskbar…") | String 711 |
 | Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx (the native button keeps the flash colour while the window wants attention) | `sub_1002819`; user32 not reversed |
 | Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604 |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
 | Taskbar | The taskband's extra rows and scroll arrows; TaskbarGroupSize 1 and 2+ | Section 6 |
 | Taskbar | Desktop, Links and New Toolbar bands; deskbands | Section 2 |
-| Balloons | "Click here to begin" on the Start button at the first logons (533, 800, 801) | Strings 533, 800, 801 |
 | Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings |
 | Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7 |
 | Start menu | Pin to Start menu, dragging items in the panel and in All Programs, Sort by Name | shell32's verbs; StartMenu band |
 | Start menu | Newly installed programs highlighted in All Programs (8229) | String 8229 |
 | Start menu | Favorites (8235), Windows Security (7022), Undock Computer (7012, 7014), Disconnect (7017) | Strings |
 | Start menu | "Some items cannot be shown" when the panel is too small (8231, 8232); the panel's size values 8256–8260 | Strings |
-| Start menu | The classic Start menu and the Customize dialogs (1311; dialogs 9, 1036, 1135) | Dialogs |
+| Start menu | The Customize dialogs (1311; dialogs 9, 1036, 1135) | Dialogs |
 | Start menu | Help and Support (`helpctr.exe -FromStartHelp`, 732) | String 732 |
 | Start menu | The infotip's own drawing | Section 7 |
 | Session | Safe mode notice (538, 539); "could not load or run" for the Run key's programs (515) | Strings |
+| Menus | Drop shadows under menus, tooltips and the Start menu: win32k's xxxAddShadow (`sub_bf854347`) puts a layered SysShadow window (WS_EX_LAYERED, TRANSPARENT, TOOLWINDOW; TOPMOST with a topmost owner) behind a CS_DROPSHADOW window when SPI_GETDROPSHADOW is on; its picture (`sub_bf8544b3`) is the window's size plus 5 each way | `win32k.sys` | Missing: the shadow's alpha (`sub_bf850d1b`) is not read yet |
+
+---
+
+## 14. The classic Start menu
+
+Binary: `explorer.exe` (menu 204, banners 158–167), `shell32.dll` (icons), measured on XP's own classic menu in Wine
+(policy `NoSimpleStartMenu` set for the capture, then put back). Port: [`startmenu.cpp`](../native-shell/src/startmenu.cpp)
+(`StartPanel::buildClassicMenu`, `paintClassicMenu`, `Cascade` with `flat`), [`taskbarproperties.cpp`](../native-shell/src/taskbarproperties.cpp).
+
+| Item | Source | Status |
+|---|---|---|
+| The entries: MENUEX 204 (Programs 504, Favorites 507, Documents 501, Settings 508 with Control Panel 505, Windows Security 5001, Network Connections 557, Printers and Faxes 510, Taskbar and Start Menu 413; Search 520, Help and Support 503, Run 401, Synchronize 553, Log Off %s 402, Disconnect 5000, Undock 410, Shut Down 506) | `explorer.exe` menu 204 | Done: Favorites, Windows Security, Synchronize, Disconnect and Undock are left out as XP leaves them by default; Shut Down... becomes 731 "T&urn Off Computer..." as on XP |
+| The banner: by edition (`sub_1015839`, IsOS: 162, 164, 163, 158, `winbrand.dll` 1304/1305, 166 Home, 167 Professional), loaded by `sub_10157f6` | `explorer.exe` bitmaps | Done with 167 (the edition is not known here); drawn at the bottom, its top-left colour above |
+| Layout: 1-pixel COLOR_BTNSHADOW border; rows 32; the Start Menu folder's items with 32-pixel icons 2 after the banner; menu 204's with 24-pixel icons 6 after it; words 42 after it; lines 9 rows (on the fifth) and 7 rows (on the fourth), 2 in from each side; width = widest words + 91 | XP in Wine, pixel-measured | Done: identical lines, border and words (icons differ only in Wine's rendering of their masks) |
+| Cascades (flat menus): 1-pixel border, rows 20, icon 3 in, words 27 in, separator 8 rows with its line on the fourth, arrow 4 x 7 9 from the right, width = widest words + 50; a cascade covers the right border of the menu it opens from, its top a row above the row's | XP in Wine | Done |
+| Settings: Control Panel (shell32 137), a line, Network Connections (ncpa.cpl 1001), Printers and Faxes (138), Taskbar and Start Menu (40); Documents: My Documents, My Pictures, a line, the recent documents or (Empty); Search: shell32's 23232 "For &Files or Folders..." | XP in Wine; `shell32.dll` | Done; Search's other find extensions (computers, people) are not there |
+| Keys: the arrows, Right opening a cascade, access keys underlined when the keys opened the menu | StartPanel's routing, one column | Done |
+| The Start Menu page: Start menu or Classic Start menu (controls 1132, 1133), preview 170 or 171 | dialog 205; `sub_1038a95` | Done; saved as `StartMenu/Classic` |
+| The Start Menu folder's own items | XP: Set Program Access and Defaults, Windows Catalog, Windows Update | Partial: Set Program Access and Defaults only |
+| Customize Classic Start Menu (dialog 1135) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | dialog 1135 | Missing (greyed) |
+| The desktop's icons in classic mode (XP keeps HideDesktopIcons per mode: ClassicStartMenu shows them) | XP in Wine (icons shown) | Missing |

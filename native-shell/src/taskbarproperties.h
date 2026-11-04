@@ -8,6 +8,7 @@
 #include <QDialog>
 #include <QHash>
 
+class QAbstractButton;
 class QCheckBox;
 class QLabel;
 class QPushButton;
@@ -27,6 +28,9 @@ struct TaskbarSettings
     bool locked = true;
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
+    bool classicStartMenu = false;
+    // explorer.exe's StartButtonBalloonTip: 0 until the Start button is first used, 2 once it has been
+    int startButtonBalloonTip = 0;   // the Start menu page's Classic Start menu (SHELLSTATE's fStartPanelOn off)
     bool hideInactive = true;   // Hide inactive icons (EnableAutoTray), on as XP sets it up    // Keep the taskbar on top of other windows (ABS_ALWAYSONTOP)   // Lock the Taskbar (explorer.exe's TaskbarSizeMove, inverted)   // the Quick Launch band in the taskbar's rebar
     static TaskbarSettings load();
     void save() const;
@@ -69,5 +73,6 @@ private:
     xpdialog::SheetTabs *m_tabs = nullptr;
     QPushButton *m_apply = nullptr;
     QHash<int, QCheckBox *> m_checks;   // by control ID
+    QAbstractButton *m_startRadio = nullptr, *m_classicRadio = nullptr;
     QLabel *m_taskbarPreview = nullptr, *m_notificationPreview = nullptr;
 };
