@@ -18,6 +18,8 @@
 #include <memory>
 
 class QCloseEvent;
+class QPainter;
+class QToolButton;
 
 namespace pictures {
 
@@ -113,6 +115,7 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
@@ -134,6 +137,8 @@ private:
     void toggleAnnotations(bool on);
     void saveAnnotations();
     QPointF inkPoint(QPoint at) const;
+    enum InkTool { InkPen, InkHighlighter, InkEraser, InkLine, InkRectangle, InkEllipse, InkArrow, InkText };
+    void drawInkShape(QPainter &painter, const QPointF &from, const QPointF &to) const;
 
     QStringList m_paths;
     int m_index = 0;
@@ -150,13 +155,16 @@ private:
     bool m_clickZoomsOut = false;   // after Zoom Out, a click zooms out (the zoom window's mode 2)
     QWidget *m_toolbar = nullptr;
     QWidget *m_annotationBar = nullptr;
+    QToolButton *m_annotateButton = nullptr;
     QHash<int, QWidget *> m_buttons;
     bool m_annotating = false;
     QImage m_ink;
-    QPointF m_inkFrom;
+    QPointF m_inkFrom, m_inkTo, m_inkLast;
     int m_inkWidth = 3;
-    bool m_inkEraser = false;
+    int m_inkTool = InkPen;
+    bool m_inkEraser = false, m_inkDrawing = false;
     QColor m_inkColour = Qt::black;
+    QList<QImage> m_inkUndo;
 };
 
 } // namespace pictures

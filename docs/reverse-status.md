@@ -134,7 +134,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 
 | Original feature | Status |
 |---|---|
-| Moving and resizing the unlocked taskbar (other screen edges, more rows) | Partial: dragging the unlocked bar's sizing bar moves it between the bottom and top edges (`Taskbar/Position`), with the Start menu, menus, auto-hide and struts following; the left and right edges, resizing and extra rows are not there |
+| Moving and resizing the unlocked taskbar (other screen edges, more rows) | Partial: dragging the unlocked bar's sizing bar moves it between the bottom and top edges (`Taskbar/Position`) or, staying on the edge, gives it two or three rows (`Taskbar/Rows`); the Start menu, menus, auto-hide and struts follow, and the task buttons wrap over the rows. The left and right edges are not there |
 | Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Partial: the Desktop band lists the Desktop folder's files, Links lists `Favorites/Links` and New Toolbar a chosen folder, as 16-pixel buttons (`Taskbar/DesktopBand`, `Taskbar/LinksBand`, `Taskbar/CustomToolbar`); the deskbands are missing |
 | Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog now shows Current Items' icons (Past Items have none), and the open chevron closes on a click elsewhere on the bar (but not in another application) |
@@ -210,11 +210,11 @@ Binary: `shimgvw.dll`. Port: `pictures::Viewer` in [`pictures.cpp`](../native-sh
 | Original feature | Status |
 |---|---|
 | Print (Photo Printing Wizard) | Partial: `photowiz.dll` is extracted for its strings and the viewer shows a wizard of its own with Picture Selection (all the folder's pictures, check marks), Printing Options (printer and paper), Layout Selection (full page, 2x2, 3x3, 4x4, Wallet, Contact sheet) and a progress dialog, printing each chosen picture on the page. photowiz.dll's own dialogs 200/201 and preview are not read |
-| Help (`ImgPrev.chm`) | Partial: the Help button shows a shortcut summary; XP's `ImgPrev.chm` is not extracted/read |
-| Annotations (409–415, 402, 422, 419) | Partial: a pencil button opens a small annotation bar with Pen, Highlighter, Eraser, Clear and Save; the ink is a transparent image over the picture and Save writes a `(annotated)` copy. XP's tool set (text, shapes, stamps), undo and its own save prompt are missing |
+| Help (`ImgPrev.chm`) | Partial: the Help button runs XP's own `ImgPrev.chm` through Wine's `hh.exe` when both are there, otherwise it shows a shortcut summary; the CHM is not read by the port itself |
+| Annotations (409–415, 402, 422, 419) | Partial: a pencil button opens a small annotation bar with Pen, Highlighter, Eraser, Line, Rectangle, Ellipse, Arrow, Text, Undo, Clear and Save; the ink is a transparent image over the picture and Save writes a `(annotated)` copy. XP's stamps and its own save prompt are missing |
 | Margins and remembered window size | Done: measured on XP's own viewer (`shimgvw.dll` run with rundll32 in Wine): the 22-pixel toolbar sits 8 rows above the client's bottom and the picture's frame 8 rows above the toolbar; on closing XP writes `Bounds` (a RECT) and `Maximize` (a DWORD) under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\ShellImageView`, here `Viewer/Bounds` and `Viewer/Maximize` in `native-explorer.conf` |
 | Animated images (GIF) | Done (played at their own frame delays) |
-| Comparison with the real viewer running in Wine | Missing |
+| Comparison with the real viewer running in Wine | Done: `shimgvw.dll`'s own viewer ran under Wine (32-bit `rundll32.exe`); its default window is 3/4 of the screen wide and 2/3 high, its toolbar has the same 12 buttons for a bitmap, and it shows no annotation pencil for BMP (TIFF only). The port now opens at that size and hides the pencil for non-TIFF. The title bar itself is the window manager's in both |
 
 ---
 

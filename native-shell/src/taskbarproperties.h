@@ -36,6 +36,7 @@ struct TaskbarSettings
     bool linksBand = false;     // the Toolbars menu's Links band
     bool locked = true;
     int position = 0;   // Taskbar/Position: 0 bottom, 1 top (left and right are not laid out)
+    int rows = 1;       // Taskbar/Rows: the bar's task rows
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
     bool quickLaunchLargeIcons = false;   // its View menu's Large Icons (32-pixel icons)

@@ -31,10 +31,14 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QCloseEvent>
+#include <QCoreApplication>
+#include <cmath>
 #include <QImageReader>
 #include <QSettings>
 #include <QImageWriter>
+#include <QInputDialog>
 #include <QImageWriter>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QPainter>
@@ -555,40 +559,63 @@ Viewer::Viewer(const QString &path)
     auto *annotationRow = new QHBoxLayout(m_annotationBar);
     annotationRow->setContentsMargins(4, 2, 4, 2);
     annotationRow->setSpacing(4);
-    const auto addAnnotation = [this, annotationRow](const QString &text, const QColor &colour, int width, bool eraser) {
+    const auto addAnnotation = [this, annotationRow](const QString &text, int tool, const QColor &colour, int width) {
         auto *button = new QToolButton(m_annotationBar);
         button->setText(text);
         button->setAutoRaise(true);
         annotationRow->addWidget(button);
-        connect(button, &QToolButton::clicked, this, [this, colour, width, eraser] {
+        connect(button, &QToolButton::clicked, this, [this, tool, colour, width] {
+            m_inkTool = tool;
             m_inkColour = colour;
             m_inkWidth = width;
-            m_inkEraser = eraser;
+            m_inkEraser = tool == InkEraser;
         });
     };
-    addAnnotation(tr("Pen"), Qt::black, 3, false);
-    addAnnotation(tr("Highlighter"), QColor(255, 220, 0, 150), 12, false);
-    addAnnotation(tr("Eraser"), Qt::transparent, 20, true);
+    addAnnotation(tr("Pen"), InkPen, Qt::black, 3);
+    addAnnotation(tr("Highlighter"), InkHighlighter, QColor(255, 220, 0, 150), 12);
+    addAnnotation(tr("Eraser"), InkEraser, Qt::transparent, 20);
+    addAnnotation(tr("Line"), InkLine, Qt::black, 3);
+    addAnnotation(tr("Rectangle"), InkRectangle, Qt::black, 3);
+    addAnnotation(tr("Ellipse"), InkEllipse, Qt::black, 3);
+    addAnnotation(tr("Arrow"), InkArrow, Qt::black, 3);
+    addAnnotation(tr("Text"), InkText, Qt::black, 3);
+    auto *undo = new QToolButton(m_annotationBar);
+    undo->setText(tr("Undo"));
+    annotationRow->addWidget(undo);
+    connect(undo, &QToolButton::clicked, this, [this] {
+        if (m_inkUndo.isEmpty())
+            return;
+        m_ink = m_inkUndo.takeLast();
+        update();
+    });
     auto *clear = new QToolButton(m_annotationBar);
     clear->setText(tr("Clear"));
     annotationRow->addWidget(clear);
-    connect(clear, &QToolButton::clicked, this, [this] { if (!m_ink.isNull()) m_ink.fill(Qt::transparent); update(); });
+    connect(clear, &QToolButton::clicked, this, [this] {
+        if (m_ink.isNull())
+            return;
+        m_inkUndo.append(m_ink);
+        if (m_inkUndo.size() > 20)
+            m_inkUndo.removeFirst();
+        m_ink.fill(Qt::transparent);
+        update();
+    });
     auto *save = new QToolButton(m_annotationBar);
     save->setText(tr("Save"));
     annotationRow->addWidget(save);
     connect(save, &QToolButton::clicked, this, &Viewer::saveAnnotations);
     m_annotationBar->adjustSize();
     m_annotationBar->hide();
-    auto *annotate = new QToolButton(m_toolbar);
-    annotate->setText(QStringLiteral("✎"));
-    annotate->setToolTip(tr("Annotate"));
-    annotate->setAutoRaise(true);
-    annotate->setCheckable(true);
-    row->addWidget(annotate);
-    connect(annotate, &QToolButton::toggled, this, &Viewer::toggleAnnotations);
+    m_annotateButton = new QToolButton(m_toolbar);
+    m_annotateButton->setText(QStringLiteral("✎"));
+    m_annotateButton->setToolTip(tr("Annotate"));
+    m_annotateButton->setAutoRaise(true);
+    m_annotateButton->setCheckable(true);
+    row->addWidget(m_annotateButton);
+    connect(m_annotateButton, &QToolButton::toggled, this, &Viewer::toggleAnnotations);
     m_toolbar->adjustSize();
     const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
-    resize(qMin(800, screen.width() * 2 / 3), qMin(600, screen.height() * 2 / 3));
+    resize(qMin(800, screen.width() * 3 / 4), qMin(600, screen.height() * 2 / 3));
     // As XP's viewer keeps them under Explorer\\ShellImageView (seen in Wine's registry after it closed): its
     // Bounds (a RECT) and Maximize, read before the window is shown.
     const QSettings settings(viewerSettingsPath(), QSettings::IniFormat);
@@ -621,6 +648,15 @@ void Viewer::show(int index)
     m_image = m_reader->read();
     m_ink = QImage(m_image.size(), QImage::Format_ARGB32_Premultiplied);
     m_ink.fill(Qt::transparent);
+    m_inkUndo.clear();
+    // XP annotates TIFF files only: the pencil is there for them, not for a bitmap.
+    const QString suffix = QFileInfo(m_paths.value(m_index)).suffix().toLower();
+    const bool annotatable = suffix == QLatin1String("tif") || suffix == QLatin1String("tiff");
+    if (m_annotateButton) {
+        m_annotateButton->setVisible(annotatable);
+        if (!annotatable && m_annotateButton->isChecked())
+            m_annotateButton->setChecked(false);
+    }
     // an animated picture plays (GIF); one of pages keeps the first and gets the page buttons
     m_frames.stop();
     if (m_animated)
@@ -856,7 +892,26 @@ void Viewer::command(int id)
 #endif
         break;
     }
-    case VIEW_HELP:
+    case VIEW_HELP: {
+        // XP's own ImgPrev.chm, through Wine's Help viewer when both are there; otherwise the
+        // shortcut summary.
+        const QString chm = xpfiles::find(QStringLiteral("imgprev.chm"));
+        QString wine = QStandardPaths::findExecutable(QStringLiteral("wine"));
+        if (wine.isEmpty()) {
+            for (const QString &candidate : {QStringLiteral("/../../wine-install/bin/wine"), QStringLiteral("/../../wine-build/loader/wine")}) {
+                const QString path = QDir::cleanPath(QCoreApplication::applicationDirPath() + candidate);
+                if (QFileInfo(path).isExecutable()) {
+                    wine = path;
+                    break;
+                }
+            }
+        }
+        if (!chm.isEmpty() && !wine.isEmpty()) {
+            QString path = QStringLiteral("Z:") + chm;
+            path.replace(QLatin1Char('/'), QLatin1Char('\\'));
+            QProcess::startDetached(wine, {QStringLiteral("C:\\windows\\syswow64\\hh.exe"), path}, QDir::homePath());
+            break;
+        }
         QMessageBox::information(this, viewerString(VIEW_HELP, "Help"),
                                  tr("Windows Picture and Fax Viewer\n\n"
                                     "Left/Right: previous/next picture\n"
@@ -866,6 +921,7 @@ void Viewer::command(int id)
                                     "Ctrl+S: Copy To; Ctrl+P: Print; Delete: Recycle Bin\n"
                                     "Ctrl+E: open for editing"));
         break;
+    }
     case VIEW_COPY_TO: {
         const QString target = QFileDialog::getSaveFileName(this, viewerString(STRING_COPY_TO, "Copy To"), path);
         if (!target.isEmpty() && target != path)
@@ -976,8 +1032,17 @@ void Viewer::paintEvent(QPaintEvent *)
     const int margin = ShellTheme::instance()->scaled(TOOLBAR_BOTTOM_MARGIN);
     painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - margin - ShellTheme::instance()->scaled(PICTURE_TOOLBAR_GAP)));
     painter.drawImage(imageRect(), m_image);
-    if (!m_ink.isNull() && !m_ink.isNull())
+    if (!m_ink.isNull())
         painter.drawImage(imageRect(), m_ink);
+    if (m_inkDrawing && (m_inkTool == InkLine || m_inkTool == InkRectangle || m_inkTool == InkEllipse || m_inkTool == InkArrow)) {
+        painter.save();
+        painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - margin - ShellTheme::instance()->scaled(PICTURE_TOOLBAR_GAP)));
+        const QRect rect = imageRect();
+        painter.translate(rect.topLeft());
+        painter.scale(m_scale, m_scale);
+        drawInkShape(painter, m_inkFrom, m_inkTo);
+        painter.restore();
+    }
 }
 
 void Viewer::toggleAnnotations(bool on)
@@ -992,6 +1057,37 @@ QPointF Viewer::inkPoint(QPoint at) const
 {
     const QRect rect = imageRect();
     return QPointF((at.x() - rect.x()) / m_scale, (at.y() - rect.y()) / m_scale);
+}
+
+void Viewer::drawInkShape(QPainter &painter, const QPointF &from, const QPointF &to) const
+{
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    switch (m_inkTool) {
+    case InkLine:
+        painter.drawLine(from, to);
+        break;
+    case InkRectangle:
+        painter.drawRect(QRectF(from, to).normalized());
+        break;
+    case InkEllipse:
+        painter.drawEllipse(QRectF(from, to).normalized());
+        break;
+    case InkArrow: {
+        painter.drawLine(from, to);
+        const double angle = std::atan2(to.y() - from.y(), to.x() - from.x());
+        const double length = qMax(8.0, m_inkWidth * 4.0);
+        for (double side : {-0.5, 0.5})
+            painter.drawLine(to, to - QPointF(std::cos(angle + side) * length, std::sin(angle + side) * length));
+        break;
+    }
+    default:
+        break;
+    }
+    painter.restore();
 }
 
 void Viewer::saveAnnotations()
@@ -1052,11 +1148,17 @@ void Viewer::keyPressEvent(QKeyEvent *event)
 void Viewer::mousePressEvent(QMouseEvent *event)
 {
     if (m_annotating && event->button() == Qt::LeftButton) {
-        m_inkFrom = inkPoint(event->position().toPoint());
-        QPainter painter(&m_ink);
-        painter.setCompositionMode(m_inkEraser ? QPainter::CompositionMode_Clear : QPainter::CompositionMode_SourceOver);
-        painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPoint(m_inkFrom);
+        m_inkUndo.append(m_ink);
+        if (m_inkUndo.size() > 20)
+            m_inkUndo.removeFirst();
+        m_inkFrom = m_inkTo = m_inkLast = inkPoint(event->position().toPoint());
+        m_inkDrawing = true;
+        if (m_inkTool == InkPen || m_inkTool == InkHighlighter || m_inkTool == InkEraser) {
+            QPainter painter(&m_ink);
+            painter.setCompositionMode(m_inkEraser ? QPainter::CompositionMode_Clear : QPainter::CompositionMode_SourceOver);
+            painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.drawPoint(m_inkFrom);
+        }
         update();
         return;
     }
@@ -1069,8 +1171,47 @@ void Viewer::mousePressEvent(QMouseEvent *event)
     zoomAt(m_dragFrom, shift == m_clickZoomsOut);
 }
 
+void Viewer::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_annotating && m_inkDrawing && event->button() == Qt::LeftButton) {
+        m_inkDrawing = false;
+        if (m_inkTool == InkText) {
+            bool ok = false;
+            const QString text = QInputDialog::getText(this, tr("Text"), tr("Text:"), QLineEdit::Normal, QString(), &ok);
+            if (ok && !text.isEmpty()) {
+                QPainter painter(&m_ink);
+                QFont font(QStringLiteral("Tahoma"));
+                font.setPointSizeF(qMax(8.0, m_inkWidth * 3.0));
+                painter.setFont(font);
+                painter.setPen(m_inkColour);
+                painter.drawText(m_inkFrom, text);
+            }
+        } else if (m_inkTool != InkPen && m_inkTool != InkHighlighter && m_inkTool != InkEraser) {
+            QPainter painter(&m_ink);
+            drawInkShape(painter, m_inkFrom, m_inkTo);
+        }
+        update();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
 void Viewer::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_annotating && m_inkDrawing && (event->buttons() & Qt::LeftButton)) {
+        const QPointF at = inkPoint(event->position().toPoint());
+        if (m_inkTool == InkPen || m_inkTool == InkHighlighter || m_inkTool == InkEraser) {
+            QPainter painter(&m_ink);
+            painter.setCompositionMode(m_inkEraser ? QPainter::CompositionMode_Clear : QPainter::CompositionMode_SourceOver);
+            painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.drawLine(m_inkLast, at);
+            m_inkLast = at;
+        } else {
+            m_inkTo = at;
+        }
+        update();
+        return;
+    }
     // a picture bigger than the window follows the mouse
     if (!m_panning || !(event->buttons() & (Qt::LeftButton | Qt::MiddleButton)))
         return;

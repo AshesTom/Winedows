@@ -96,6 +96,7 @@ TaskbarSettings TaskbarSettings::load()
     loaded.linksBand = settings.value(QStringLiteral("Taskbar/LinksBand"), false).toBool();
     loaded.locked = !settings.value(QStringLiteral("Taskbar/TaskbarSizeMove"), false).toBool();
     loaded.position = settings.value(QStringLiteral("Taskbar/Position"), 0).toInt();
+    loaded.rows = qBound(1, settings.value(QStringLiteral("Taskbar/Rows"), 1).toInt(), 3);
     loaded.onTop = settings.value(QStringLiteral("Taskbar/AlwaysOnTop"), true).toBool();
     loaded.quickLaunchText = settings.value(QStringLiteral("Taskbar/QuickLaunchText"), false).toBool();
     loaded.quickLaunchTitle = settings.value(QStringLiteral("Taskbar/QuickLaunchTitle"), false).toBool();
@@ -132,6 +133,7 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/LinksBand"), linksBand);
     settings.setValue(QStringLiteral("Taskbar/TaskbarSizeMove"), !locked);
     settings.setValue(QStringLiteral("Taskbar/Position"), position);
+    settings.setValue(QStringLiteral("Taskbar/Rows"), qBound(1, rows, 3));
     settings.setValue(QStringLiteral("Taskbar/AlwaysOnTop"), onTop);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchText"), quickLaunchText);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchTitle"), quickLaunchTitle);

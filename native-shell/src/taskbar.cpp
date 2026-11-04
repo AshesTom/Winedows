@@ -605,7 +605,8 @@ int Taskbar::baseHeight() const
 {
     // the bar's own rows, taller for Quick Launch's large icons (Windows Classic's not measured: the same 16)
     const int bar = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
-    return bar + (m_settings.quickLaunch && m_settings.quickLaunchLargeIcons ? theme()->scaled(QUICK_LARGE_BAR_EXTRA) : 0);
+    return bar * qMax(1, m_settings.rows)
+        + (m_settings.quickLaunch && m_settings.quickLaunchLargeIcons ? theme()->scaled(QUICK_LARGE_BAR_EXTRA) : 0);
 }
 
 QRect Taskbar::shownRect() const
@@ -904,6 +905,9 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     w4w::Renderer *renderer = theme()->renderer();
     const QList<Task> &tasks = m_windows->tasks();
     const int band = qMax(0, bandEnd - bandStart);
+    const int rows = qMax(1, m_settings.rows);
+    const int effectiveBand = band * rows;
+    const int rowHeight = qMax(1, barHeight() / rows);
     m_bandRect = QRect(bandStart, 0, band, barHeight());
     const int spacing = renderer ? 0 : theme()->scaled(CLASSIC_SPACING);
     const int maxWidth = theme()->scaled(TASK_MAX_WIDTH);
@@ -949,7 +953,7 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     const auto ideal = [&](int count) {
         if (!count)
             return maxWidth;
-        return qMin(maxWidth, band / count - (count > 1 ? spacing : 0));
+        return qMin(maxWidth, effectiveBand / count - (count > 1 ? spacing : 0));
     };
     int width = maxWidth;
     for (int pass = 0; pass <= programs.size(); ++pass) {
@@ -982,7 +986,7 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
         }
         if (groupSize >= 2)
             break;
-        const int room = (band - count * groupWidth) / groupWidth;
+        const int room = (effectiveBand - count * groupWidth) / groupWidth;
         QString candidate;
         if (room >= 2)
             for (const QString &program : std::as_const(m_grouped))
@@ -1017,27 +1021,29 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     const int count = int(m_buttons.size());
     const int total = count > 0 ? count * step - spacing : 0;
     const auto place = [&](int columns, int page) {
+        const int capacity = qMax(1, columns * rows);
         for (int i = 0; i < count; ++i) {
-            if (i / columns != page) {
+            if (i / capacity != page) {
                 m_buttons[i].rect = QRect();
                 continue;
             }
-            QRect rect(bandStart + (i % columns) * step, 0, width, barHeight());
+            const int inPage = i % capacity, column = inPage % columns, row = inPage / columns;
+            QRect rect(bandStart + column * step, row * rowHeight, width, rowHeight);
             if (!renderer)
-                rect = QRect(rect.x(), theme()->scaled(4), width, barHeight() - theme()->scaled(6));
+                rect = QRect(rect.x(), rect.y() + theme()->scaled(4), width, rowHeight - theme()->scaled(6));
             m_buttons[i].rect = rect;
         }
     };
     m_scrollRect = m_scrollUp = m_scrollDown = QRect();
     m_scrollPages = 1;
-    if (total > band && count > 0) {
+    if (total > effectiveBand && count > 0) {
         const int scrollbar = theme()->scaled(renderer ? SCROLL_WIDTH : CLASSIC_SCROLL_WIDTH);
         const int view = qMax(0, band - scrollbar);
         int columns = qMax(1, view / step);
         while (columns > 1 && columns * step - spacing > view)
             --columns;
-        m_scrollColumns = columns;
-        m_scrollPages = (count + columns - 1) / columns;
+        m_scrollColumns = qMax(1, columns * rows);
+        m_scrollPages = (count + m_scrollColumns - 1) / m_scrollColumns;
         m_scrollPage = qBound(0, m_scrollPage, m_scrollPages - 1);
         m_scrollRect = QRect(bandStart + view, 0, scrollbar, barHeight());
         const int arrow = qMin(scrollbar, qMax(1, barHeight() / 2));
@@ -1529,6 +1535,8 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
     // The sizing bar moves the unlocked bar between the bottom and top edges.
     if (event->button() == Qt::LeftButton && !m_settings.locked && event->position().y() < m_top) {
         m_movingBar = true;
+        m_barDragFromY = event->globalPosition().toPoint().y();
+        m_barRowsStart = m_settings.rows;
         return;
     }
     if (event->button() == Qt::LeftButton && hit.kind == Hit::Start) {
@@ -1565,12 +1573,26 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     if (m_movingBar) {
         m_movingBar = false;
         const QRect monitor = QGuiApplication::primaryScreen()->geometry();
-        const int position = event->globalPosition().toPoint().y() < monitor.center().y() ? 1 : 0;
-        if (position != m_settings.position) {
-            TaskbarSettings settings = TaskbarSettings::load();
+        const int y = event->globalPosition().toPoint().y();
+        const int position = y < monitor.center().y() ? 1 : 0;
+        // Dragging across the screen moves the bar; dragging from its edge resizes it.
+        const int row = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
+        const int delta = y - m_barDragFromY;
+        const int rows = qBound(1, m_barRowsStart + (m_settings.position == 1 ? delta : -delta) / qMax(1, row), 3);
+        TaskbarSettings settings = TaskbarSettings::load();
+        bool changed = false;
+        const bool move = position != m_settings.position && qAbs(delta) > row;
+        if (move) {
             settings.position = position;
-            settings.save();
             m_settings.position = position;
+            changed = true;
+        } else if (qAbs(delta) >= row / 2 && rows != m_barRowsStart) {
+            settings.rows = rows;
+            m_settings.rows = rows;
+            changed = true;
+        }
+        if (changed) {
+            settings.save();
             placeOnScreen();
         }
         return;
