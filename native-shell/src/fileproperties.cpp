@@ -7,6 +7,7 @@
 #include "xpfiles.h"
 
 #include <QAbstractButton>
+#include <QCheckBox>
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
@@ -308,6 +309,25 @@ QWidget *versionPage(const VersionInfo &info, QString *caption)
     return page;
 }
 
+// shell32's Advanced Attributes (dialogs 1054 a file, 1055 a folder): the archive, index, compress and
+// encrypt attributes have no Linux equivalent here, so they are shown greyed; the dialog is XP's.
+void showAdvanced(QWidget *parent, bool folder)
+{
+    if (!shell32())
+        return;
+    QDialog dialog(parent);
+    const xpdialog::Page page = xpdialog::build(*shell32(), folder ? 1055 : 1054, &dialog);
+    dialog.setWindowTitle(page.caption);
+    for (QWidget *control : std::as_const(page.controls))
+        if (qobject_cast<QCheckBox *>(control) || (qobject_cast<QPushButton *>(control) && control != page.controls.value(1) && control != page.controls.value(2)))
+            control->setEnabled(false);
+    if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(1)))
+        QObject::connect(ok, &QPushButton::clicked, &dialog, &QDialog::accept);
+    if (auto *cancel = qobject_cast<QPushButton *>(page.controls.value(2)))
+        QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    dialog.exec();
+}
+
 } // namespace
 
 void show(const QStringList &paths, QWidget *parent)
@@ -407,8 +427,11 @@ void show(const QStringList &paths, QWidget *parent)
     }
     if (QWidget *archive = page.controls.value(ARCHIVE))
         archive->setEnabled(false);
-    if (QWidget *advanced = page.controls.value(ADVANCED))
-        advanced->hide();
+    if (auto *advanced = qobject_cast<QPushButton *>(page.controls.value(ADVANCED)); advanced && one) {
+        advanced->show();
+        advanced->setEnabled(true);
+        QObject::connect(advanced, &QPushButton::clicked, dialog, [dialog, folder] { showAdvanced(dialog, folder); });
+    }
 
     tabs->addTab(general, page.caption.isEmpty() ? QObject::tr("General") : page.caption);
     if (one && !folder)
