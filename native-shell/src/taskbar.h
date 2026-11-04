@@ -91,6 +91,9 @@ private:
     // double-click rectangle brings it back 50 ms later (timer 3). It slides for 400 ms going and
     // 200 ms coming (the tray's 0x4f0 and 0x4f4), a frame each 20 ms.
     QRect shownRect() const;
+    int sizingHeight() const;
+    void setOnTop();
+    int barHeight() const { return height() - m_top; }
     QRect hiddenRect() const;
     void checkAutoHide();
     void setHidden(bool hidden, bool animate = true);
@@ -112,6 +115,8 @@ private:
     QSet<QString> m_grouped;   // the programs whose windows share a button
     QList<QRect> m_trayIconRects;
     QList<QuickItem> m_quickItems;
+    QList<QRect> m_grippers;
+    int m_top = 0;   // the sizing bar's rows above the bar, unlocked
     QFileSystemWatcher m_quickWatcher;
     arrange::Undo m_undo;
     int m_undoString = 0;      // explorer.exe's name for what Undo puts back

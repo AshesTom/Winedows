@@ -23,7 +23,9 @@ struct TaskbarSettings
     bool group = true;
     bool clock = true;
     bool autoHide = false;   // StuckRects2's ABS_AUTOHIDE
-    bool quickLaunch = false;   // the Quick Launch band in the taskbar's rebar
+    bool quickLaunch = false;
+    bool locked = true;
+    bool onTop = true;    // Keep the taskbar on top of other windows (ABS_ALWAYSONTOP)   // Lock the Taskbar (explorer.exe's TaskbarSizeMove, inverted)   // the Quick Launch band in the taskbar's rebar
     static TaskbarSettings load();
     void save() const;
 };

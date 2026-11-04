@@ -62,6 +62,8 @@ TaskbarSettings TaskbarSettings::load()
     loaded.clock = !settings.value(QStringLiteral("Taskbar/HideClock"), false).toBool();
     loaded.autoHide = settings.value(QStringLiteral("Taskbar/AutoHide"), false).toBool();
     loaded.quickLaunch = settings.value(QStringLiteral("Taskbar/QuickLaunch"), false).toBool();
+    loaded.locked = !settings.value(QStringLiteral("Taskbar/TaskbarSizeMove"), false).toBool();
+    loaded.onTop = settings.value(QStringLiteral("Taskbar/AlwaysOnTop"), true).toBool();
     return loaded;
 }
 
@@ -72,6 +74,8 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/HideClock"), !clock);
     settings.setValue(QStringLiteral("Taskbar/AutoHide"), autoHide);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunch"), quickLaunch);
+    settings.setValue(QStringLiteral("Taskbar/TaskbarSizeMove"), !locked);
+    settings.setValue(QStringLiteral("Taskbar/AlwaysOnTop"), onTop);
 }
 
 TaskbarSettingsNotifier *TaskbarSettingsNotifier::instance()
@@ -125,16 +129,17 @@ QWidget *TaskbarProperties::taskbarPage()
     m_taskbarPreview = qobject_cast<QLabel *>(dialog.controls.value(ID_TASKBAR_PREVIEW));
     m_notificationPreview = qobject_cast<QLabel *>(dialog.controls.value(ID_NOTIFICATION_PREVIEW));
     const TaskbarSettings settings = TaskbarSettings::load();
-    // What this taskbar is and cannot change: locked, on top, no inactive icons hidden
+    // What this taskbar cannot change: no inactive icons hidden
     const QHash<int, bool> states{
-        {ID_LOCK, true}, {ID_AUTO_HIDE, settings.autoHide}, {ID_ON_TOP, true}, {ID_GROUP, settings.group}, {ID_QUICK_LAUNCH, settings.quickLaunch},
+        {ID_LOCK, settings.locked}, {ID_AUTO_HIDE, settings.autoHide}, {ID_ON_TOP, settings.onTop}, {ID_GROUP, settings.group}, {ID_QUICK_LAUNCH, settings.quickLaunch},
         {ID_CLOCK, settings.clock}, {ID_HIDE_INACTIVE, false},
     };
     for (auto it = states.begin(); it != states.end(); ++it)
         if (QCheckBox *check = m_checks.value(it.key())) {
             check->setChecked(it.value());
             check->setEnabled(it.key() == ID_GROUP || it.key() == ID_CLOCK || it.key() == ID_AUTO_HIDE
-                              || it.key() == ID_QUICK_LAUNCH);
+                              || it.key() == ID_QUICK_LAUNCH || it.key() == ID_LOCK
+                              || it.key() == ID_ON_TOP);
             connect(check, &QCheckBox::toggled, this, [this] {
                 updatePreviews();
                 m_apply->setEnabled(true);
@@ -182,6 +187,8 @@ void TaskbarProperties::apply()
     settings.clock = m_checks.value(ID_CLOCK) && m_checks.value(ID_CLOCK)->isChecked();
     settings.autoHide = m_checks.value(ID_AUTO_HIDE) && m_checks.value(ID_AUTO_HIDE)->isChecked();
     settings.quickLaunch = m_checks.value(ID_QUICK_LAUNCH) && m_checks.value(ID_QUICK_LAUNCH)->isChecked();
+    settings.locked = m_checks.value(ID_LOCK) && m_checks.value(ID_LOCK)->isChecked();
+    settings.onTop = m_checks.value(ID_ON_TOP) && m_checks.value(ID_ON_TOP)->isChecked();
     settings.save();
     m_apply->setEnabled(false);
     emit TaskbarSettingsNotifier::instance()->changed();

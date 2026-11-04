@@ -387,6 +387,15 @@ class Manager:
                      height=height, border_width=border,
                      override=False), event_mask=X.StructureNotifyMask)
 
+    def topmost_dock(self, c):
+        """Whether the taskbar C covers the windows: unless it is not "Keep the
+        taskbar on top of other windows" (_NET_WM_STATE_BELOW, XP's ABS_ALWAYSONTOP
+        off), when it is in the windows' order and comes up only while it has the
+        keyboard, as a click brings XP's up."""
+        if self.atom('_NET_WM_STATE_BELOW') not in self.prop(c['w'], '_NET_WM_STATE'):
+            return True
+        return self.focused_client() == c['w'].id
+
     def focus_shell(self, w, time=X.CurrentTime):
         """Give the XP desktop or taskbar the keyboard, as a click does on XP.
 
@@ -400,6 +409,11 @@ class Manager:
         if self.active:
             self.active = 0
             self.setprop(self.root, '_NET_ACTIVE_WINDOW', Xatom.WINDOW, [0])
+        c = self.clients.get(w.id)
+        if c and c['kind'] == 'dock':
+            # a taskbar not kept on top comes up over the windows when clicked
+            self.raise_managed(w)
+            self.raise_overlays()
 
     def focused_client(self):
         """The client that holds the X keyboard focus, or one of its windows does."""
@@ -706,7 +720,7 @@ class Manager:
             if c['kind'] == 'desktop':
                 c['w'].configure(stack_mode=X.Below)
         for c in self.clients.values():
-            if c['kind'] == 'dock' and not c['hidden']:
+            if c['kind'] == 'dock' and not c['hidden'] and self.topmost_dock(c):
                 self.raise_managed(c['w'])
         # As on XP, the active full-screen window (a video, a game, a screen
         # capture's selection) covers the taskbar; another one uncovers it.
@@ -1238,6 +1252,8 @@ class Manager:
                     e.window.unmap()
                 if c['kind'] == 'dock' or e.atom in (self.atom('_WIN4WINE_CLASS'), self.atom('_NET_WM_WINDOW_TYPE')):
                     self.workarea()
+                if c['kind'] == 'dock' and e.atom == self.atom('_NET_WM_STATE'):
+                    self.restack()
         elif e.type == X.ButtonPress:
             if e.state & X.Mod1Mask and e.window.id == self.root.id and e.child:
                 child = self.clients.get(e.child.id)

@@ -113,6 +113,8 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Start menu preview: 170, or 171 for the classic menu | `FUN_01038a95`, `FUN_0103a4d5` | Done |
 | Page initialisation (TaskbarGlomming, HideClock, policy restrictions) | `FUN_01039650` | Done for the four supported settings |
 | Quick Launch: its buttons themed `TaskBar::Toolbar.Button` (the task buttons' art without an edge), 23 wide and the band's height, the icon at (3, 7); the task band 4 pixels after the last button | `luna.msstyles`; XP's taskbar in Wine, locked and unlocked (grippers at 104 and 164) | Done; the 4-pixel band gap is read from the unlocked bar's grippers, since that test bar showed no task buttons |
+| Unlocked: `TaskBar.SizingBarBottom` (4 rows) above the bar, and a 10-pixel band header with `TaskBar::Rebar.Gripper` (6 wide, tiled down) before each band | XP's taskbar in Wine, unlocked: identical rows 734 to 767 apart from the icons | Done; saved as `Taskbar/TaskbarSizeMove`, from the sheet and the taskbar menu's Lock the Taskbar |
+| Keep the taskbar on top: off, the bar is in the windows' order and comes up when clicked | XP's behaviour (ABS_ALWAYSONTOP) | Done: `_NET_WM_STATE_BELOW`, which bridge-wm honours; saved as `Taskbar/AlwaysOnTop` |
 | The Toolbars submenu: browseui's band site menu 268 (Desktop 3, Quick Launch 4, New Toolbar 1) | `browselc.dll` | Done for Quick Launch; the others are greyed |
 | Show Desktop: `Show Desktop.scf` with `[Taskbar] Command=ToggleDesktop`, explorer.exe's icon index 3 | XP's setup (`shell.inf`) | Done |
 | Auto-hide: flags at tray `+0x44` (1 on, 2 hidden); a 500 ms check (timer 2) hides the bar when the pointer is off it; a move on the hidden bar wider than SM_CXDOUBLECLK x SM_CYDOUBLECLK arms timer 3 (50 ms), which shows it | `FUN_01030c59`, `FUN_01021ff7`, `FUN_0101f7be`, `FUN_01032b15` | Done |
@@ -123,7 +125,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 
 | Original feature | Status |
 |---|---|
-| Lock the taskbar, Keep on top | Missing (greyed, showing the taskbar's actual state); Auto-hide is done and saved as `Taskbar/AutoHide` |
+| Moving and resizing the unlocked taskbar (other screen edges, more rows) | Missing: unlocked, it shows its sizing bar and grippers but stays one row at the bottom |
 | Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`; dragging items onto it, its shortcut menu and the chevron for overflow are missing |
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
 | Hide inactive icons and Customize Notifications (dialog 7) | Missing |

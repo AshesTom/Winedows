@@ -97,7 +97,11 @@ const Part TASK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("ta
 // the hot frame from 104, the task band 4 after the last button.
 const Part QUICK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskbar")};
 const int QUICK_WIDTH = 23, QUICK_ICON_X = 3, QUICK_ICON_Y = 7, QUICK_BAND_END = 4;
-const int ICON_SHOW_DESKTOP = 3;    // explorer.exe's fourth icon, Show Desktop's
+const int ICON_SHOW_DESKTOP = 3;
+// Unlocked: the sizing bar above (TaskBar.SizingBarBottom, 4 rows on XP's) and each band's gripper
+const Part SIZING_BAR{QStringLiteral("taskbar"), QStringLiteral("sizingbarbottom"), {}, 1, {}};
+const Part GRIPPER{QStringLiteral("rebar"), QStringLiteral("gripper"), {}, 1, QStringLiteral("taskbar")};
+const int BAND_HEADER = 10, SIZING_BAR_HEIGHT = 4;    // explorer.exe's fourth icon, Show Desktop's
 const Part TASK_FLASH{QStringLiteral("taskband"), QStringLiteral("flashbutton"), {}, 1, {}};
 const Part BACKGROUND{QStringLiteral("taskbar"), QStringLiteral("backgroundbottom"), {}, 1, {}};
 const Part TRAY_BACKGROUND{QStringLiteral("traynotify"), QStringLiteral("background"), {}, 1, QStringLiteral("traynotifyhoriz")};
@@ -308,7 +312,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         const QList<TrayIcon> &icons = m_tray->icons();
         for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
             if (icons[i].id == id && isVisible())
-                return QRect(mapToGlobal(m_trayIconRects[i].topLeft()), m_trayIconRects[i].size());
+                return QRect(mapToGlobal(m_trayIconRects[i].topLeft() + QPoint(0, m_top)), m_trayIconRects[i].size());
         return QRect();
     });
     connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
@@ -347,10 +351,12 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     const auto reloadSettings = [this] {
         const TaskbarSettings settings = TaskbarSettings::load();
         if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
-            && settings.quickLaunch == m_settings.quickLaunch)
+            && settings.quickLaunch == m_settings.quickLaunch && settings.locked == m_settings.locked
+            && settings.onTop == m_settings.onTop)
             return;
-        const bool autoHide = settings.autoHide != m_settings.autoHide;
+        const bool autoHide = settings.autoHide != m_settings.autoHide || settings.locked != m_settings.locked;
         m_settings = settings;
+        setOnTop();
         if (autoHide) {
             setHidden(false, false);
             placeOnScreen();
@@ -372,6 +378,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     });
     // bridge-wm and the session's supervisor know XP's taskbar by this class.
     x11::setString(winId(), "_WIN4WINE_CLASS", "Shell_TrayWnd");
+    setOnTop();
 }
 
 void Taskbar::themeChanged()
@@ -401,8 +408,24 @@ void Taskbar::themeChanged()
 QRect Taskbar::shownRect() const
 {
     const QRect monitor = QGuiApplication::primaryScreen()->geometry();
-    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
+    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT) + sizingHeight();
     return QRect(monitor.x(), monitor.bottom() + 1 - height, monitor.width(), height);
+}
+
+void Taskbar::setOnTop()
+{
+    // Not on top: the window manager keeps the bar in the windows' order (bridge-wm's topmost_dock)
+    const QList<quint32> below = m_settings.onTop ? QList<quint32>() : QList<quint32>{x11::atom("_NET_WM_STATE_BELOW")};
+    x11::setProperty32(winId(), "_NET_WM_STATE", XCB_ATOM_ATOM, below);
+}
+
+int Taskbar::sizingHeight() const
+{
+    // Windows Classic's bar has no sizing bar of its own: its raised top edge is the one
+    if (m_settings.locked || !theme()->renderer())
+        return 0;
+    const QSize size = theme()->renderer()->trueSize(SIZING_BAR);
+    return size.height() > 0 ? size.height() : theme()->scaled(SIZING_BAR_HEIGHT);
 }
 
 QRect Taskbar::hiddenRect() const
@@ -453,7 +476,8 @@ void Taskbar::placeOnScreen()
 {
     const QScreen *screen = QGuiApplication::primaryScreen();
     const QRect monitor = screen->geometry();
-    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
+    m_top = sizingHeight();
+    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT) + m_top;
     m_slideTimer.stop();
     setGeometry(m_hidden && m_settings.autoHide ? hiddenRect() : shownRect());
     if (m_settings.autoHide && !m_hidden)
@@ -499,17 +523,26 @@ void Taskbar::relayout()
         bandStart = startWidth + theme()->scaled(BAND_GAP);
     } else {
         startWidth = theme()->scaled(4 + ICON_SIZE + 4 + 6) + startMetrics.horizontalAdvance(m_classicStartText);
-        m_startRect = QRect(theme()->scaled(2), theme()->scaled(4), startWidth, height() - theme()->scaled(6));
+        m_startRect = QRect(theme()->scaled(2), theme()->scaled(4), startWidth, barHeight() - theme()->scaled(6));
         bandStart = m_startRect.right() + 1 + theme()->scaled(6);
     }
-    // Quick Launch's band first, its buttons from the band's start
+    // Quick Launch's band first, its buttons from the band's start; unlocked, each band begins with
+    // its gripper, in a header of 10 (XP's grippers at 104 and 164, the buttons from 114)
+    const int header = m_settings.locked ? 0 : theme()->scaled(BAND_HEADER);
+    m_grippers.clear();
+    if (header && m_settings.quickLaunch)
+        m_grippers.append(QRect(bandStart, 0, header, barHeight()));
     for (int i = 0; i < m_quickItems.size(); ++i)
         m_quickItems[i].rect = m_settings.quickLaunch
-            ? QRect(bandStart + i * theme()->scaled(QUICK_WIDTH), renderer ? 0 : (height() - theme()->scaled(22)) / 2,
-                    theme()->scaled(QUICK_WIDTH), renderer ? height() : theme()->scaled(22))
+            ? QRect(bandStart + header + i * theme()->scaled(QUICK_WIDTH), renderer ? 0 : (barHeight() - theme()->scaled(22)) / 2,
+                    theme()->scaled(QUICK_WIDTH), renderer ? barHeight() : theme()->scaled(22))
             : QRect();
     if (m_settings.quickLaunch)
-        bandStart += int(m_quickItems.size()) * theme()->scaled(QUICK_WIDTH) + theme()->scaled(QUICK_BAND_END);
+        bandStart += header + int(m_quickItems.size()) * theme()->scaled(QUICK_WIDTH) + theme()->scaled(QUICK_BAND_END);
+    if (header) {
+        m_grippers.append(QRect(bandStart, 0, header, barHeight()));
+        bandStart += header;
+    }
 
     const QFontMetrics clockMetrics(m_clockFont);
     const int icons = int(m_tray->icons().size());
@@ -528,9 +561,9 @@ void Taskbar::relayout()
     const int step = theme()->scaled(TRAY_BUTTON);
     const int trayWidth = first + icons * step + gap + clockWidth + end;
     if (renderer)
-        m_trayRect = QRect(width() - trayWidth, 0, trayWidth, height());
+        m_trayRect = QRect(width() - trayWidth, 0, trayWidth, barHeight());
     else
-        m_trayRect = QRect(width() - trayWidth - theme()->scaled(2), theme()->scaled(4), trayWidth, height() - theme()->scaled(6));
+        m_trayRect = QRect(width() - trayWidth - theme()->scaled(2), theme()->scaled(4), trayWidth, barHeight() - theme()->scaled(6));
     m_trayIconRects.clear();
     for (int i = 0; i < icons; ++i)
         m_trayIconRects.append(QRect(m_trayRect.x() + first + i * step + theme()->scaled(TRAY_ICON_INSET),
@@ -552,7 +585,7 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     w4w::Renderer *renderer = theme()->renderer();
     const QList<Task> &tasks = m_windows->tasks();
     const int band = qMax(0, bandEnd - bandStart);
-    m_bandRect = QRect(bandStart, 0, band, height());
+    m_bandRect = QRect(bandStart, 0, band, barHeight());
     const int spacing = renderer ? 0 : theme()->scaled(CLASSIC_SPACING);
     const int maxWidth = theme()->scaled(TASK_MAX_WIDTH);
     const FrameStyle &frame = theme()->frame();
@@ -629,9 +662,9 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     }
     // Those that do not fit are not shown (XP gives the band more rows and arrows to scroll them).
     for (int i = 0; i < m_buttons.size(); ++i) {
-        QRect rect(bandStart + i * (width + spacing), 0, width, height());
+        QRect rect(bandStart + i * (width + spacing), 0, width, barHeight());
         if (!renderer)
-            rect = QRect(rect.x(), theme()->scaled(4), width, height() - theme()->scaled(6));
+            rect = QRect(rect.x(), theme()->scaled(4), width, barHeight() - theme()->scaled(6));
         m_buttons[i].rect = rect.right() < bandEnd + theme()->scaled(BAND_END) ? rect : QRect();
     }
 }
@@ -642,7 +675,7 @@ QRect Taskbar::buttonRect(quint32 window) const
     for (const Button &button : m_buttons)
         for (int i : button.tasks)
             if (i < tasks.size() && tasks[i].window == window && !button.rect.isNull())
-                return QRect(mapToGlobal(button.rect.topLeft()), button.rect.size());
+                return QRect(mapToGlobal(button.rect.topLeft() + QPoint(0, m_top)), button.rect.size());
     return QRect();
 }
 
@@ -686,10 +719,10 @@ void Taskbar::drawStart(QPainter &painter)
     const Part part = withState(START_BUTTON, state);
     renderer->draw(&painter, m_startRect, part);
     const QRect content = renderer->contentRect(part, m_startRect);
-    painter.drawImage(content.x(), (height() - m_flag.height()) / 2, m_flag);
+    painter.drawImage(content.x(), (barHeight() - m_flag.height()) / 2, m_flag);
     painter.setFont(m_startFont);
     // (A pixel above the middle, as XP's)
-    drawShadowedText(painter, QRect(content.x() + m_flag.width() + theme()->scaled(START_TEXT_X), -1, content.width() - m_flag.width(), height()), m_startText);
+    drawShadowedText(painter, QRect(content.x() + m_flag.width() + theme()->scaled(START_TEXT_X), -1, content.width() - m_flag.width(), barHeight()), m_startText);
 }
 
 void Taskbar::drawButton(QPainter &painter, int index)
@@ -786,12 +819,26 @@ void Taskbar::drawTray(QPainter &painter)
 void Taskbar::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
+    if (m_top && theme()->renderer())
+        theme()->renderer()->draw(&painter, QRect(0, 0, width(), m_top), SIZING_BAR);
+    painter.translate(0, m_top);
+    const QRect bar(0, 0, width(), barHeight());
     if (w4w::Renderer *renderer = theme()->renderer()) {
-        renderer->draw(&painter, rect(), BACKGROUND);
+        renderer->draw(&painter, bar, BACKGROUND);
     } else {
-        painter.fillRect(rect(), theme()->system(QStringLiteral("btnface"), Qt::lightGray));
+        painter.fillRect(bar, theme()->system(QStringLiteral("btnface"), Qt::lightGray));
         painter.setPen(theme()->system(QStringLiteral("btnhighlight"), Qt::white));
         painter.drawLine(0, 1, width(), 1);
+    }
+    for (const QRect &gripper : std::as_const(m_grippers)) {
+        w4w::Renderer *renderer = theme()->renderer();
+        // the art at its own width at the header's left, tiled down the band (TaskbarGripper.bmp is 6)
+        const int art = renderer ? renderer->trueSize(GRIPPER).width() : 0;
+        if (!renderer || art <= 0 || !renderer->draw(&painter, QRect(gripper.x(), gripper.y(), art, gripper.height()), GRIPPER)) {
+            // Windows Classic's: a raised bar 3 wide, 2 from the band's left
+            const QRect line(gripper.x() + 2, gripper.y() + 2, 3, gripper.height() - 4);
+            theme()->raised(painter, line, false);
+        }
     }
     drawStart(painter);
     for (int i = 0; i < m_quickItems.size(); ++i) {
@@ -826,6 +873,7 @@ void Taskbar::paintEvent(QPaintEvent *)
 
 Taskbar::Hit Taskbar::hitAt(QPoint at) const
 {
+    at.ry() -= m_top;   // the bar's own rows start under the sizing bar
     Hit hit;
     if (m_startRect.contains(at)) {
         hit.kind = Hit::Start;
@@ -908,6 +956,7 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
 {
     const QPoint at = event->position().toPoint();
     const Hit hit = hitAt(at);
+    const QPoint inBar = at - QPoint(0, m_top);
     const Hit pressed = m_pressed;
     m_pressed = Hit();
     update();
@@ -940,7 +989,7 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
                 m_windows->switchTo(task.window);
             }
         }
-    } else if ((hit.kind == Hit::Band || hit.kind == Hit::Clock || (hit.kind == Hit::None && m_trayRect.contains(at)))
+    } else if ((hit.kind == Hit::Band || hit.kind == Hit::Clock || (hit.kind == Hit::None && m_trayRect.contains(inBar)))
                && event->button() == Qt::RightButton) {
         // The notification area's, the clock's included, has the date's and the icons' items too.
         showTaskbarMenu(event->globalPosition().toPoint(), hit.kind != Hit::Band);
@@ -1014,7 +1063,7 @@ void Taskbar::showGroupList(int index)
                                        if (tasks[i].window == window)
                                            showTaskMenu(i, at);
                                });
-    list->popUp(QRect(mapToGlobal(button.rect.topLeft()), button.rect.size()));
+    list->popUp(QRect(mapToGlobal(button.rect.topLeft() + QPoint(0, m_top)), button.rect.size()));
 }
 
 void Taskbar::showGroupMenu(int index, QPoint at)
@@ -1138,11 +1187,15 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray)
             menu->insertSeparator(first);
         }
     }
-    // This taskbar cannot move or change its size.
+    // Lock the Taskbar: unlocked, the bar shows its sizing bar and grippers (it still cannot move)
     if (QAction *lock = actions.value(CMD_LOCK)) {
         lock->setCheckable(true);
-        lock->setChecked(true);
-        lock->setEnabled(false);
+        lock->setChecked(m_settings.locked);
+        connect(lock, &QAction::triggered, this, [](bool on) {
+            TaskbarSettings settings = TaskbarSettings::load();
+            settings.locked = on;
+            settings.save();
+        });
     }
 
     connect(menu, &QMenu::triggered, this, [this, actions, windows, desktopShown, taskManager](QAction *action) {
