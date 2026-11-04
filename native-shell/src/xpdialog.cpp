@@ -168,7 +168,8 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
                 // Transparent to the mouse (HTTRANSPARENT): the controls it frames may come before it
                 widget->setAttribute(Qt::WA_TransparentForMouseEvents);
             }
-            else if (kind == 2 || kind == 3)
+            else if (kind == 2 || kind == 3 || kind == 5 || kind == 6)
+                // BS_CHECKBOX, BS_AUTOCHECKBOX, BS_3STATE (shell32's Desktop Items) and BS_AUTO3STATE
                 widget = new WholeButton<QCheckBox>(text, parent);
             else if (kind == 4 || kind == 9)
                 widget = new WholeButton<QRadioButton>(text, parent);

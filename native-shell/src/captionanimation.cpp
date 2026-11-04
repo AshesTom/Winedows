@@ -11,8 +11,10 @@
 namespace captionanimation {
 namespace {
 
-// XP's CMS_ANIMATION, and a step every 10 milliseconds
-const int DURATION_MS = 250, STEP_MS = 10;
+// win32k's xxxDrawAnimatedRects (IDANI_CAPTION), read in the user's win32k.sys: frames while less than 251
+// ms have passed, each a 1 ms KeDelayExecutionThread apart (a clock tick, 10 ms here), every value
+// start + (elapsed x change + 125) / 250; when the time is up the strip goes, nothing drawn at the end.
+const int DURATION_MS = 250, END_MS = 251, STEP_MS = 10;
 const int ICON = 16;
 
 // The strip: drawn once at its widest, as DrawCaptionTemp draws an active caption (never the visual
@@ -48,15 +50,17 @@ protected:
 private:
     void step()
     {
-        const qint64 elapsed = qMin<qint64>(m_clock.elapsed(), DURATION_MS);
-        const auto at = [&](int a, int b) { return a + int((b - a) * elapsed / DURATION_MS); };
+        const qint64 elapsed = m_clock.elapsed();
+        if (elapsed >= END_MS) {
+            m_timer.stop();
+            close();
+            return;
+        }
+        // (C's division: towards zero)
+        const auto at = [&](int a, int b) { return a + int(((b - a) * elapsed + 125) / DURATION_MS); };
         const int width = at(m_from.width(), m_to.width());
         if (width > 0)
             setGeometry(at(m_from.x(), m_to.x()), at(m_from.y(), m_to.y()), width, m_picture.height());
-        if (elapsed >= DURATION_MS) {
-            m_timer.stop();
-            close();
-        }
     }
 
     QRect m_from, m_to;
