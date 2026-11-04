@@ -2055,6 +2055,8 @@ void SkinView::mousePressEvent(QMouseEvent *event)
         else if (target->tag == QLatin1String("playlist")) {
             const int row = playlistRow(target, event->position().toPoint());
             m_playlistSelected = row;
+            if (event->button() == Qt::LeftButton)
+                m_playlistDragFrom = row;
             if (event->button() == Qt::RightButton && row >= 0) {
                 QMenu menu;
                 QAction *remove = menu.addAction(QObject::tr("Remove from Playlist"));
@@ -2092,6 +2094,15 @@ void SkinView::mousePressEvent(QMouseEvent *event)
 
 void SkinView::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_playlistDragFrom >= 0 && m_pressed && m_pressed->tag == QLatin1String("playlist") && (event->buttons() & Qt::LeftButton)) {
+        const int row = playlistRow(m_pressed, event->position().toPoint());
+        if (row >= 0 && row != m_playlistDragFrom) {
+            m_model->call(QStringLiteral("player"), QStringLiteral("playlistmove"), {m_playlistDragFrom, row});
+            m_playlistDragFrom = row;
+            m_playlistSelected = row;
+        }
+        return;
+    }
     if (m_pressed && (m_pressed->tag == QLatin1String("slider") || m_pressed->tag == QLatin1String("customslider"))) {
         dragSlider(m_pressed, event->position().toPoint());
         return;
@@ -2112,6 +2123,7 @@ void SkinView::mouseReleaseEvent(QMouseEvent *event)
     const int pressedButton = m_pressedButton;
     m_pressed = nullptr;
     m_pressedButton = -1;
+    m_playlistDragFrom = -1;
     if (!pressed) {
         update();
         return;

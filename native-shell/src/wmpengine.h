@@ -214,7 +214,7 @@ private:
     Element *m_hover = nullptr;
     int m_hoverButton = -1;
     Element *m_pressed = nullptr;
-    int m_playlistSelected = -1, m_playlistTop = 0;
+    int m_playlistSelected = -1, m_playlistTop = 0, m_playlistDragFrom = -1;
     int m_pressedButton = -1;
     QTimer m_timer;                            // view.timerInterval
     QTimer m_animation;                        // moveTo, alphaBlendTo, scrolling text

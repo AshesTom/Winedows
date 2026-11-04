@@ -627,7 +627,7 @@ bool MediaPlayer::isMethod(const QString &object, const QString &name) const
         {QStringLiteral("player"), {QStringLiteral("launchurl"), QStringLiteral("close"), QStringLiteral("newmedia"),
                                     QStringLiteral("newplaylist"), QStringLiteral("openplayer"), QStringLiteral("playlistnames"),
                                     QStringLiteral("playlistcurrent"), QStringLiteral("playlistplay"), QStringLiteral("playlistremove"),
-                                    QStringLiteral("playlistclear")}},
+                                    QStringLiteral("playlistclear"), QStringLiteral("playlistmove")}},
         {QStringLiteral("player.controls"), {QStringLiteral("play"), QStringLiteral("pause"), QStringLiteral("stop"), QStringLiteral("next"),
                                              QStringLiteral("previous"), QStringLiteral("fastforward"), QStringLiteral("fastreverse"),
                                              QStringLiteral("isavailable"), QStringLiteral("playitem"), QStringLiteral("step"),
@@ -999,6 +999,19 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
                 }
                 m_items.removeAt(index);
                 emit fired(QStringLiteral("player"), QStringLiteral("playlistchange"), {1});
+            }
+            return {};
+        } else if (name == QLatin1String("playlistmove")) {
+            const int from = arguments.value(0).toInt(), to = arguments.value(1).toInt();
+            if (from >= 0 && from < m_items.size() && to >= 0 && to < m_items.size() && from != to) {
+                m_items.move(from, to);
+                if (m_current == from)
+                    m_current = to;
+                else if (from < m_current && to >= m_current)
+                    --m_current;
+                else if (from > m_current && to <= m_current)
+                    ++m_current;
+                emit fired(QStringLiteral("player"), QStringLiteral("playlistchange"), {2});
             }
             return {};
         } else if (name == QLatin1String("playlistclear")) {
