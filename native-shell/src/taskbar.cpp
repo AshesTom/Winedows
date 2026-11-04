@@ -1205,6 +1205,17 @@ void Taskbar::scrollStep(int delta)
     update();
 }
 
+QRect Taskbar::scrollThumbRect() const
+{
+    if (m_scrollRect.isNull() || m_scrollPages <= 1)
+        return QRect();
+    const QRect track(m_scrollRect.x(), m_scrollUp.bottom() + 1, m_scrollRect.width(),
+                      qMax(0, m_scrollDown.top() - m_scrollUp.bottom() - 1));
+    const int height = qMax(8, track.height() / m_scrollPages);
+    const int y = track.y() + (track.height() - height) * m_scrollPage / qMax(1, m_scrollPages - 1);
+    return QRect(track.x(), y, track.width(), height);
+}
+
 void Taskbar::drawScrollbar(QPainter &painter)
 {
     if (m_scrollRect.isNull())
@@ -1231,6 +1242,17 @@ void Taskbar::drawScrollbar(QPainter &painter)
     };
     arrow(m_scrollUp, false, m_scrollPage > 0);
     arrow(m_scrollDown, true, m_scrollPage < m_scrollPages - 1);
+    const QRect thumb = scrollThumbRect();
+    if (!thumb.isNull()) {
+        const Hit hit{Hit::ScrollThumb, -1};
+        const int state = m_scrollDragging || m_pressed == hit ? 3 : m_hover == hit ? 2 : 1;
+        if (renderer) {
+            const Part part{QStringLiteral("scrollbar"), QStringLiteral("thumbbtn"), {}, state, QStringLiteral("taskband")};
+            if (renderer->draw(&painter, thumb, part))
+                return;
+        }
+        theme()->raised(painter, thumb, state == 3);
+    }
 }
 
 void Taskbar::wheelEvent(QWheelEvent *event)
@@ -1474,6 +1496,14 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
         hit.kind = Hit::ScrollDown;
         return hit;
     }
+    if (!m_scrollRect.isNull() && m_scrollRect.contains(at)) {
+        const QRect thumb = scrollThumbRect();
+        if (!thumb.isNull() && thumb.contains(at))
+            hit.kind = Hit::ScrollThumb;
+        else
+            hit.kind = at.y() < scrollThumbRect().center().y() ? Hit::ScrollTrackUp : Hit::ScrollTrackDown;
+        return hit;
+    }
     if (m_chevronRect.contains(at)) {
         hit.kind = Hit::Chevron;
         return hit;
@@ -1501,6 +1531,19 @@ void Taskbar::setHover(Hit hit)
 
 void Taskbar::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_scrollDragging && (event->buttons() & Qt::LeftButton)) {
+        const QRect track(m_scrollRect.x(), m_scrollUp.bottom() + 1, m_scrollRect.width(),
+                          qMax(1, m_scrollDown.top() - m_scrollUp.bottom() - 1));
+        const int step = qMax(1, track.height() / qMax(1, m_scrollPages));
+        const int page = qBound(0, m_scrollDragPage + (event->globalPosition().toPoint().y() - m_scrollDragFromY) / step,
+                                m_scrollPages - 1);
+        if (page != m_scrollPage) {
+            m_scrollPage = page;
+            relayout();
+            update();
+        }
+        return;
+    }
     if (m_hidden) {
         // the tray's test: farther than SM_CXDOUBLECLK x SM_CYDOUBLECLK from where it was
         const QPoint moved = event->globalPosition().toPoint() - m_hiddenMouse;
@@ -1546,12 +1589,19 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
         return;
     }
     if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Desktop || hit.kind == Hit::Custom || hit.kind == Hit::Link || hit.kind == Hit::Chevron
-                                               || hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown)) {
+                                               || hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown || hit.kind == Hit::ScrollThumb
+                                               || hit.kind == Hit::ScrollTrackUp || hit.kind == Hit::ScrollTrackDown)) {
         m_pressed = hit;
         update();
         if (hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown) {
             scrollStep(hit.kind == Hit::ScrollUp ? -1 : 1);
             m_scrollRepeat.start();
+        } else if (hit.kind == Hit::ScrollThumb) {
+            m_scrollDragging = true;
+            m_scrollDragFromY = event->globalPosition().toPoint().y();
+            m_scrollDragPage = m_scrollPage;
+        } else if (hit.kind == Hit::ScrollTrackUp || hit.kind == Hit::ScrollTrackDown) {
+            scrollStep(hit.kind == Hit::ScrollTrackUp ? -1 : 1);
         }
     }
 }
@@ -1568,6 +1618,7 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     const QPoint inBar = at - QPoint(0, m_top);
     const Hit pressed = m_pressed;
     m_pressed = Hit();
+    m_scrollDragging = false;
     m_scrollRepeat.stop();
     update();
     if (m_movingBar) {

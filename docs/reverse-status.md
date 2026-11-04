@@ -261,7 +261,7 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 
 | Original feature | Status |
 |---|---|
-| The taskband's extra rows when buttons do not fit even grouped, and its scrollbar's thumb and tracks | Partial: the scrollbar's arrows and paging are done; a taller taskbar (more rows) is not |
+| The taskband's extra rows when buttons do not fit even grouped, and its scrollbar's thumb and tracks | Done: `Taskbar/Rows` gives the bar two or three rows, the buttons wrap, and the scrollbar's thumb and tracks page it |
 | Group visuals checked against XP | Not possible in Wine: XP's explorer never groups there (no exe path for a window) |
 
 
@@ -411,7 +411,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx (the native button keeps the flash colour while the window wants attention) | `sub_1002819`; user32 not reversed |
 | Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604; Close is `EndTask(window, FALSE, Ctrl held)` (`sub_102fea7`), and a hung window's button menu offers only Close (`sub_102ed44`, `IsHungAppWindow`). Done: Ctrl+Close kills the X client at once; Close sends WM_CLOSE and, if the window is still there after HungAppTimeout (5000, `hivedef.inf`) with no window of its own owned by it (a save question), asks 603 and 604 (Yes/No) under the window's title. X has no IsHungAppWindow; `_NET_WM_PING` is not used. The hung window's reduced menu is missing |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
-| Taskbar | The taskband's extra rows (a resized bar), and the scrollbar's thumb and tracks | Section 6 |
+| Taskbar | The taskband's extra rows (a resized bar) | Section 6 |
 | Taskbar | Deskbands such as Windows Media Player's | Section 2 |
 | Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | The tour and the low resolution are post-boot reminders: `sub_101343b` and `sub_101389f` file `Microsoft.OfferTour` (icon `tourstart.exe,0`, runs `tourstart.exe`, ShowTime 60000) and `Microsoft.FixScreenResolution` (icon `explorer.exe,9`, runs `desk.cpl`, a check of the display's modes in `sub_100e569`) through shell32's PostBootReminder ({7849596a-48ea-486e-8937-a2a3009f31a9}), which shows them one after the other from a notification icon of their own when the tray starts its shell service objects. The chevron's (590/591, `sub_101d6b6`) shows for 30 s when the chevron first appears, unless restricted. Done: low resolution (a screen under 800 x 600, opening Display Properties' Settings) then the tour, 6 s after the start (that delay is not read), pointed at the notification area's left end since no icon of their own is added; the chevron's when the chevron first appears; the tour runs tourstart.exe under Wine or opens the Start menu shortcut |
 | Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7. Remove from This List is done (right-click a recent program, `programs::removeUse`); the ranking now decays this shell's counts over time; the Start Menu folder's rows can be dragged to reorder them and Sort by Name clears the order; the gone-item prompt is missing |

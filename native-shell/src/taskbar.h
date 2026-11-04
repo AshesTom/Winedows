@@ -55,7 +55,8 @@ private:
     struct Hit
     {
         // Task: a button, a window's or a group's
-        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Desktop, Custom, Link, Chevron, ScrollUp, ScrollDown } kind = None;
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Desktop, Custom, Link, Chevron, ScrollUp, ScrollDown,
+                    ScrollThumb, ScrollTrackUp, ScrollTrackDown } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
     };
@@ -156,6 +157,9 @@ private:
     // The taskband's scrollbar when the buttons do not fit at their least width (explorer.exe's
     // sub_102de3e: a vertical scrollbar at the band's right, one toolbar row a page)
     QRect m_scrollRect, m_scrollUp, m_scrollDown;
+    QRect scrollThumbRect() const;
+    bool m_scrollDragging = false;
+    int m_scrollDragFromY = 0, m_scrollDragPage = 0;
     int m_scrollPage = 0, m_scrollPages = 1, m_scrollColumns = 1;
     QTimer m_scrollRepeat;
     QList<Button> m_buttons;
