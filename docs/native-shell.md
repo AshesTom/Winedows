@@ -37,12 +37,18 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 | Sounds | XP's own from `%windir%\\Media` (LAYOUT.INF's names): startup, logon, logoff, shutdown, the message boxes', the click on going somewhere, the Recycle Bin. The Search Companion's character's, from its `.acs` |
 | Session screens | In a window, XP's Welcome screen first (no password: this user is logged in already), "Logging off..." and back; Log Off Windows and Turn off computer from `msgina.dll`, the screen fading to grey behind it |
 
-Not ported yet: Windows Media Player's tasks that `wmp.dll` draws itself other than the Skin Chooser (Media Guide, Copy from CD, Media Library, Radio Tuner, Copy to CD or Device, Premium Services: their place shows the task's name), visualizations other than the approximate patterns named after `wmpvis.dll`'s effects, the equalizer's effect on the sound, DVDs and CDs, Notepad and Calculator's Help Topics (their `.chm`), XP's own Open and Save As dialogs (Qt's file dialog in XP's style stands in, with Notepad's Encoding line), Calculator's What's This?, XP's art behind a folder's thumbnail (no extracted file has it, so the folder's icon stands in its corner), Show in Groups and Customize This Folder, the Picture Tasks' printing and ordering prints, XP's zip folders (Send To makes them), Show in Groups in Details, Auto Arrange and Customize This Folder (Show in Groups and Choose Details work in Details; Auto Arrange and Customize This Folder are greyed), shortcuts' target ID lists, network places, Help (shown disabled, as is Printers
-and Faxes without `system-config-printer`), the Accessibility Options applets (the category is there, empty), the
-Search Companion's sounds, its other characters and its balloon mode, Map Network Drive and Synchronize (greyed), the
-the Start panel's own MFU ranking (UserAssist's counts and their decay are shell32's; here, launches counted by the shell), the deskbands, the taskband's extra rows when the buttons do not fit even grouped (its scroll arrows are
-there, but a taller bar is not), the Start panel and classic Customize dialogs in Taskbar and Start Menu Properties (their Add/Remove/Clear lists are still greyed), the Screen Saver and Settings pages,
-a wireless picture for the network icon. Strings that XP's files do not give
+Not ported yet: Windows Media Player's Media Guide, Radio Tuner, CD and Premium Services pages (their services are
+gone), its own visualization rendering and the equalizer's effect on the sound, DVDs and CDs, and query-based auto
+playlists; the taskbar's left and right edges, a resized bar's extra rows and the deskbands; Show in Groups for Icons
+and Tiles, My Computer's Manage, Open With from XP's registry, shell-extension handlers and network places; the Picture
+and Fax Viewer's XP tools beyond the basic annotations, `photowiz.dll`'s own dialogs and preview, `ImgPrev.chm` and a
+comparison with the real viewer under Wine; Notepad and Calculator's Help Topics, XP's own Open and Save As dialogs
+(Qt's file dialog in XP's style stands in), Calculator's What's This?, XP's art behind a folder's thumbnail, XP's zip
+folders (Send To makes them), shortcuts' target ID lists, the Help and Support Center (Linux's help opens instead),
+the Accessibility Options applets (the category is there, empty), the Search Companion's sounds and other characters,
+Map Network Drive and Synchronize (greyed), the exact decay shell32 gives its UserAssist counts, the Start panel and
+classic Customize dialogs' Advanced pages (`Advanced` is greyed; their Add/Remove/Clear and Sort work), the Screen
+Saver and Settings pages, and a wireless picture for the network icon. Strings that XP's files do not give
 (the desktop's menus, the Linux Programs page) are in English.
 
 ## How to run it
