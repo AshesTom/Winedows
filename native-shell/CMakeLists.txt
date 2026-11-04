@@ -88,6 +88,8 @@ if(Qt6Multimedia_FOUND AND Qt6Qml_FOUND)
         src/wmpskin.cpp src/wmpskin.h
         src/xpfiles.cpp src/xpfiles.h
         src/xpprogram.cpp src/xpprogram.h
+        src/xpdialog.cpp src/xpdialog.h
+        src/theme.cpp src/theme.h
         ../qt-style/src/msstyles.cpp ../qt-style/src/msstyles.h
         ../qt-style/src/session.cpp ../qt-style/src/session.h)
     target_include_directories(wmplayer PRIVATE ../qt-style/src)

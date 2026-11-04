@@ -65,6 +65,8 @@ public:
     virtual QString script(const QString &url, const QString &skinFolder) = 0;
     // A skin document for a taskcenter: the task now shown, or none.
     virtual std::optional<wmpskin::Node> task(QString *folder) = 0;
+    // What a taskcenter shows for a task wmp.dll draws itself (the Skin Chooser), when task() has no skin.
+    virtual QWidget *taskWidget(QWidget *parent) { Q_UNUSED(parent); return nullptr; }
     // The skin a plugin element shows for its objectID (VizView, EQView...), or none.
     virtual std::optional<wmpskin::Node> plugin(const QString &objectId) = 0;
     // What a video element shows and an effects element draws.
@@ -106,13 +108,18 @@ class SkinView : public QWidget
 public:
     // FOLDER is where the skin's own files are (empty for wmploc.dll's); SIZE, when valid, the size
     // its view has from the start (the window's last, or its taskcenter's).
-    SkinView(Model *model, const wmpskin::Node &document, const QString &folder, QWidget *parent = nullptr, QSize size = QSize());
+    // VIEW_ID picks one of the theme's views (its first otherwise).
+    SkinView(Model *model, const wmpskin::Node &document, const QString &folder, QWidget *parent = nullptr, QSize size = QSize(),
+             const QString &viewId = QString());
     ~SkinView() override;
 
     // The root view's size before anything resized it, and its title.
     QSize preferredSize() const;
     QString title() const;
     bool isResizable() const;
+    // titleBar (true unless the view says otherwise): the window has the system's frame
+    bool hasTitleBar() const;
+    QSize minimumViewSize() const;
     // The region the window shows: what is drawn, without the clipped parts.
     QRegion shape();
     // Runs the view's onload; after the window has its size.

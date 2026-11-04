@@ -70,6 +70,14 @@ ICON_FILES = {
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
                      'lcldocs.xml', 'lclmm.xml', 'lclmode.xml', 'lclrfine.xml', 'lclsrch.xml'), 'srchasst/mui'),
 }
+# Windows Media Player's skins (Program Files\\Windows Media Player\\Skins): their 8.3 names on the media,
+# and the names LAYOUT.INF (Compact, Revert) or their .wms give them.
+WMP_SKINS = {
+    **{name: f'{name.capitalize()}.wmz' for name in (
+        'atomic', 'bluesky', 'canvas', 'classic', 'compact', 'goo', 'heart', 'iconic', 'optik', 'personal', 'pyrite',
+        'radio', 'revert', 'roundlet', 'rusty', 'splat', 'toothy')},
+    'headsp~1': 'Headspace.wmz', 'minipl~1': 'Miniplayer.wmz', 'pro': 'Professional.wmz',
+}
 # The wallpapers' setup list, which has their names as XP shows them.
 WALLPAPER_LIST = 'shl_img.inf'
 
@@ -196,6 +204,10 @@ def extract(source, output):
             for stem, target in shown.items():
                 if name in (stem, compressed(stem)):
                     copy_file(iso, name, sector, size, output / 'web/wallpaper' / target)
+    for name, sector, size in media:
+        stem = name.rsplit('.', 1)[0]
+        if name.endswith('.wm_') and stem in WMP_SKINS:
+            copy_file(iso, name, sector, size, output / 'wmp/skins' / WMP_SKINS[stem])
     for name, sector, size in media:
         for target in {**FILES, **ICON_FILES}:
             if name in (target, compressed(target)):

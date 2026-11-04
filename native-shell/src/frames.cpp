@@ -584,6 +584,11 @@ void FrameManager::readWindows()
                                      "_NET_WM_WINDOW_TYPE_DND", "_NET_WM_WINDOW_TYPE_COMBO", "_NET_WM_WINDOW_TYPE_POPUP_MENU",
                                      "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", "_NET_WM_WINDOW_TYPE_MENU"})
                 bare = bare || type == x11::atom(name);
+        // Nor windows that draw their own (_MOTIF_WM_HINTS without decorations, as bridge-wm reads it):
+        // Windows Media Player's skins, splash screens, client-side decorations.
+        const QList<quint32> hints = x11::property32(client, x11::atom("_MOTIF_WM_HINTS"));
+        if (hints.size() >= 3 && (hints[0] & 2) && !hints[2])
+            bare = true;
         if (bare)
             continue;
         seen.insert(client);

@@ -94,4 +94,41 @@ private:
     bool m_playing = true;
 };
 
+// Windows Picture and Fax Viewer: a picture in a window of its own, the folder's others a key away,
+// with shimgvw.dll's toolbar (its TBBUTTON table: the buttons it shows for a picture, its strip 105, its
+// commands, which are its tooltips' strings), its keys (accelerator table 50) and its zoom (1.2 a step,
+// as its Zoom In multiplies, up to 16 times the picture's size).
+class Viewer : public QWidget
+{
+public:
+    static void open(const QString &path);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    explicit Viewer(const QString &path);
+    void show(int index);
+    void command(int id);
+    void setScale(double scale);
+    double fitScale() const;
+    QRect imageRect() const;
+    void updateTitle();
+
+    QStringList m_paths;
+    int m_index = 0;
+    QImage m_image;
+    double m_scale = 1;
+    bool m_bestFit = true;
+    QPointF m_offset;      // the picture's middle from the view's, while it is bigger than the view
+    QPoint m_dragFrom;
+    QWidget *m_toolbar = nullptr;
+    QHash<int, QWidget *> m_buttons;
+};
+
 } // namespace pictures

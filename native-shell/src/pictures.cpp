@@ -3,6 +3,14 @@
 
 #include "theme.h"
 #include "xpfiles.h"
+#include "xpprogram.h"
+
+#include <QDesktopServices>
+#include <QFileDialog>
+#include <QMouseEvent>
+#include <QToolButton>
+#include <QUrl>
+#include <QWheelEvent>
 
 #include <QApplication>
 #include <QCursor>
@@ -414,6 +422,271 @@ void SlideShow::mousePressEvent(QMouseEvent *event)
         show(m_index + 1);
     else if (event->button() == Qt::RightButton)
         show(m_index - 1);
+}
+
+namespace {
+
+// shimgvw.dll's toolbar for a picture, from its TBBUTTON table (at 0x1700 of the file): each button's
+// picture in strip 105 and its command, which is its tooltip's string. 0 a separator. The fax
+// annotations and the pages, hidden for a picture, are left out.
+const struct { int picture, command; const char *tip; } VIEWER_BUTTONS[] = {
+    {0, 417, "Previous Image (Left Arrow)"}, {1, 416, "Next Image (Right Arrow)"}, {0, 0, nullptr},
+    {5, 403, "Best Fit (Ctrl+B)"}, {6, 404, "Actual Size (Ctrl+A)"}, {8, 408, "Start Slide Show (F11)"}, {0, 0, nullptr},
+    {2, 400, "Zoom In (+)"}, {3, 401, "Zoom Out (-)"}, {0, 0, nullptr},
+    {12, 500, "Rotate Clockwise (Ctrl+K)"}, {11, 501, "Rotate Counterclockwise (Ctrl+L)"}, {0, 0, nullptr},
+    {25, 424, "Delete (Delete)"}, {20, 418, "Print (Ctrl+P)"}, {22, 420, "Copy To (Ctrl+S)"},
+    {26, 425, "Closes this program and opens the image for editing (Ctrl+E)"}, {0, 0, nullptr},
+    {24, 423, "Help (F1)"},
+};
+enum {
+    VIEW_ZOOM_IN = 400, VIEW_ZOOM_OUT = 401, VIEW_BEST_FIT = 403, VIEW_ACTUAL = 404, VIEW_SLIDES = 408, VIEW_NEXT = 416,
+    VIEW_PREVIOUS = 417, VIEW_PRINT = 418, VIEW_COPY_TO = 420, VIEW_HELP = 423, VIEW_DELETE = 424, VIEW_EDIT = 425,
+    VIEW_ROTATE_CW = 500, VIEW_ROTATE_CCW = 501,
+    // the arrows (as table 50 calls them): the pictures, or the picture's parts when it is bigger
+    VIEW_LEFT = 554, VIEW_RIGHT = 555, VIEW_UP = 556, VIEW_DOWN = 557,
+};
+const double ZOOM_STEP = 1.2, ZOOM_MOST = 16;
+const int ACCELERATORS = 50, STRING_TITLE = 200, STRING_COPY_TO = 222;
+
+} // namespace
+
+void Viewer::open(const QString &path)
+{
+    auto *viewer = new Viewer(path);
+    viewer->QWidget::show();
+    viewer->activateWindow();
+}
+
+Viewer::Viewer(const QString &path)
+    : QWidget(nullptr, Qt::Window)
+{
+    setAttribute(Qt::WA_DeleteOnClose);
+    setAutoFillBackground(true);
+    setPalette(QPalette(QColor(Qt::white)));
+    setBackgroundRole(QPalette::Base);
+    const QFileInfo info(path);
+    m_paths = picturesIn(info.absolutePath());
+    m_index = int(m_paths.indexOf(info.absoluteFilePath()));
+    if (m_index < 0) {
+        m_paths = {info.absoluteFilePath()};
+        m_index = 0;
+    }
+    if (viewer())
+        if (const QImage icon = xpfiles::icon(*viewer(), viewer()->names(QStringLiteral("14")).value(0), 16); !icon.isNull())
+            setWindowIcon(QPixmap::fromImage(icon));
+
+    // the toolbar, under the picture in the middle
+    m_toolbar = new QWidget(this);
+    auto *row = new QHBoxLayout(m_toolbar);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+    for (const auto &button : VIEWER_BUTTONS) {
+        if (!button.command) {
+            auto *gap = new QWidget(m_toolbar);
+            gap->setFixedWidth(8);
+            row->addWidget(gap);
+            continue;
+        }
+        auto *tool = new QToolButton(m_toolbar);
+        tool->setAutoRaise(true);
+        tool->setIcon(stripIcon(VIEWER_STRIP, button.picture));
+        tool->setIconSize(QSize(16, 16));
+        tool->setFixedSize(24, 22);
+        tool->setToolTip(viewerString(button.command, button.tip));
+        tool->setFocusPolicy(Qt::NoFocus);
+        connect(tool, &QToolButton::clicked, this, [this, id = button.command] { command(id); });
+        row->addWidget(tool);
+        m_buttons.insert(button.command, tool);
+    }
+    // what this viewer cannot do: XP's help (ImgPrev.chm), printing
+    m_buttons.value(VIEW_HELP)->setEnabled(false);
+    m_buttons.value(VIEW_PRINT)->setEnabled(false);
+    m_toolbar->adjustSize();
+    const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+    resize(qMin(800, screen.width() * 2 / 3), qMin(600, screen.height() * 2 / 3));
+    show(m_index);
+}
+
+void Viewer::updateTitle()
+{
+    // "<name> - Windows Picture and Fax Viewer"
+    const QString name = m_paths.isEmpty() ? QString() : QFileInfo(m_paths[m_index]).fileName();
+    const QString program = viewerString(STRING_TITLE, "Windows Picture and Fax Viewer");
+    setWindowTitle(name.isEmpty() ? program : name + QStringLiteral(" - ") + program);
+}
+
+void Viewer::show(int index)
+{
+    if (m_paths.isEmpty())
+        return;
+    m_index = (index % int(m_paths.size()) + int(m_paths.size())) % int(m_paths.size());
+    QImageReader reader(m_paths[m_index]);
+    reader.setAutoTransform(true);
+    m_image = reader.read();
+    m_bestFit = true;
+    m_offset = {};
+    m_scale = fitScale();
+    const bool several = m_paths.size() > 1;
+    m_buttons.value(VIEW_PREVIOUS)->setEnabled(several);
+    m_buttons.value(VIEW_NEXT)->setEnabled(several);
+    updateTitle();
+    update();
+}
+
+double Viewer::fitScale() const
+{
+    // Best Fit: the picture smaller to fit, never bigger than it is
+    if (m_image.isNull())
+        return 1;
+    const QSize room = (size() - QSize(16, m_toolbar->height() + 16)).expandedTo(QSize(1, 1));
+    return qMin(1.0, qMin(double(room.width()) / m_image.width(), double(room.height()) / m_image.height()));
+}
+
+void Viewer::setScale(double scale)
+{
+    m_bestFit = false;
+    m_scale = qBound(1.0 / 64, scale, ZOOM_MOST);
+    update();
+}
+
+QRect Viewer::imageRect() const
+{
+    const QSize shown = (QSizeF(m_image.size()) * m_scale).toSize();
+    const QRect area(0, 0, width(), height() - m_toolbar->height() - 4);
+    QPoint middle = area.center() + m_offset.toPoint();
+    QRect rect(QPoint(), shown);
+    rect.moveCenter(middle);
+    return rect;
+}
+
+void Viewer::command(int id)
+{
+    if (m_paths.isEmpty())
+        return;
+    const QString path = m_paths[m_index];
+    switch (id) {
+    case VIEW_PREVIOUS:
+        show(m_index - 1);
+        break;
+    case VIEW_NEXT:
+        show(m_index + 1);
+        break;
+    case VIEW_BEST_FIT:
+        m_bestFit = true;
+        m_offset = {};
+        m_scale = fitScale();
+        update();
+        break;
+    case VIEW_ACTUAL:
+        setScale(1);
+        break;
+    case VIEW_ZOOM_IN:
+        setScale(m_scale * ZOOM_STEP);
+        break;
+    case VIEW_ZOOM_OUT:
+        setScale(m_scale / ZOOM_STEP);
+        break;
+    case VIEW_SLIDES:
+        SlideShow::start(m_paths, m_index);
+        break;
+    case VIEW_ROTATE_CW:
+    case VIEW_ROTATE_CCW:
+        if (rotate(path, id == VIEW_ROTATE_CW, this))
+            show(m_index);
+        break;
+    case VIEW_DELETE:
+        if (QMessageBox::question(this, tr("Confirm File Delete"), tr("Are you sure you want to send '%1' to the Recycle Bin?").arg(QFileInfo(path).fileName()))
+            == QMessageBox::Yes && QFile::moveToTrash(path)) {
+            m_paths.removeAt(m_index);
+            if (m_paths.isEmpty())
+                close();
+            else
+                show(m_index);
+        }
+        break;
+    case VIEW_COPY_TO: {
+        const QString target = QFileDialog::getSaveFileName(this, viewerString(STRING_COPY_TO, "Copy To"), path);
+        if (!target.isEmpty() && target != path)
+            QFile::copy(path, target);
+        break;
+    }
+    case VIEW_EDIT:
+        // closes and opens the picture for editing, in the desktop's program for it
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        close();
+        break;
+    case VIEW_LEFT:
+    case VIEW_RIGHT:
+    case VIEW_UP:
+    case VIEW_DOWN: {
+        const QRect rect = imageRect();
+        const bool bigger = rect.width() > width() || rect.height() > height() - m_toolbar->height();
+        if (!bigger) {
+            show(m_index + (id == VIEW_RIGHT || id == VIEW_DOWN ? 1 : -1));
+            break;
+        }
+        const int step = 32;
+        m_offset += id == VIEW_LEFT ? QPointF(step, 0) : id == VIEW_RIGHT ? QPointF(-step, 0) : id == VIEW_UP ? QPointF(0, step) : QPointF(0, -step);
+        update();
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void Viewer::paintEvent(QPaintEvent *)
+{
+    QPainter painter(this);
+    if (m_image.isNull())
+        return;
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, m_scale < 1);
+    // the picture keeps above the toolbar's band
+    painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - 4));
+    painter.drawImage(imageRect(), m_image);
+}
+
+void Viewer::resizeEvent(QResizeEvent *)
+{
+    m_toolbar->move((width() - m_toolbar->width()) / 2, height() - m_toolbar->height() - 2);
+    if (m_bestFit)
+        m_scale = fitScale();
+}
+
+void Viewer::keyPressEvent(QKeyEvent *event)
+{
+    static const QList<xpprogram::Accelerator> table = viewer() ? xpprogram::accelerators(*viewer(), QString::number(ACCELERATORS))
+                                                                : QList<xpprogram::Accelerator>();
+    if (const int id = xpprogram::command(table, event)) {
+        command(id);
+        return;
+    }
+    if (event->key() == Qt::Key_Escape) {
+        close();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void Viewer::mousePressEvent(QMouseEvent *event)
+{
+    m_dragFrom = event->position().toPoint();
+}
+
+void Viewer::mouseMoveEvent(QMouseEvent *event)
+{
+    // a picture bigger than the window follows the mouse
+    if (!(event->buttons() & Qt::LeftButton))
+        return;
+    const QPoint at = event->position().toPoint();
+    m_offset += at - m_dragFrom;
+    m_dragFrom = at;
+    update();
+}
+
+void Viewer::wheelEvent(QWheelEvent *event)
+{
+    command(event->angleDelta().y() > 0 ? VIEW_PREVIOUS : VIEW_NEXT);
 }
 
 } // namespace pictures

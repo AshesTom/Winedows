@@ -67,6 +67,16 @@ Exec=$shell --notepad %f
 NoDisplay=true
 MimeType=text/plain;
 EOF
+# Pictures in Windows Picture and Fax Viewer, as XP's file types have them
+pictures='image/jpeg image/png image/gif image/bmp image/tiff image/x-ms-bmp image/x-icon image/webp'
+cat > "$data/xp-picture-viewer.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Windows Picture and Fax Viewer
+Exec=$shell --picture %f
+NoDisplay=true
+MimeType=${pictures// /;};
+EOF
 # Music and videos in Windows Media Player, as XP's file types have them
 media='audio/mpeg audio/x-ms-wma audio/x-wav audio/wav audio/midi audio/ogg audio/flac audio/mp4 audio/x-aiff audio/basic video/x-ms-wmv video/x-ms-asf video/x-msvideo video/mpeg video/mp4 video/x-matroska video/webm video/quicktime video/ogg'
 cat > "$data/xp-mediaplayer.desktop" <<EOF
@@ -80,6 +90,7 @@ EOF
 {
     printf '[Default Applications]\ninode/directory=xp-explorer.desktop\ntext/plain=xp-notepad.desktop\n'
     for type in $media; do printf '%s=xp-mediaplayer.desktop\n' "$type"; done
+    for type in $pictures; do printf '%s=xp-picture-viewer.desktop\n' "$type"; done
 } > "$config/xp-shell-mimeapps.list"
 assets=$root/.local/native-assets
 # XP's icons as an icon theme, made from the user's XP files the first time (session/icon_theme.py).

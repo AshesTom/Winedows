@@ -35,7 +35,7 @@ resources, read at run time: the visual style's art and rules (`luna.msstyles`, 
 | Sounds | XP's own from `%windir%\\Media` (LAYOUT.INF's names): startup, logon, logoff, shutdown, the message boxes', the click on going somewhere, the Recycle Bin. The Search Companion's character's, from its `.acs` |
 | Session screens | In a window, XP's Welcome screen first (no password: this user is logged in already), "Logging off..." and back; Log Off Windows and Turn off computer from `msgina.dll`, the screen fading to grey behind it |
 
-Not ported yet: Windows Media Player's tasks that `wmp.dll` draws itself (Media Guide, Copy from CD, Media Library, Radio Tuner, Copy to CD or Device, Premium Services, Skin Chooser: their place shows the task's name), its skin mode and `.wmz` skins, its menu bar, visualizations other than Bars, the equalizer's effect on the sound, DVDs and CDs, Notepad and Calculator's Help Topics (their `.chm`), XP's own Open and Save As dialogs (Qt's file dialog in XP's style stands in, with Notepad's Encoding line), Calculator's What's This?, XP's art behind a folder's thumbnail (no extracted file has it, so the folder's icon stands in its corner), Show in Groups and Choose Details, the Picture Tasks' printing and ordering prints, XP's zip folders, Send To, shortcuts (`.lnk`), network places, Help (shown disabled, as is Printers
+Not ported yet: Windows Media Player's tasks that `wmp.dll` draws itself other than the Skin Chooser (Media Guide, Copy from CD, Media Library, Radio Tuner, Copy to CD or Device, Premium Services: their place shows the task's name), its menu bar, visualizations other than Bars, the equalizer's effect on the sound, DVDs and CDs, Notepad and Calculator's Help Topics (their `.chm`), XP's own Open and Save As dialogs (Qt's file dialog in XP's style stands in, with Notepad's Encoding line), Calculator's What's This?, XP's art behind a folder's thumbnail (no extracted file has it, so the folder's icon stands in its corner), Show in Groups and Choose Details, the Picture Tasks' printing and ordering prints, XP's zip folders (Send To makes them), Show in Groups, Auto Arrange and Customize This Folder (greyed), shortcuts (`.lnk`), network places, Help (shown disabled, as is Printers
 and Faxes without `system-config-printer`), the Accessibility Options applets (the category is there, empty), the
 Search Companion's sounds, its other characters and its balloon mode, Map Network Drive and Synchronize (greyed), the
 the Start panel's own MFU ranking (UserAssist's counts and their decay are shell32's; here, launches counted by the shell), the taskband's rows and scroll arrows when the buttons do not fit even grouped
@@ -138,6 +138,14 @@ backgrounds, what buttons draw outside them is not seen; colours may be `none` o
 `PlaylistWidth` 186, `MetadataHeight` 160, `SettingsHeight` 135, `UserDisplayView` `VizView`), found as the
 second argument of its registry getters. `helper.calcLayout`, which shares Now Playing out between its panes, is
 not located in `wmp.dll`; here it follows the limits `NowPlaying.js` says it shares with it.
+
+`.wms` skins (a `.wmz` is a zip of one with its pictures and scripts) are the same elements in XML, with
+the objects `wmp.dll`'s REGISTRY scripts register under `MediaPlayer\Objects`: PlayButton, SeekSlider,
+VolumeSlider, CurrentPositionText, ReturnButton and the rest are buttons, sliders and texts with the
+attributes those scripts give them (`onclick="player.controls.play()"`, `enabled="wmpenabled:player.controls.play"`),
+and a buttongroup's PlayElement, StopElement... are its buttonelements. Their attributes are text, which
+scripts see as numbers and booleans, worked out in the file's order; `theme.loadPreference` gives "--" for
+what was never saved; a view without `titleBar="false"` has the system's frame.
 
 ## How it fits
 

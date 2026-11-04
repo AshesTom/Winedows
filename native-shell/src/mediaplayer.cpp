@@ -2,6 +2,7 @@
 #include "mediaplayer.h"
 
 #include "xpfiles.h"
+#include "xpdialog.h"
 #include "xpprogram.h"
 
 #include <QApplication>
@@ -13,6 +14,11 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QListWidget>
+#include <QProcess>
+#include <QToolButton>
 #include <QMediaMetaData>
 #include <QMediaPlayer>
 #include <QMenu>
@@ -167,7 +173,44 @@ enum Command {
     Slow = 18836, Previous = 18810, Next = 18811, Rewind = 18812, FastForward = 18813, Shuffle = 18842, Repeat = 18843,
     VolumeUp = 18815, VolumeDown = 18816, Mute = 18817, About = 57664, GoToFirst = 16000, SkinChooser = 16007,
     ShowTitle = 18791, ShowMetadata = 18787, ShowPlaylist = 18783, ShowResizeBars = 18790, ShowEnhancements = 18789,
-    HideTaskbar = 19724, FullScreen = 18782,
+    HideTaskbar = 19724, FullScreen = 18782, FullMode = 18780, SkinMode = 18781,
+};
+
+// The Skin Chooser task: wmploc.dll's dialog 203 (its toolbar, the list of skins, the preview and
+// the skin's title, author and copyright), the words of its toolbar's buttons (strings 1306 and 1320).
+const int DIALOG_SKIN_CHOOSER = 203, ID_TOOLBAR = 209, ID_LIST = 202, ID_PREVIEW = 203, ID_TITLE = 206, ID_AUTHOR = 207,
+          ID_COPYRIGHT = 208, ID_HINT = 215;
+const int STRING_APPLY_SKIN = 1306, STRING_MORE_SKINS = 1320, STRING_DELETE_SKIN = 1302, STRING_APPLY_TIP = 1304,
+          STRING_MORE_TIP = 1303;
+
+// ";&Apply Skin;;": a toolbar button's words between its semicolons
+QString toolbarText(const QString &text)
+{
+    const QStringList parts = text.split(QLatin1Char(';'));
+    return parts.size() > 1 ? parts[1] : text;
+}
+
+} // namespace
+
+namespace {
+
+// Runs a function with a widget's size each time it changes.
+class SizeFollower : public QObject
+{
+public:
+    SizeFollower(QWidget *widget, std::function<void(QSize)> follow) : QObject(widget), m_follow(std::move(follow))
+    {
+        widget->installEventFilter(this);
+    }
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::Resize)
+            m_follow(static_cast<QWidget *>(watched)->size());
+        return false;
+    }
+
+private:
+    std::function<void(QSize)> m_follow;
 };
 
 } // namespace
@@ -182,8 +225,10 @@ MediaPlayer::MediaPlayer(const QStringList &files)
     qRegisterMetaType<wmp::ObjectRef>();
     m_loc = xpfiles::resources(xpfiles::find(QStringLiteral("wmploc.dll")));
     m_wmp = xpfiles::resources(xpfiles::find(QStringLiteral("wmp.dll")));
-    if (m_wmp)
+    if (m_wmp) {
         m_properties = wmpskin::properties(*m_wmp);
+        m_predefined = wmpskin::predefinedObjects(*m_wmp);
+    }
     if (m_loc)
         for (const QString &name : m_loc->names(QStringLiteral("256")))
             m_skinNames.insert(name.toLower(), name);
@@ -380,6 +425,9 @@ void MediaPlayer::show()
     emit changed(QStringLiteral("app"), QStringLiteral("currenttask"));
     open(m_pending);
     m_pending.clear();
+    // wmp.dll opens in the mode it was left in
+    if (settings.value(QStringLiteral("mode")).toString() == QLatin1String("skin"))
+        showSkin(currentSkin());
     connect(qApp, &QApplication::aboutToQuit, this, [this] {
         if (m_window)
             m_window->close();
@@ -930,6 +978,10 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
     if (object == QLatin1String("app")) {
         if (name == QLatin1String("gettimestring"))
             return timeString(arguments.value(0).toDouble());
+        if (name == QLatin1String("gotoskinmode")) {
+            QTimer::singleShot(0, this, [this] { showSkin(currentSkin()); });
+            return {};
+        }
         if (name == QLatin1String("adjustleft") && m_window) {
             // the taskbar's width taken from (or given to) the window's left
             const int dx = arguments.value(0).toInt();
@@ -1035,7 +1087,17 @@ QImage MediaPlayer::image(const QString &url, const QString &skinFolder)
             image = QImage::fromData(m_loc->find(type, name));
         }
     } else if (!skinFolder.isEmpty()) {
-        image = QImage(QDir(skinFolder).filePath(url));
+        // a skin's own file; its .bmp files are often RLE-compressed, which Qt's reader does not take
+        QFile file(QDir(skinFolder).filePath(url));
+        if (file.open(QIODevice::ReadOnly)) {
+            const QByteArray data = file.readAll();
+            if (data.startsWith("BM") && data.size() > 14) {
+                bool partial = false;
+                image = w4w::decodeDib(data.mid(14), &partial);
+            }
+            if (image.isNull())
+                image = QImage::fromData(data);
+        }
     }
     cache.insert(key, image);
     return image;
@@ -1074,6 +1136,8 @@ std::optional<wmpskin::Node> MediaPlayer::task(QString *folder)
     folder->clear();
     if (m_task.compare(QLatin1String("NowPlaying"), Qt::CaseInsensitive) == 0)
         return skin(QStringLiteral("NowPlaying.wsz"));
+    if (m_task.compare(QLatin1String("SkinViewer"), Qt::CaseInsensitive) == 0)
+        return std::nullopt;   // taskWidget
     // The tasks wmp.dll draws itself (Media Guide is a web page, the Media Library and the CD tasks
     // its own windows) are not ported: their place shows the player's colours and the task's name.
     wmpskin::Node view;
@@ -1130,27 +1194,29 @@ std::optional<wmpskin::Node> MediaPlayer::plugin(const QString &objectId)
 
 QString MediaPlayer::preference(const QString &name)
 {
+    // each skin its own; wmp.dll's theme.loadPreference gives "--" for one never saved
     QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
-    return settings.value(QStringLiteral("preferences/") + name).toString();
+    return settings.value(QStringLiteral("preferences/") + m_preferenceGroup + name, QStringLiteral("--")).toString();
 }
 
 void MediaPlayer::setPreference(const QString &name, const QString &value)
 {
     QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
-    settings.setValue(QStringLiteral("preferences/") + name, value);
+    settings.setValue(QStringLiteral("preferences/") + m_preferenceGroup + name, value);
 }
 
 // ---- the window ----
 
 bool MediaPlayer::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_window && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
+    const bool ours = watched == m_window || (m_skinWindow && watched == m_skinWindow);
+    if (ours && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
         auto *drag = static_cast<QDragMoveEvent *>(event);
         if (drag->mimeData()->hasUrls()) {
             drag->acceptProposedAction();
             return true;
         }
-    } else if (watched == m_window && event->type() == QEvent::Drop) {
+    } else if (ours && event->type() == QEvent::Drop) {
         auto *drop = static_cast<QDropEvent *>(event);
         QStringList files;
         for (const QUrl &url : drop->mimeData()->urls())
@@ -1182,7 +1248,282 @@ void MediaPlayer::windowRequest(const QString &request)
         emit changed(QStringLiteral("app"), QStringLiteral("maximized"));
     } else if (request.startsWith(QLatin1String("automenu:")) || request.startsWith(QLatin1String("menu:"))) {
         showMenu(request.section(QLatin1Char(':'), 1));
+    } else if (request == QLatin1String("skinmode")) {
+        showSkin(currentSkin());
     }
+}
+
+// ---- skin mode ----
+
+QStringList MediaPlayer::skinFiles() const
+{
+    // XP's skins from the media, then those the user added
+    QStringList files;
+    QStringList folders{QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/wmp-skins")};
+    if (const QString revert = xpfiles::find(QStringLiteral("Revert.wmz")); !revert.isEmpty())
+        folders.prepend(QFileInfo(revert).absolutePath());
+    for (const QString &folder : std::as_const(folders))
+        for (const QFileInfo &file : QDir(folder).entryInfoList({QStringLiteral("*.wmz"), QStringLiteral("*.wms")}, QDir::Files, QDir::Name | QDir::IgnoreCase))
+            files.append(file.absoluteFilePath());
+    return files;
+}
+
+QString MediaPlayer::currentSkin() const
+{
+    // the skin chosen last; wmp.dll's first is Revert
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+    const QString chosen = settings.value(QStringLiteral("skin")).toString();
+    const QStringList files = skinFiles();
+    if (files.contains(chosen))
+        return chosen;
+    for (const QString &file : files)
+        if (QFileInfo(file).completeBaseName().compare(QLatin1String("Revert"), Qt::CaseInsensitive) == 0)
+            return file;
+    return files.value(0);
+}
+
+std::optional<wmpskin::Node> MediaPlayer::loadSkin(const QString &file, QString *folder) const
+{
+    // A .wmz is a zip: its files go to a folder of their own, which the skin's pictures and scripts are read from.
+    QString wms = file;
+    if (file.endsWith(QLatin1String(".wmz"), Qt::CaseInsensitive)) {
+        const QFileInfo info(file);
+        const QString target = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + QStringLiteral("/win4wine/wmp-skins/")
+            + info.completeBaseName();
+        const QFileInfo stamp(target + QStringLiteral("/.unpacked"));
+        if (!stamp.exists() || stamp.lastModified() < info.lastModified()) {
+            QDir(target).removeRecursively();
+            QDir().mkpath(target);
+            if (QProcess::execute(QStringLiteral("bsdtar"), {QStringLiteral("-xf"), file, QStringLiteral("-C"), target}) != 0)
+                return std::nullopt;
+            QFile(stamp.filePath()).open(QIODevice::WriteOnly);
+        }
+        const QFileInfoList found = QDir(target).entryInfoList({QStringLiteral("*.wms")}, QDir::Files);
+        if (found.isEmpty())
+            return std::nullopt;
+        wms = found.first().absoluteFilePath();
+    }
+    QFile source(wms);
+    if (!source.open(QIODevice::ReadOnly))
+        return std::nullopt;
+    std::optional<wmpskin::Node> document = wmpskin::readXml(source.readAll());
+    if (!document || document->tag != QLatin1String("theme"))
+        return std::nullopt;
+    wmpskin::expand(*document, m_predefined);
+    *folder = QFileInfo(wms).absolutePath();
+    return document;
+}
+
+void MediaPlayer::showSkin(const QString &file)
+{
+    QString folder;
+    std::optional<wmpskin::Node> document = loadSkin(file, &folder);
+    if (!document)
+        return;
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+    settings.setValue(QStringLiteral("skin"), file);
+    closeSkin();
+    m_preferenceGroup = QFileInfo(file).completeBaseName() + QLatin1Char('/');
+    m_skinWindow = new wmp::SkinView(this, *document, folder);
+    // a skin without titleBar="false" has the system's frame (Classic)
+    m_skinWindow->setWindowFlag(Qt::FramelessWindowHint, !m_skinWindow->hasTitleBar());
+    m_skinWindow->setWindowTitle(m_window ? m_window->windowTitle() : QStringLiteral("Windows Media Player"));
+    m_skinWindow->setWindowIcon(m_window ? m_window->windowIcon() : QIcon());
+    m_skinWindow->setAcceptDrops(true);
+    m_skinWindow->installEventFilter(this);
+    m_skinWindow->windowRequest = [this, document, folder](const QString &request) {
+        if (request == QLatin1String("returntomediacenter")) {
+            QTimer::singleShot(0, this, &MediaPlayer::showFullMode);
+        } else if (request == QLatin1String("close") && sender() == nullptr) {
+            QTimer::singleShot(0, this, [this] { windowRequest(QStringLiteral("close")); });
+        } else if (request == QLatin1String("minimize") && m_skinWindow) {
+            m_skinWindow->showMinimized();
+        } else if (request.startsWith(QLatin1String("openview:"))) {
+            // theme.openView: another of the theme's views, a window of its own
+            auto *view = new wmp::SkinView(this, *document, folder, nullptr, QSize(), request.section(QLatin1Char(':'), 1));
+            view->setAttribute(Qt::WA_DeleteOnClose);
+            view->setWindowFlag(Qt::FramelessWindowHint);
+            view->windowRequest = [view](const QString &inner) {
+                if (inner == QLatin1String("close"))
+                    view->close();
+            };
+            m_skinViews.append(view);
+            view->show();
+            view->start();
+        } else if (request.startsWith(QLatin1String("automenu:")) || request.startsWith(QLatin1String("menu:"))) {
+            showMenu(request.section(QLatin1Char(':'), 1));
+        }
+    };
+    const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+    QRect geometry(QPoint(), m_skinWindow->preferredSize());
+    geometry.moveCenter(screen.center());
+    if (const QPoint at = settings.value(QStringLiteral("skinPosition")).toPoint(); !at.isNull() && screen.contains(at))
+        geometry.moveTopLeft(at);
+    m_skinWindow->setGeometry(geometry);
+    if (m_skinWindow->isResizable() && m_skinWindow->hasTitleBar())
+        m_skinWindow->setMinimumSize(m_skinWindow->minimumViewSize().expandedTo(QSize(1, 1)));
+    else
+        m_skinWindow->setFixedSize(geometry.size());
+    if (m_window)
+        m_window->hide();
+    m_skinWindow->show();
+    m_skinWindow->start();
+    settings.setValue(QStringLiteral("mode"), QStringLiteral("skin"));
+    settings.sync();
+}
+
+void MediaPlayer::closeSkin()
+{
+    for (const QPointer<wmp::SkinView> &view : std::as_const(m_skinViews))
+        if (view)
+            view->close();
+    m_skinViews.clear();
+    if (m_skinWindow) {
+        QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+        settings.setValue(QStringLiteral("skinPosition"), m_skinWindow->pos());
+        m_skinWindow->close();
+        m_skinWindow->deleteLater();
+    }
+}
+
+void MediaPlayer::showFullMode()
+{
+    closeSkin();
+    m_preferenceGroup.clear();
+    QSettings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer")).setValue(QStringLiteral("mode"), QStringLiteral("full"));
+    if (m_window) {
+        m_window->show();
+        m_window->raise();
+        m_window->activateWindow();
+    }
+}
+
+// The Skin Chooser: dialog 203 of wmploc.dll, stretched over the task's room as wmp.dll does it
+QWidget *MediaPlayer::taskWidget(QWidget *parent)
+{
+    if (m_task.compare(QLatin1String("SkinViewer"), Qt::CaseInsensitive) != 0 || !m_loc)
+        return nullptr;
+    auto *chooser = new QWidget(parent);
+    // opaque over the taskcenter's "Opening..." (the style's window colour may have no alpha)
+    QPalette palette = chooser->palette();
+    QColor face = palette.color(QPalette::Window);
+    face.setAlpha(255);
+    palette.setColor(QPalette::Window, face);
+    chooser->setPalette(palette);
+    chooser->setAutoFillBackground(true);
+    auto *page = new QWidget(chooser);
+    const xpdialog::Page dialog = xpdialog::build(*m_loc, DIALOG_SKIN_CHOOSER, page);
+    QWidget *listPlace = dialog.controls.value(ID_LIST);
+    QWidget *toolbarPlace = dialog.controls.value(ID_TOOLBAR);
+    auto *preview = qobject_cast<QLabel *>(dialog.controls.value(ID_PREVIEW));
+    auto *title = qobject_cast<QLabel *>(dialog.controls.value(ID_TITLE));
+    auto *author = qobject_cast<QLabel *>(dialog.controls.value(ID_AUTHOR));
+    auto *copyright = qobject_cast<QLabel *>(dialog.controls.value(ID_COPYRIGHT));
+    if (QWidget *hint = dialog.controls.value(ID_HINT))
+        hint->hide();
+    auto *list = new QListWidget(page);
+    list->setGeometry(listPlace ? listPlace->geometry() : QRect());
+    delete listPlace;
+    // the toolbar's buttons, as text buttons (TBSTYLE_LIST)
+    auto *toolbar = new QWidget(page);
+    toolbar->setGeometry(toolbarPlace ? toolbarPlace->geometry().adjusted(0, 0, 0, 6) : QRect());
+    delete toolbarPlace;
+    auto *row = new QHBoxLayout(toolbar);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(2);
+    auto *apply = new QToolButton(toolbar);
+    apply->setText(toolbarText(text(STRING_APPLY_SKIN)));
+    apply->setToolTip(text(STRING_APPLY_TIP));
+    auto *more = new QToolButton(toolbar);
+    more->setText(toolbarText(text(STRING_MORE_SKINS)));
+    more->setToolTip(text(STRING_MORE_TIP));
+    more->setEnabled(false);   // Microsoft's skin gallery is gone
+    auto *remove = new QToolButton(toolbar);
+    remove->setText(QStringLiteral("r"));
+    remove->setFont(QFont(QStringLiteral("Marlett")));
+    remove->setToolTip(text(STRING_DELETE_SKIN));
+    for (QToolButton *button : {apply, more, remove}) {
+        button->setAutoRaise(true);
+        row->addWidget(button);
+    }
+    row->addStretch(1);
+    const QStringList files = skinFiles();
+    const QString current = currentSkin();
+    for (const QString &file : files) {
+        auto *item = new QListWidgetItem(QFileInfo(file).completeBaseName(), list);
+        item->setData(Qt::UserRole, file);
+        if (file == current)
+            list->setCurrentItem(item);
+    }
+    const QString titleWords = title ? title->text() : QString(), authorWords = author ? author->text() : QString(),
+                  copyrightWords = copyright ? copyright->text() : QString();
+    const auto fill = [](const QString &words, const QString &value) { return QString(words).replace(QLatin1String("%1!.1023ls!"), value); };
+    const auto show = [=, this] {
+        QListWidgetItem *item = list->currentItem();
+        if (!item)
+            return;
+        const QString file = item->data(Qt::UserRole).toString();
+        remove->setEnabled(!file.startsWith(QFileInfo(xpfiles::find(QStringLiteral("Revert.wmz"))).absolutePath()));
+        QString folder;
+        std::optional<wmpskin::Node> document = loadSkin(file, &folder);
+        if (title)
+            title->setText(fill(titleWords, item->text()));
+        if (author)
+            author->setText(fill(authorWords, document ? document->attribute(QStringLiteral("author")).toString() : QString()));
+        if (copyright)
+            copyright->setText(fill(copyrightWords, document ? document->attribute(QStringLiteral("copyright")).toString() : QString()));
+        if (!preview)
+            return;
+        preview->setVisible(true);
+        preview->setAlignment(Qt::AlignCenter);
+        preview->setPixmap(document ? skinPicture(*document, folder, preview->size()) : QPixmap());
+    };
+    QObject::connect(list, &QListWidget::currentItemChanged, chooser, show);
+    const auto applyChosen = [this, list] {
+        if (QListWidgetItem *item = list->currentItem())
+            showSkin(item->data(Qt::UserRole).toString());
+    };
+    QObject::connect(apply, &QToolButton::clicked, chooser, applyChosen);
+    QObject::connect(list, &QListWidget::itemActivated, chooser, applyChosen);
+    QObject::connect(remove, &QToolButton::clicked, chooser, [list] {
+        QListWidgetItem *item = list->currentItem();
+        if (item && QFile::remove(item->data(Qt::UserRole).toString()))
+            delete item;
+    });
+    // its controls follow the task's size: the list down to the bottom, the preview over the rest
+    const QRect listRect = list->geometry(), previewRect = preview ? preview->geometry() : QRect();
+    const QSize designed = page->size();
+    page->setMinimumSize(0, 0);
+    page->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    auto *resizer = new SizeFollower(chooser, [=](QSize size) {
+        page->setGeometry(QRect(QPoint(), size));
+        const int dw = size.width() - designed.width(), dh = size.height() - designed.height();
+        list->setGeometry(listRect.adjusted(0, 0, 0, dh));
+        if (preview)
+            preview->setGeometry(previewRect.adjusted(0, 0, dw, dh));
+        for (QLabel *label : {title, author, copyright})
+            if (label)
+                label->move(label->x(), label->property("designedY").toInt() + dh);
+    });
+    for (QLabel *label : {title, author, copyright})
+        if (label)
+            label->setProperty("designedY", label->y());
+    Q_UNUSED(resizer);
+    QTimer::singleShot(0, chooser, show);
+    return chooser;
+}
+
+QPixmap MediaPlayer::skinPicture(const wmpskin::Node &document, const QString &folder, QSize room)
+{
+    // the skin drawn as it would open, in its own shape, fitted into ROOM
+    wmp::SkinView view(this, document, folder);
+    view.resize(view.preferredSize());
+    QImage image(view.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    view.render(&image, QPoint(), view.shape(), QWidget::DrawChildren);
+    if (image.width() > room.width() || image.height() > room.height())
+        image = image.scaled(room, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    return QPixmap::fromImage(image);
 }
 
 void MediaPlayer::showMenu(const QString &name)
@@ -1202,7 +1543,8 @@ void MediaPlayer::showMenu(const QString &name)
         QAction *action = it.value();
         const int id = it.key();
         static const QSet<int> handled{Open, OpenUrl, CloseMedia, Exit, PlayPause, Stop, Fast, Normal, Slow, Previous, Next, Rewind,
-                                       FastForward, Shuffle, Repeat, VolumeUp, VolumeDown, Mute, FullScreen, HideTaskbar};
+                                       FastForward, Shuffle, Repeat, VolumeUp, VolumeDown, Mute, FullScreen, HideTaskbar,
+                                       FullMode, SkinMode};
         action->setEnabled(handled.contains(id) || (id >= GoToFirst && id <= SkinChooser));
         if (id == Shuffle || id == Repeat || id == Mute) {
             action->setCheckable(true);
@@ -1263,6 +1605,12 @@ void MediaPlayer::command(int id)
         break;
     case FullScreen:
         set(QStringLiteral("player"), QStringLiteral("fullscreen"), !(m_window && m_window->isFullScreen()));
+        break;
+    case FullMode:
+        showFullMode();
+        break;
+    case SkinMode:
+        showSkin(currentSkin());
         break;
     case HideTaskbar:
         set(QStringLiteral("app"), QStringLiteral("taskbarvisible"), !m_app.value(QStringLiteral("taskbarvisible")).toBool());

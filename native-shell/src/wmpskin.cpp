@@ -317,4 +317,120 @@ std::optional<Node> readXml(const QByteArray &data)
     return readElement(xml);
 }
 
+namespace {
+
+// An ATL registry script's tokens: words, 'quoted strings', { } =
+QStringList registryTokens(const QString &text)
+{
+    QStringList tokens;
+    for (qsizetype i = 0; i < text.size();) {
+        const QChar c = text[i];
+        if (c.isSpace()) {
+            ++i;
+        } else if (c == QLatin1Char('{') || c == QLatin1Char('}') || c == QLatin1Char('=')) {
+            tokens.append(c);
+            ++i;
+        } else if (c == QLatin1Char('\'')) {
+            qsizetype end = i + 1;
+            QString value;
+            // '' is a quote inside a string
+            while (end < text.size()) {
+                if (text[end] == QLatin1Char('\'') && end + 1 < text.size() && text[end + 1] == QLatin1Char('\'')) {
+                    value += QLatin1Char('\'');
+                    end += 2;
+                } else if (text[end] == QLatin1Char('\'')) {
+                    break;
+                } else {
+                    value += text[end++];
+                }
+            }
+            tokens.append(QLatin1Char('\'') + value);
+            i = end + 1;
+        } else {
+            qsizetype end = i;
+            while (end < text.size() && !text[end].isSpace() && text[end] != QLatin1Char('{') && text[end] != QLatin1Char('}')
+                   && text[end] != QLatin1Char('='))
+                ++end;
+            tokens.append(text.mid(i, end - i));
+            i = end;
+        }
+    }
+    return tokens;
+}
+
+QString unquoted(const QString &token)
+{
+    return token.startsWith(QLatin1Char('\'')) ? token.mid(1) : token;
+}
+
+} // namespace
+
+QHash<QString, Predefined> predefinedObjects(const w4w::PeResources &wmp)
+{
+    QHash<QString, Predefined> objects;
+    for (const QString &name : wmp.names(QStringLiteral("REGISTRY"))) {
+        const QString text = QString::fromLatin1(wmp.find(QStringLiteral("REGISTRY"), name));
+        if (!text.contains(QLatin1String("Objects")))
+            continue;
+        const QStringList tokens = registryTokens(text);
+        QStringList path;
+        QString pending;   // the key a { opens
+        for (qsizetype i = 0; i < tokens.size(); ++i) {
+            const QString &token = tokens[i];
+            if (token == QLatin1String("{")) {
+                path.append(pending);
+                pending.clear();
+            } else if (token == QLatin1String("}")) {
+                if (!path.isEmpty())
+                    path.removeLast();
+            } else if (token.compare(QLatin1String("val"), Qt::CaseInsensitive) == 0 && i + 4 < tokens.size() && tokens[i + 2] == QLatin1String("=")) {
+                // val 'name' = s 'value'
+                const QString attribute = unquoted(tokens[i + 1]);
+                const QString value = unquoted(tokens[i + 4]);
+                i += 4;
+                const qsizetype objects_at = path.lastIndexOf(QStringLiteral("Objects"));
+                if (objects_at < 1 || path[objects_at - 1].compare(QLatin1String("MediaPlayer"), Qt::CaseInsensitive) != 0
+                    || path.size() - objects_at < 2 || path.size() - objects_at > 3)
+                    continue;
+                QString key = path[objects_at + 1].toLower();
+                if (path.size() - objects_at == 3)
+                    key += QLatin1Char('/') + path[objects_at + 2].toLower();
+                Predefined &object = objects[key];
+                if (attribute.compare(QLatin1String("classid"), Qt::CaseInsensitive) == 0)
+                    object.tag = classTag(QUuid(value.mid(value.indexOf(QLatin1Char(':')) + 1)));
+                else
+                    object.attributes.append({attribute, value});
+            } else if (token.compare(QLatin1String("ForceRemove"), Qt::CaseInsensitive) == 0
+                       || token.compare(QLatin1String("NoRemove"), Qt::CaseInsensitive) == 0
+                       || token.compare(QLatin1String("Delete"), Qt::CaseInsensitive) == 0) {
+                continue;
+            } else if (token == QLatin1String("=") && i + 2 < tokens.size()) {
+                i += 2;   // a key's default value: = s 'value'
+            } else {
+                pending = unquoted(token);
+            }
+        }
+    }
+    // a buttongroup's elements are buttonelements
+    for (auto it = objects.begin(); it != objects.end(); ++it)
+        if (it.key().contains(QLatin1Char('/')) && it->tag.isEmpty())
+            it->tag = QStringLiteral("buttonelement");
+    return objects;
+}
+
+void expand(Node &node, const QHash<QString, Predefined> &objects, const QString &parentTag)
+{
+    auto it = objects.constFind(parentTag.isEmpty() ? node.tag : parentTag + QLatin1Char('/') + node.tag);
+    if (it == objects.constEnd() && !parentTag.isEmpty())
+        it = objects.constFind(node.tag);
+    if (it != objects.constEnd() && !it->tag.isEmpty()) {
+        node.tag = it->tag;
+        for (const auto &[name, value] : it->attributes)
+            if (!node.attribute(name).isValid())
+                node.attributes.prepend({name, value});
+    }
+    for (Node &child : node.children)
+        expand(child, objects, node.tag == QLatin1String("buttongroup") ? node.tag : QString());
+}
+
 } // namespace wmpskin

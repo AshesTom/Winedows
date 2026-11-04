@@ -52,4 +52,16 @@ std::optional<Node> readCompiled(const QByteArray &data, const QHash<quint32, QS
 // A .wms (XML, UTF-16 or 8-bit).
 std::optional<Node> readXml(const QByteArray &data);
 
+// The objects a .wms may name besides the elements (PlayButton, SeekSlider, PlayElement...): what each
+// is and the attributes it starts with, as wmp.dll's REGISTRY scripts register them under
+// HKLM\SOFTWARE\Microsoft\MediaPlayer\Objects. A buttongroup's own ones are "buttongroup/playelement".
+struct Predefined
+{
+    QString tag;
+    QList<std::pair<QString, QVariant>> attributes;
+};
+QHash<QString, Predefined> predefinedObjects(const w4w::PeResources &wmp);
+// NODE and its children as the elements they are, the skin's own attributes over the defaults.
+void expand(Node &node, const QHash<QString, Predefined> &objects, const QString &parentTag = QString());
+
 } // namespace wmpskin

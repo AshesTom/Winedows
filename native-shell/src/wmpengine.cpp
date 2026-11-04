@@ -34,13 +34,15 @@ struct Element
     Element *parent = nullptr;
     QList<Element *> children;
     QHash<QString, QVariant> values;     // lower-case names
+    QStringList order;                   // the attributes in the file's order, which values are worked out in
     QHash<QString, QString> handlers;    // lower-case event -> code
     QHash<QString, bool> members;        // what its interfaces have, lower-case -> method
     QString source;                      // a handler node's object (<player ...>)
     QList<Animation> animations;
     QList<std::pair<int, QString>> menuItems;  // a menu's; id 0 a separator
     QSet<int> disabledItems, checkedItems;
-    QPointer<SkinView> hosted;           // a taskcenter's task
+    QPointer<SkinView> hosted;           // a taskcenter's task, a plugin's view
+    QPointer<QWidget> widget;            // a task the player draws itself
     double scroll = 0;                   // scrolling text
     qint64 scrolled = 0;
     bool handlerNode = false;
@@ -155,7 +157,9 @@ QRegion mappingRegion(const QImage &mapping, const QColor &color)
 {
     if (mapping.isNull() || !color.isValid())
         return {};
+    // index 1 black: what QBitmap takes as set (without a colour table the conversion guesses)
     QImage mask(mapping.size(), QImage::Format_MonoLSB);
+    mask.setColorTable({qRgb(255, 255, 255), qRgb(0, 0, 0)});
     mask.fill(0);
     const QRgb wanted = color.rgb() & 0xffffff;
     const QImage source = mapping.convertToFormat(QImage::Format_RGB32);
@@ -198,8 +202,20 @@ QJSValue Bridge::get(const QString &key, const QString &name)
     if (Element *element = m_view->elementOf(key)) {
         if (element->members.value(lower) || lower == QLatin1String("moveto") || lower == QLatin1String("alphablendto"))
             return m_view->m_makeMethod.call({key, lower});
-        const QVariant value = m_view->property(element, lower);
-        // buttonelements of a buttongroup by their position
+        QVariant value = m_view->property(element, lower);
+        // A .wms gives every attribute as text; wmp.dll's properties have types, so scripts see
+        // left="715" as a number (left + 21) and visible="false" as false.
+        if (value.typeId() == QMetaType::QString && lower != QLatin1String("value") && lower != QLatin1String("id")) {
+            const QString text = value.toString().trimmed();
+            bool number = false;
+            const double parsed = text.toDouble(&number);
+            if (number && !text.isEmpty())
+                value = parsed;
+            else if (text.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0)
+                value = true;
+            else if (text.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0)
+                value = false;
+        }
         return m_view->toScript(value);
     }
     if (m_view->m_model->isMethod(key, lower))
@@ -240,7 +256,8 @@ QJSValue Bridge::call(const QString &key, const QString &name, const QJSValue &a
 
 // ---- the view ----
 
-SkinView::SkinView(Model *model, const wmpskin::Node &document, const QString &folder, QWidget *parent, QSize initial)
+SkinView::SkinView(Model *model, const wmpskin::Node &document, const QString &folder, QWidget *parent, QSize initial,
+                   const QString &viewId)
     : QWidget(parent), m_model(model), m_folder(folder)
 {
     setMouseTracking(true);
@@ -276,8 +293,10 @@ SkinView::SkinView(Model *model, const wmpskin::Node &document, const QString &f
     Element *root = build(document, nullptr);
     m_theme = root && root->tag == QLatin1String("theme") ? root : nullptr;
     if (m_theme) {
+        // its first view, or the one asked for (theme.openView)
         for (Element *child : std::as_const(m_theme->children))
-            if (child->tag == QLatin1String("view")) {
+            if (child->tag == QLatin1String("view")
+                && (viewId.isEmpty() || child->values.value(QStringLiteral("id")).toString().compare(viewId, Qt::CaseInsensitive) == 0)) {
                 m_view = child;
                 break;
             }
@@ -401,6 +420,18 @@ bool SkinView::isResizable() const
     return m_view && toBool(m_view->values.value(QStringLiteral("resizable")), true);
 }
 
+bool SkinView::hasTitleBar() const
+{
+    return m_view && toBool(m_view->values.value(QStringLiteral("titlebar")), true);
+}
+
+QSize SkinView::minimumViewSize() const
+{
+    if (!m_view)
+        return {};
+    return QSize(toInt(m_view->values.value(QStringLiteral("minwidth"))), toInt(m_view->values.value(QStringLiteral("minheight"))));
+}
+
 Element *SkinView::build(const wmpskin::Node &node, Element *parent)
 {
     auto owned = std::make_unique<Element>();
@@ -427,8 +458,10 @@ Element *SkinView::build(const wmpskin::Node &node, Element *parent)
             || lower.endsWith(QLatin1String("_onchange"));
         if (event || (element->handlerNode && lower != QLatin1String("classid")))
             element->handlers.insert(lower, value.toString());
-        else
+        else {
             element->values.insert(lower, value);
+            element->order.append(lower);
+        }
     }
     if (const QString id = element->values.value(QStringLiteral("id")).toString(); !id.isEmpty() && isElement)
         m_ids.insert(id.toLower(), element);
@@ -476,24 +509,25 @@ void SkinView::applyAttributes(Element *element)
         }
         return;
     }
-    const QHash<QString, QVariant> values = element->values;
-    for (auto it = values.begin(); it != values.end(); ++it) {
-        if (it.value().typeId() != QMetaType::QString)
+    // in the file's order: height="view.height - top" takes the top worked out before it
+    for (const QString &name : std::as_const(element->order)) {
+        const QVariant original = element->values.value(name);
+        if (original.typeId() != QMetaType::QString)
             continue;
-        const QString text = it.value().toString();
+        const QString text = original.toString();
         if (text.startsWith(QLatin1String("jscript:"), Qt::CaseInsensitive)) {
             const QVariant value = fromScript(evaluate(text.mid(8), keyOf(element)));
-            element->values.insert(it.key(), value);
+            element->values.insert(name, value);
         } else if (text.startsWith(QLatin1String("wmpprop:"), Qt::CaseInsensitive)) {
-            element->values.remove(it.key());
-            bind(element, it.key(), text.mid(8), false, false);
+            element->values.remove(name);
+            bind(element, name, text.mid(8), false, false);
         } else if (text.startsWith(QLatin1String("wmpenabled:"), Qt::CaseInsensitive)
                    || text.startsWith(QLatin1String("wmpdisabled:"), Qt::CaseInsensitive)) {
             const bool disabled = text.startsWith(QLatin1String("wmpdisabled:"), Qt::CaseInsensitive);
-            element->values.remove(it.key());
-            bind(element, it.key(), text.mid(disabled ? 12 : 11), true, disabled);
+            element->values.remove(name);
+            bind(element, name, text.mid(disabled ? 12 : 11), true, disabled);
         } else if (text.contains(QLatin1String("RT_STRING"), Qt::CaseInsensitive) && text.startsWith(QLatin1String("res://"), Qt::CaseInsensitive)) {
-            element->values.insert(it.key(), m_model->string(text));
+            element->values.insert(name, m_model->string(text));
         }
     }
 }
@@ -611,6 +645,10 @@ void SkinView::runHandler(const QString &key, const QString &name, const QVarian
             found.append({node, node->handlers.value(name)});
     if (found.isEmpty())
         return;
+    if (qEnvironmentVariableIntValue("WMP_DEBUG") > 2)
+        for (const auto &[element, code] : found)
+            fprintf(stderr, "wmp: %s.%s: %s\n", qPrintable(element->values.value(QStringLiteral("id")).toString()), qPrintable(name),
+                    qPrintable(code.left(80)));
     const QStringList names = m_model->eventArguments(key, name).value_or(QStringList());
     // <player openstatechange="..."> runs with the player in scope
     for (const auto &[element, code] : found)
@@ -819,8 +857,13 @@ void SkinView::setProperty(Element *element, const QString &name, const QVariant
         runHandler(key, name + QLatin1String("_onchange"));
     if (element == m_view && geometry && !m_closing && size() != QSize(toInt(property(m_view, QStringLiteral("width"))), toInt(property(m_view, QStringLiteral("height"))))) {
         const QSize wanted(toInt(property(m_view, QStringLiteral("width"))), toInt(property(m_view, QStringLiteral("height"))));
-        if (isWindow() && m_started)
-            resize(wanted);
+        // a script sizing its view (Iconic's view.width = bigWidth) sizes the window, fixed or not
+        if (isWindow() && m_started) {
+            if (minimumSize() == maximumSize())
+                setFixedSize(wanted);
+            else
+                resize(wanted);
+        }
     }
     if (qEnvironmentVariableIntValue("WMP_DEBUG") > 2)
         fprintf(stderr, "wmp: set %s.%s = %s\n", qPrintable(element->values.value(QStringLiteral("id")).toString()), qPrintable(name),
@@ -1075,6 +1118,8 @@ void SkinView::resizeEvent(QResizeEvent *)
         m_lastSize = size();
         setProperty(m_view, QStringLiteral("width"), width());
         setProperty(m_view, QStringLiteral("height"), height());
+        if (m_started)
+            runHandler(keyOf(m_view), QStringLiteral("onresize"));
     }
     layoutHosted();
     scheduleShape();
@@ -1093,8 +1138,15 @@ void SkinView::host(Element *element, std::optional<wmpskin::Node> document, con
         element->hosted->deleteLater();
         element->hosted = nullptr;
     }
-    if (!document)
+    delete element->widget;
+    if (!document) {
+        // a task wmp.dll draws itself
+        if (element->tag == QLatin1String("taskcenter") && (element->widget = m_model->taskWidget(this))) {
+            element->widget->show();
+            layoutHosted();
+        }
         return;
+    }
     element->hosted = new SkinView(m_model, *document, folder, this, rectOf(element).size());
     element->hosted->windowRequest = windowRequest;
     element->hosted->show();
@@ -1105,10 +1157,11 @@ void SkinView::host(Element *element, std::optional<wmpskin::Node> document, con
 void SkinView::layoutHosted()
 {
     for (const auto &element : m_elements)
-        if (element->hosted) {
-            element->hosted->setGeometry(rectOf(element.get()));
-            element->hosted->setVisible(visible(element.get()));
-        }
+        for (QWidget *widget : {static_cast<QWidget *>(element->hosted.data()), element->widget.data()})
+            if (widget) {
+                widget->setGeometry(rectOf(element.get()));
+                widget->setVisible(visible(element.get()));
+            }
 }
 
 void SkinView::scheduleShape()
@@ -1135,8 +1188,9 @@ QRegion SkinView::shape()
     // Child task views are rectangles.
     QRegion region(QBitmap::fromImage(image.createAlphaMask()));
     for (const auto &element : m_elements)
-        if (element->hosted && element->hosted->isVisible())
-            region += element->hosted->geometry();
+        for (QWidget *widget : {static_cast<QWidget *>(element->hosted.data()), element->widget.data()})
+            if (widget && widget->isVisible())
+                region += widget->geometry();
     m_shape = region.isEmpty() ? QRegion(rect()) : region;
     return m_shape;
 }
@@ -1613,7 +1667,10 @@ void SkinView::mousePressEvent(QMouseEvent *event)
     if (!m_view)
         return;
     int button = -1;
-    Element *target = hit(m_theme ? m_theme : m_view, event->position().toPoint(), QPoint(), &button);
+    Element *target = hit(m_view, event->position().toPoint(), QPoint(), &button);
+    if (qEnvironmentVariableIntValue("WMP_DEBUG") > 2)
+        fprintf(stderr, "wmp: press %d,%d on %s %s button %d\n", event->position().toPoint().x(), event->position().toPoint().y(),
+                target ? qPrintable(target->tag) : "-", target ? qPrintable(target->values.value(QStringLiteral("id")).toString()) : "", button);
     m_pressed = nullptr;
     m_pressedButton = -1;
     if (target && interactive(target) && enabled(target)) {
@@ -1653,7 +1710,7 @@ void SkinView::mouseMoveEvent(QMouseEvent *event)
         return;
     }
     int button = -1;
-    Element *target = m_view ? hit(m_theme ? m_theme : m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
+    Element *target = m_view ? hit(m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
     if (target && !interactive(target) && !(target->tag == QLatin1String("text") && (target->values.contains(QStringLiteral("hoverforegroundcolor"))
                                                                                     || target->values.contains(QStringLiteral("tooltip")))))
         target = nullptr;
@@ -1673,7 +1730,7 @@ void SkinView::mouseReleaseEvent(QMouseEvent *event)
         return;
     }
     int button = -1;
-    Element *target = hit(m_theme ? m_theme : m_view, event->position().toPoint(), QPoint(), &button);
+    Element *target = hit(m_view, event->position().toPoint(), QPoint(), &button);
     fireMouse(pressed, QStringLiteral("onmouseup"), event);
     if (target == pressed && button == pressedButton && event->button() == Qt::LeftButton && enabled(pressed)) {
         if (pressed->tag == QLatin1String("buttongroup")) {
@@ -1710,7 +1767,7 @@ void SkinView::mouseReleaseEvent(QMouseEvent *event)
 void SkinView::mouseDoubleClickEvent(QMouseEvent *event)
 {
     int button = -1;
-    Element *target = m_view ? hit(m_theme ? m_theme : m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
+    Element *target = m_view ? hit(m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
     if (target && target != m_view && target->handlers.contains(QStringLiteral("ondblclick")))
         fireMouse(target, QStringLiteral("ondblclick"), event);
     else if (m_view && (!target || !interactive(target)))
@@ -1722,7 +1779,7 @@ void SkinView::mouseDoubleClickEvent(QMouseEvent *event)
 void SkinView::wheelEvent(QWheelEvent *event)
 {
     int button = -1;
-    Element *target = m_view ? hit(m_theme ? m_theme : m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
+    Element *target = m_view ? hit(m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
     if (target && (target->tag == QLatin1String("slider")) && enabled(target)) {
         const double min = toDouble(property(target, QStringLiteral("min"))), max = toDouble(property(target, QStringLiteral("max")), 100);
         const double step = (max - min) / 20 * (event->angleDelta().y() > 0 ? 1 : -1);

@@ -167,6 +167,9 @@ QHash<int, QAction *> fillMenu(QMenu *menu, const w4w::PeResources &pe, int id)
                 r.u32();
                 // The template's first popup holds the shortcut menu's items.
                 QMenu *popup = depth == 0 ? into : into->addMenu(text);
+                // a popup by its ID too (shell32's View and Arrange Icons By)
+                if (depth > 0 && command)
+                    actions.insert(int(command), popup->menuAction());
                 items(popup, depth + 1);
             } else if (into && depth > 0) {
                 if (type & MFT_SEPARATOR) {

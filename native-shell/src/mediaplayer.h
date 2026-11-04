@@ -48,6 +48,7 @@ public:
     QString script(const QString &url, const QString &skinFolder) override;
     std::optional<wmpskin::Node> task(QString *folder) override;
     std::optional<wmpskin::Node> plugin(const QString &objectId) override;
+    QWidget *taskWidget(QWidget *parent) override;
     QImage videoFrame() const override { return m_frame; }
     QList<float> spectrum() const override { return m_spectrum; }
     QString preference(const QString &name) override;
@@ -79,12 +80,23 @@ private:
     void openDialog();
     void updateSpectrum(const class QAudioBuffer &buffer);
     void calcLayout(int width, int height, bool captions, bool banner);
+    // skin mode: the .wmz skins of XP's Skins folder and the user's
+    QStringList skinFiles() const;
+    QString currentSkin() const;
+    std::optional<wmpskin::Node> loadSkin(const QString &file, QString *folder) const;
+    void showSkin(const QString &file);
+    void closeSkin();
+    void showFullMode();
+    QPixmap skinPicture(const wmpskin::Node &document, const QString &folder, QSize room);
     void changedAll(const QString &object, std::initializer_list<const char *> names);
     static QString timeString(double seconds);
 
     std::optional<w4w::PeResources> m_loc, m_wmp;
     wmpskin::Properties m_properties;
+    QHash<QString, wmpskin::Predefined> m_predefined;
     QPointer<wmp::SkinView> m_window;
+    QPointer<wmp::SkinView> m_skinWindow;
+    QList<QPointer<wmp::SkinView>> m_skinViews;   // its other views (theme.openView)
     QMediaPlayer *m_player = nullptr;
     QAudioOutput *m_audio = nullptr;
     QVideoSink *m_video = nullptr;
@@ -101,6 +113,7 @@ private:
     QString m_task = QStringLiteral("NowPlaying");
     QHash<int, int> m_layout;   // helper.getLayoutSize
     QStringList m_pending;
+    QString m_preferenceGroup;   // the skin's, for theme.loadPreference
     QTimer m_decay;
     QHash<QString, QString> m_skinNames;   // lower-case resource name -> as wmploc.dll has it
 };

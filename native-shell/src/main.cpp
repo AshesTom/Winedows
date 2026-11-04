@@ -15,6 +15,7 @@
 #include "frames.h"
 #include "notepad.h"
 #include "notifications.h"
+#include "pictures.h"
 #include "programs.h"
 #include "securitycenter.h"
 #include "taskbar.h"
@@ -24,6 +25,7 @@
 #include "xpfiles.h"
 
 #include <QApplication>
+#include <QFileInfo>
 #include <QCommandLineParser>
 #include <QKeyEvent>
 #include <QScreen>
@@ -109,6 +111,7 @@ int main(int argc, char **argv)
     parser.addOption({QStringLiteral("console"), QStringLiteral("only XP's Command Prompt, in that folder"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("notepad"), QStringLiteral("only XP's Notepad (the file, if any, is the first argument)")});
     parser.addOption({QStringLiteral("calc"), QStringLiteral("only XP's Calculator")});
+    parser.addOption({QStringLiteral("picture"), QStringLiteral("only Windows Picture and Fax Viewer, on that picture"), QStringLiteral("file")});
     parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("Notepad's file"), QStringLiteral("[file]"));
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, taskbar, network, programs, sound, system, mouse, keyboard, printers, users, datetime, security, winver"), QStringLiteral("id")});
@@ -153,6 +156,12 @@ int main(int argc, char **argv)
             (new Notepad(parser.positionalArguments().value(0)))->show();
         else
             (new Calculator)->show();
+        return app.exec();
+    }
+    if (parser.isSet(QStringLiteral("picture"))) {
+        app.setApplicationName(QStringLiteral("shimgvw"));
+        app.setQuitOnLastWindowClosed(true);
+        pictures::Viewer::open(QFileInfo(parser.value(QStringLiteral("picture"))).absoluteFilePath());
         return app.exec();
     }
     if (parser.isSet(QStringLiteral("explore"))) {
