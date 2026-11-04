@@ -5,6 +5,8 @@
 #pragma once
 
 #include <QHash>
+#include <QImageReader>
+#include <QTimer>
 #include <QIcon>
 #include <QImage>
 #include <QObject>
@@ -13,7 +15,8 @@
 #include <QStringList>
 #include <QWidget>
 
-class QTimer;
+#include <memory>
+
 
 namespace pictures {
 
@@ -117,6 +120,9 @@ private:
     void show(int index);
     void command(int id);
     void setScale(double scale);
+    void nextFrame();
+    void showPage(int page);
+    void updatePage();
     void zoomIn();
     void zoomOut();
     void zoomAt(QPoint at, bool in);
@@ -127,6 +133,10 @@ private:
     QStringList m_paths;
     int m_index = 0;
     QImage m_image;
+    std::unique_ptr<QImageReader> m_reader;   // the picture's frames or pages
+    int m_page = 0, m_pages = 1;
+    bool m_animated = false;
+    QTimer m_frames;
     double m_scale = 1;
     bool m_bestFit = true;
     QPointF m_offset;      // the picture's middle from the view's, while it is bigger than the view

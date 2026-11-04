@@ -181,17 +181,18 @@ Binary: `shimgvw.dll`. Port: `pictures::Viewer` in [`pictures.cpp`](../native-sh
 | A click zooms about the clicked point, Shift reverses it; after Zoom Out a click zooms out; Ctrl or the middle button pans | Zoom window's button handler `FUN_5cb21e16`; mode switch `FUN_5cb210d9`; command handler `FUN_5cb14301` | Done |
 | Strings (title 200, tooltips 400–425, Preview 550…) | String table | Done |
 | Slide show | Strip 109, strings 600–604 | Done (ported earlier) |
+| Background: COLOR_WINDOW for the window class and the zoom window; messages in COLOR_WINDOWTEXT | `GetSysColorBrush(5)` at `0x5cb06861`, `GetSysColor(5)` at `0x5cb202eb`, `GetSysColor(8)` at `0x5cb20ec7` | Done |
+| Multi-page pictures: Previous Page (406), the page control (421, a toolbar control of style 0xd0), Next Page (407), and accelerator table 51 | TBBUTTON table; table 51 | Done (the page control's own text format was not located: "n / m") |
 
 ### Missing
 
 | Original feature | Status |
 |---|---|
-| Print (Photo Printing Wizard) | Missing (greyed) |
+| Print (Photo Printing Wizard) | Partial: printed through Qt's print dialog, the picture fitted to the page; the wizard itself is not ported |
 | Help (`ImgPrev.chm`) | Missing (greyed) |
-| Faxes and multi-page TIFF: previous and next page (406, 407), current page (421) | Missing |
 | Annotations (409–415, 402, 422, 419) | Missing |
-| Exact background colour, margins and remembered window size | Partial (white; not checked against XP) |
-| Animated images (GIF) | Missing (first frame only) |
+| Margins and remembered window size | Partial (not checked against XP) |
+| Animated images (GIF) | Done (played at their own frame delays) |
 | Comparison with the real viewer running in Wine | Missing |
 
 ---

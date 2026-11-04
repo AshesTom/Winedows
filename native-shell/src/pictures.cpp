@@ -2,11 +2,16 @@
 #include "pictures.h"
 
 #include "theme.h"
+#ifdef XP_PRINTING
+#include <QPrintDialog>
+#include <QPrinter>
+#endif
 #include "xpfiles.h"
 #include "xpprogram.h"
 
 #include <QDesktopServices>
 #include <QFileDialog>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QToolButton>
 #include <QUrl>
@@ -434,6 +439,8 @@ const struct { int picture, command; const char *tip; } VIEWER_BUTTONS[] = {
     {5, 403, "Best Fit (Ctrl+B)"}, {6, 404, "Actual Size (Ctrl+A)"}, {8, 408, "Start Slide Show (F11)"}, {0, 0, nullptr},
     {2, 400, "Zoom In (+)"}, {3, 401, "Zoom Out (-)"}, {0, 0, nullptr},
     {12, 500, "Rotate Clockwise (Ctrl+K)"}, {11, 501, "Rotate Counterclockwise (Ctrl+L)"}, {0, 0, nullptr},
+    // a multi-page picture's (TIFF, faxes): Previous Page, the current page, Next Page
+    {9, 406, "Previous Page (Page Up)"}, {-2, 421, "Current Page"}, {10, 407, "Next Page (Page Down)"},
     {25, 424, "Delete (Delete)"}, {20, 418, "Print (Ctrl+P)"}, {22, 420, "Copy To (Ctrl+S)"},
     {26, 425, "Closes this program and opens the image for editing (Ctrl+E)"}, {0, 0, nullptr},
     {24, 423, "Help (F1)"},
@@ -441,7 +448,7 @@ const struct { int picture, command; const char *tip; } VIEWER_BUTTONS[] = {
 enum {
     VIEW_ZOOM_IN = 400, VIEW_ZOOM_OUT = 401, VIEW_BEST_FIT = 403, VIEW_ACTUAL = 404, VIEW_SLIDES = 408, VIEW_NEXT = 416,
     VIEW_PREVIOUS = 417, VIEW_PRINT = 418, VIEW_COPY_TO = 420, VIEW_HELP = 423, VIEW_DELETE = 424, VIEW_EDIT = 425,
-    VIEW_ROTATE_CW = 500, VIEW_ROTATE_CCW = 501,
+    VIEW_ROTATE_CW = 500, VIEW_ROTATE_CCW = 501, VIEW_PREVIOUS_PAGE = 406, VIEW_NEXT_PAGE = 407, VIEW_PAGE = 421,
     // the arrows (as table 50 calls them): the pictures, or the picture's parts when it is bigger
     VIEW_LEFT = 554, VIEW_RIGHT = 555, VIEW_UP = 556, VIEW_DOWN = 557,
 };
@@ -464,8 +471,6 @@ Viewer::Viewer(const QString &path)
 {
     setAttribute(Qt::WA_DeleteOnClose);
     setAutoFillBackground(true);
-    setPalette(QPalette(QColor(Qt::white)));
-    setBackgroundRole(QPalette::Base);
     const QFileInfo info(path);
     m_paths = picturesIn(info.absolutePath());
     m_index = int(m_paths.indexOf(info.absoluteFilePath()));
@@ -489,6 +494,16 @@ Viewer::Viewer(const QString &path)
             row->addWidget(gap);
             continue;
         }
+        if (button.picture < 0) {
+            // the page number: a control of its own in the toolbar (style 0xd0)
+            auto *page = new QLabel(m_toolbar);
+            page->setAlignment(Qt::AlignCenter);
+            page->setMinimumWidth(48);
+            page->setToolTip(viewerString(button.command, button.tip));
+            row->addWidget(page);
+            m_buttons.insert(button.command, page);
+            continue;
+        }
         auto *tool = new QToolButton(m_toolbar);
         tool->setAutoRaise(true);
         tool->setIcon(stripIcon(VIEWER_STRIP, button.picture));
@@ -500,9 +515,18 @@ Viewer::Viewer(const QString &path)
         row->addWidget(tool);
         m_buttons.insert(button.command, tool);
     }
-    // what this viewer cannot do: XP's help (ImgPrev.chm), printing
+    // what this viewer cannot do: XP's help (ImgPrev.chm); printing without Qt's print support
     m_buttons.value(VIEW_HELP)->setEnabled(false);
+#ifndef XP_PRINTING
     m_buttons.value(VIEW_PRINT)->setEnabled(false);
+#endif
+    // the window's class and its zoom window paint COLOR_WINDOW (0x5cb06861, 0x5cb202eb)
+    QPalette palette = this->palette();
+    palette.setColor(QPalette::Window, ShellTheme::instance()->system(QStringLiteral("window"), Qt::white));
+    palette.setColor(QPalette::Base, palette.color(QPalette::Window));
+    setPalette(palette);
+    setBackgroundRole(QPalette::Window);
+    connect(&m_frames, &QTimer::timeout, this, &Viewer::nextFrame);
     m_toolbar->adjustSize();
     const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
     resize(qMin(800, screen.width() * 2 / 3), qMin(600, screen.height() * 2 / 3));
@@ -522,9 +546,22 @@ void Viewer::show(int index)
     if (m_paths.isEmpty())
         return;
     m_index = (index % int(m_paths.size()) + int(m_paths.size())) % int(m_paths.size());
-    QImageReader reader(m_paths[m_index]);
-    reader.setAutoTransform(true);
-    m_image = reader.read();
+    m_reader = std::make_unique<QImageReader>(m_paths[m_index]);
+    m_reader->setAutoTransform(true);
+    m_page = 0;
+    m_pages = qMax(1, m_reader->imageCount());
+    m_animated = m_reader->supportsAnimation() && m_pages > 1;
+    m_image = m_reader->read();
+    // an animated picture plays (GIF); one of pages keeps the first and gets the page buttons
+    m_frames.stop();
+    if (m_animated)
+        m_frames.start(qMax(20, m_reader->nextImageDelay()));
+    const bool paged = !m_animated && m_pages > 1;
+    for (int id : {VIEW_PREVIOUS_PAGE, VIEW_PAGE, VIEW_NEXT_PAGE})
+        m_buttons.value(id)->setVisible(paged);
+    updatePage();
+    m_toolbar->adjustSize();
+    resizeEvent(nullptr);
     m_bestFit = true;
     m_offset = {};
     m_scale = fitScale();
@@ -608,6 +645,28 @@ void Viewer::command(int id)
                 show(m_index);
         }
         break;
+    case VIEW_PREVIOUS_PAGE:
+        showPage(m_page - 1);
+        break;
+    case VIEW_NEXT_PAGE:
+        showPage(m_page + 1);
+        break;
+    case VIEW_PRINT: {
+#ifdef XP_PRINTING
+        // the picture on one page, as big as fits it, in the middle
+        QPrinter printer;
+        QPrintDialog dialog(&printer, this);
+        if (dialog.exec() != QDialog::Accepted || m_image.isNull())
+            break;
+        QPainter painter(&printer);
+        const QRect page = painter.viewport();
+        QSize size = m_image.size();
+        size.scale(page.size(), Qt::KeepAspectRatio);
+        painter.drawImage(QRect(page.x() + (page.width() - size.width()) / 2, page.y() + (page.height() - size.height()) / 2,
+                                size.width(), size.height()), m_image);
+#endif
+        break;
+    }
     case VIEW_COPY_TO: {
         const QString target = QFileDialog::getSaveFileName(this, viewerString(STRING_COPY_TO, "Copy To"), path);
         if (!target.isEmpty() && target != path)
@@ -637,6 +696,45 @@ void Viewer::command(int id)
     default:
         break;
     }
+}
+
+void Viewer::nextFrame()
+{
+    QImage frame = m_reader ? m_reader->read() : QImage();
+    if (frame.isNull() && m_reader) {
+        // round again
+        m_reader = std::make_unique<QImageReader>(m_paths[m_index]);
+        frame = m_reader->read();
+    }
+    if (frame.isNull())
+        return;
+    m_image = frame;
+    m_frames.start(qMax(20, m_reader->nextImageDelay()));
+    update();
+}
+
+void Viewer::showPage(int page)
+{
+    if (!m_reader || m_animated || page < 0 || page >= m_pages)
+        return;
+    m_reader = std::make_unique<QImageReader>(m_paths[m_index]);
+    m_reader->setAutoTransform(true);
+    if (!m_reader->jumpToImage(page))
+        return;
+    m_page = page;
+    m_image = m_reader->read();
+    updatePage();
+    command(VIEW_BEST_FIT);
+}
+
+void Viewer::updatePage()
+{
+    if (auto *label = qobject_cast<QLabel *>(m_buttons.value(VIEW_PAGE)))
+        label->setText(QStringLiteral("%1 / %2").arg(m_page + 1).arg(m_pages));
+    if (QWidget *previous = m_buttons.value(VIEW_PREVIOUS_PAGE))
+        previous->setEnabled(m_page > 0);
+    if (QWidget *next = m_buttons.value(VIEW_NEXT_PAGE))
+        next->setEnabled(m_page + 1 < m_pages);
 }
 
 void Viewer::zoomIn()
@@ -689,9 +787,12 @@ void Viewer::resizeEvent(QResizeEvent *)
 
 void Viewer::keyPressEvent(QKeyEvent *event)
 {
-    static const QList<xpprogram::Accelerator> table = viewer() ? xpprogram::accelerators(*viewer(), QString::number(ACCELERATORS))
+    // table 50 for a picture, 51 for one of pages (Page Up and Page Down turn its pages)
+    static const QList<xpprogram::Accelerator> single = viewer() ? xpprogram::accelerators(*viewer(), QString::number(ACCELERATORS))
+                                                                 : QList<xpprogram::Accelerator>(),
+                                               paged = viewer() ? xpprogram::accelerators(*viewer(), QString::number(ACCELERATORS + 1))
                                                                 : QList<xpprogram::Accelerator>();
-    if (const int id = xpprogram::command(table, event)) {
+    if (const int id = xpprogram::command(!m_animated && m_pages > 1 ? paged : single, event)) {
         command(id);
         return;
     }
