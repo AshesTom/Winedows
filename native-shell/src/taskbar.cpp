@@ -90,6 +90,7 @@ const int TRAY_COLLAPSE_MS = 5000;
 // (once the desktop is up: XP posts it from the tray's creation)
 const int START_BALLOON_DELAY_MS = 1500;
 const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START_BALLOON = 801, START_BALLOON_MS = 10000;
+const int STRING_TOUR_BALLOON_TITLE = 821, STRING_TOUR_BALLOON = 822, TOUR_BALLOON_DELAY_MS = 6000;
 const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_MINIMIZE_ALL = 537, STRING_SHOW_OPEN_WINDOWS = 850;
 // explorer.exe's hotkeys: the table at 0x10114c4 (virtual key, modifiers with MOD_WIN), registered as
 // IDs 500 to 511 by sub_101146e; WM_HOTKEY goes to sub_1021388's jump table.
@@ -454,6 +455,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     });
     connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
     QTimer::singleShot(START_BALLOON_DELAY_MS, this, &Taskbar::startButtonBalloon);
+    QTimer::singleShot(TOUR_BALLOON_DELAY_MS, this, &Taskbar::tourBalloon);
     m_dragTimer.setSingleShot(true);
     connect(&m_dragTimer, &QTimer::timeout, this, [this] {
         if (m_dragHit.kind == Hit::Task && m_dragHit.index < m_buttons.size()) {
@@ -2416,6 +2418,43 @@ void Taskbar::startButtonBalloon()
     connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
     QTimer::singleShot(START_BALLOON_MS, balloon, &QWidget::close);   // timer 0x16
     m_startBalloon = balloon;
+    balloon->show();
+}
+
+// explorer.exe's first-logon tour balloon (strings 821/822), once: its text opens Tour Windows XP.
+void Taskbar::tourBalloon()
+{
+    const QString key = QStringLiteral("StartMenu/TourBalloonShown");
+    QSettings shown(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"),
+                    QSettings::IniFormat);
+    if (shown.value(key, false).toBool() || !isVisible())
+        return;
+    shown.setValue(key, true);
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    if (!explorer)
+        return;
+    BalloonTip tip;
+    tip.title = xpfiles::string(*explorer, STRING_TOUR_BALLOON_TITLE);
+    tip.text = xpfiles::string(*explorer, STRING_TOUR_BALLOON);
+    if (tip.title.isEmpty() && tip.text.isEmpty())
+        return;
+    tip.kind = BalloonTip::Info;
+    tip.timeout = 15000;
+    auto *balloon = new BalloonWindow(tip);
+    balloon->setAttribute(Qt::WA_DeleteOnClose);
+    const QRect start(mapToGlobal(m_startRect.topLeft() + QPoint(0, m_top)), m_startRect.size());
+    balloon->place(QRect(start.center().x(), start.top(), 1, 1));
+    connect(balloon, &BalloonWindow::clicked, balloon, [this, balloon] {
+        balloon->close();
+        // The tour is an XP program: Wine runs it when it is there, the Start menu's shortcut otherwise.
+        const QString tour = xpfiles::find(QStringLiteral("tourstart.exe"));
+        const QString wine = QStandardPaths::findExecutable(QStringLiteral("wine"));
+        if (!tour.isEmpty() && !wine.isEmpty())
+            QProcess::startDetached(wine, {tour}, QDir::homePath());
+        else if (const QString link = xpfiles::find(QStringLiteral("Tour Windows XP.lnk")); !link.isEmpty())
+            programs::open(link);
+    });
+    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
     balloon->show();
 }
 
