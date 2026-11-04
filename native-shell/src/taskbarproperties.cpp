@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "taskbarproperties.h"
+#include "fileops.h"
 #include "theme.h"
 
 #include "programs.h"
@@ -274,9 +275,9 @@ static void showClassicCustomize(QWidget *parent)
             if (chosen.isEmpty())
                 return;
             QDir().mkpath(startFolder);
-            const QString target = QDir(startFolder).filePath(QFileInfo(chosen).fileName());
+            const QString target = QDir(startFolder).filePath(QFileInfo(chosen).completeBaseName() + QStringLiteral(".lnk"));
             if (!QFileInfo::exists(target))
-                QFile::link(chosen, target);
+                fileops::createShortcut(chosen, target);
         });
     if (auto *remove = qobject_cast<QPushButton *>(page.controls.value(1127)))
         QObject::connect(remove, &QPushButton::clicked, &dialog, [&, startFolder] {

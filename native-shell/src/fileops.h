@@ -37,4 +37,8 @@ QString freeName(const QString &folder, const QString &base);
 // relative path; empty if PATH is not a readable shortcut.
 QString shortcutTarget(const QString &path);
 
+// Writes a Shell Link (.lnk) at LINKPATH pointing at TARGET, its LinkInfo's local base path; false
+// if the file cannot be written.
+bool createShortcut(const QString &target, const QString &linkPath);
+
 } // namespace fileops

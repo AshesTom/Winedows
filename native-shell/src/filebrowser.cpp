@@ -1626,7 +1626,7 @@ void FileBrowser::buildMenus()
     file->addAction(tr("Create &Shortcut"), this, [this] {
         for (const QString &path : selectedPaths()) {
             const QFileInfo info(path);
-            QFile::link(path, info.absolutePath() + QLatin1Char('/') + tr("Shortcut to %1").arg(info.fileName()));
+            fileops::createShortcut(path, info.absolutePath() + QLatin1Char('/') + tr("Shortcut to %1.lnk").arg(info.fileName()));
         }
     });
     m_deleteAction = file->addAction(tr("&Delete"), this, [this] { deleteSelected(false); });
@@ -1831,7 +1831,7 @@ QMenu *FileBrowser::buildFavoritesMenu()
                 if (link.open(QIODevice::WriteOnly))
                     link.write(m_location.toUtf8());
             } else {
-                QFile::link(m_location, folder + QLatin1Char('/') + name);
+                fileops::createShortcut(m_location, folder + QLatin1Char('/') + name + QStringLiteral(".lnk"));
             }
         });
         menu->addAction(tr("&Organize Favorites..."), this, [folder] {
@@ -3180,7 +3180,8 @@ void FileBrowser::newShortcut()
     if (target.isEmpty())
         return;
     const QString name = fileops::freeName(folder, tr("New Shortcut"));
-    if (!QFile::link(target, QDir(folder).filePath(name)))
+    const QString link = QDir(folder).filePath(name + QStringLiteral(".lnk"));
+    if (!fileops::createShortcut(target, link))
         QMessageBox::warning(this, windowTitle(), tr("Cannot create the shortcut '%1'.").arg(name));
 }
 

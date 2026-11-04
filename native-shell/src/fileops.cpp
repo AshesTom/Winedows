@@ -234,6 +234,51 @@ QString shortcutTarget(const QString &path)
     return target;
 }
 
+bool createShortcut(const QString &target, const QString &linkPath)
+{
+    const QFileInfo info(target);
+    if (target.isEmpty())
+        return false;
+    QByteArray base = QFile::encodeName(info.absoluteFilePath());
+    if (base.isEmpty())
+        return false;
+    QByteArray link(76, '\0');
+    const auto put32 = [&link](qsizetype at, quint32 value) { qToLittleEndian(value, link.data() + at); };
+    put32(0, 0x4C);   // HeaderSize
+    // LinkCLSID {00021401-0000-0000-C000-000000000046}
+    const QByteArray clsid = QByteArray::fromHex("0114020000000000c000000000000046");
+    link.replace(4, 16, clsid);
+    put32(20, 0x82);  // HasLinkInfo | IsUnicode
+    put32(24, info.isDir() ? 0x10 : 0x20);   // FILE_ATTRIBUTE_DIRECTORY / ARCHIVE
+    put32(56, 0);     // IconIndex
+    put32(60, 1);     // ShowCommand: SW_SHOWNORMAL
+    put32(52, info.isDir() ? 0 : quint32(info.size()));
+    // LinkInfo: VolumeID (a fixed drive, empty label), the local base path and an empty suffix
+    QByteArray linkInfo(28, '\0');
+    const quint32 volumeSize = 17, baseOffset = 28 + volumeSize, suffixOffset = baseOffset + base.size() + 1;
+    const auto put = [&linkInfo](qsizetype at, quint32 value) { qToLittleEndian(value, linkInfo.data() + at); };
+    put(0, suffixOffset + 1);   // size
+    put(4, 0x1C);               // HeaderSize
+    put(8, 1);                  // VolumeIDAndLocalBasePath
+    put(12, 0x1C);              // VolumeIDOffset
+    put(16, baseOffset);        // LocalBasePathOffset
+    put(20, 0);                 // CommonNetworkRelativeLinkOffset
+    put(24, suffixOffset);      // CommonPathSuffixOffset
+    QByteArray volume(17, '\0');
+    qToLittleEndian(volumeSize, volume.data());
+    qToLittleEndian(quint32(3), volume.data() + 4);   // DRIVE_FIXED
+    qToLittleEndian(quint32(0x10), volume.data() + 12);   // VolumeLabelOffset
+    linkInfo += volume;
+    linkInfo += base;
+    linkInfo.append('\0');
+    linkInfo.append('\0');
+    link += linkInfo;
+    QFile file(linkPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    return file.write(link) == link.size();
+}
+
 QString freeName(const QString &folder, const QString &base)
 {
     const QFileInfo parts(base);

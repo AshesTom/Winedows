@@ -2358,7 +2358,7 @@ void Taskbar::dropEvent(QDropEvent *event)
         if (file.suffix() == QLatin1String("desktop") || file.suffix().compare(QLatin1String("scf"), Qt::CaseInsensitive) == 0)
             QFile::copy(file.filePath(), target);
         else
-            QFile::link(file.absoluteFilePath(), target);
+            fileops::createShortcut(file.absoluteFilePath(), folder.filePath(file.completeBaseName() + QStringLiteral(".lnk")));
     }
     event->acceptProposedAction();
 }

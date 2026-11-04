@@ -50,7 +50,7 @@ QString shortcutName(const QString &folder, const QString &target)
 void makeShortcuts(const QStringList &paths, const QString &folder)
 {
     for (const QString &path : paths)
-        QFile::link(path, QDir(folder).filePath(shortcutName(folder, path)));
+        fileops::createShortcut(path, QDir(folder).filePath(shortcutName(folder, path) + QStringLiteral(".lnk")));
 }
 
 void compressToZip(const QStringList &paths)

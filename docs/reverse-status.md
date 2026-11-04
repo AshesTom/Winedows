@@ -163,7 +163,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Desktop background: menu 215 without View and Customize This Folder; menu 218 (Show Desktop Icons, Lock Web Items on Desktop, Run Desktop Cleanup Wizard) merged into Arrange Icons By | Menus 215 and 218 | Done |
 | Restore, Empty Recycle Bin, Map and Disconnect Network Drive | Menus 226, 227 and 225 | Done |
 | Verb names: Open 8496, Explore 8502, Search… 8503, Open With 5376 | `shell32.dll` strings | Done |
-| Shortcut naming ("Shortcut () to %s.lnk") | String 4152 | Done (symbolic links stand in for `.lnk` files) |
+| Shortcut naming ("Shortcut () to %s.lnk") | String 4152 | Done: the name ends in `.lnk` and `fileops::createShortcut` writes a Shell Link |
 | "Compressed (zipped) Folder" Send To target | String 10148 of `zipfldr.dll` | Done |
 | "Desktop (create shortcut)" and "Mail Recipient" | Created by XP Setup; absent from the extracted files | Partial (English names) |
 
@@ -177,11 +177,11 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Send To: removable drives and the actual contents of the SendTo folder | Done: `~/.local/share/win4wine/SendTo`'s `.desktop` targets (their `%f`/`%F`/`%u`/`%U`) and links to folders, plus the ready, writable mounted volumes other than the root and the home (copied into); `shellmenus.cpp` `addSendToFolder` |
 | Show in Groups, Choose Details, Customize This Folder | Partial: Show in Groups (View menu and the background menu) groups Details by the sorted column — the name's first letter, size bands, type or date — drawing XP's 31-pixel header and 12-pixel gap on the group's first row; the header is painted in that row, not a separate selectable row, and Icons/Tiles are not grouped for real folders. Choose Details opens dialog 1096 and shows/hides Size, Type and Date Modified, with widths (`folder/hiddenColumns`, `folder/columnWidths`); Move Up/Down and Customize This Folder remain greyed |
 | Undo (shell32's undo stack) | Partial: a rename can be undone from Edit > Undo or the background menu (`QFileSystemModel::fileRenamed` remembers the two names); deletes, copies and moves are not in the stack |
-| Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial: Folder, Shortcut (a link to a chosen file), Text Document, Bitmap Image (1 x 1 BMP), WordPad Document (empty RTF), Wave Sound (44-byte header), Briefcase (a folder) and Compressed Folder (an empty ZIP) are there; the registry's ShellNew keys are not read and a shortcut is still a link |
+| Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial: Folder, Shortcut (a `.lnk` to a chosen file), Text Document, Bitmap Image (1 x 1 BMP), WordPad Document (empty RTF), Wave Sound (44-byte header), Briefcase (a folder) and Compressed Folder (an empty ZIP) are there; the registry's ShellNew keys are not read and a shortcut is still a link |
 | Auto Arrange in folder windows | Missing (greyed; implemented on the desktop) |
 | My Computer: Manage | Missing |
 | Recycle Bin Properties | Partial: File > Properties or the background menu opens a sheet with "Display delete confirmation dialog" (`fileops::remove` reads it); the drives' quota pages are not there |
-| Real `.lnk` shortcuts | Partial: `fileops::shortcutTarget` reads the Shell Link header, LinkInfo local base path/common suffix or relative path, and opening/resolving the icon uses it; Create Shortcut still makes a link |
+| Real `.lnk` shortcuts | Partial: `fileops::shortcutTarget` reads the Shell Link header, LinkInfo local base path/common suffix or relative path, and opening/resolving the icon uses it; `fileops::createShortcut` writes a Shell Link with LinkInfo's local base path. Its target ID list, relative path and extra data are not written |
 
 ---
 
