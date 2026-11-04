@@ -29,6 +29,8 @@
 #include <QMenu>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QHeaderView>
+#include <QTableWidget>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
@@ -2331,6 +2333,65 @@ void MediaPlayer::command(int id)
                 });
                 QObject::connect(buttons, &QDialogButtonBox::rejected, &eq, &QDialog::reject);
                 eq.exec();
+            });
+            auto *statistics = new QPushButton(tr("&Statistics..."), &dialog);
+            layout->addWidget(statistics);
+            QObject::connect(statistics, &QPushButton::clicked, &dialog, [&dialog] {
+                QDialog stats(&dialog);
+                stats.setWindowTitle(QObject::tr("Statistics"));
+                auto *layout = new QVBoxLayout(&stats);
+                QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+                QList<QPair<int, qint64>> values;
+                int total = 0;
+                for (const QString &key : settings.allKeys()) {
+                    if (!key.startsWith(QLatin1String("history/")))
+                        continue;
+                    const QStringList parts = settings.value(key).toString().split(QLatin1Char(';'));
+                    const int count = parts.value(0).toInt();
+                    total += count;
+                    values.append({count, parts.value(1).toLongLong()});
+                }
+                std::sort(values.begin(), values.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+                auto *summary = new QLabel(QObject::tr("%1 plays of %2 different tracks.").arg(total).arg(values.size()), &stats);
+                layout->addWidget(summary);
+                auto *table = new QTableWidget(values.size(), 3, &stats);
+                table->setHorizontalHeaderLabels({QObject::tr("Track"), QObject::tr("Plays"), QObject::tr("Last played")});
+                table->horizontalHeader()->setStretchLastSection(true);
+                table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+                table->setSelectionBehavior(QAbstractItemView::SelectRows);
+                int row = 0;
+                for (const QString &key : settings.allKeys()) {
+                    if (!key.startsWith(QLatin1String("history/")))
+                        continue;
+                    const QStringList parts = settings.value(key).toString().split(QLatin1Char(';'));
+                    const QString url = key.mid(8);
+                    const QFileInfo file(QUrl(url).toLocalFile());
+                    table->setItem(row, 0, new QTableWidgetItem(file.fileName().isEmpty() ? url : file.fileName()));
+                    table->setItem(row, 1, new QTableWidgetItem(QString::number(parts.value(0).toInt())));
+                    table->setItem(row, 2, new QTableWidgetItem(parts.value(1).toLongLong() > 0
+                        ? QLocale().toString(QDateTime::fromMSecsSinceEpoch(parts.value(1).toLongLong()), QLocale::ShortFormat)
+                        : QString()));
+                    ++row;
+                }
+                table->sortItems(1, Qt::DescendingOrder);
+                layout->addWidget(table, 1);
+                auto *bottom = new QHBoxLayout;
+                auto *reset = new QPushButton(QObject::tr("Reset"), &stats);
+                auto *close = new QPushButton(QObject::tr("Close"), &stats);
+                bottom->addWidget(reset);
+                bottom->addStretch(1);
+                bottom->addWidget(close);
+                layout->addLayout(bottom);
+                QObject::connect(reset, &QPushButton::clicked, &stats, [&stats, summary] {
+                    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+                    for (const QString &key : settings.allKeys())
+                        if (key.startsWith(QLatin1String("history/")))
+                            settings.remove(key);
+                    summary->setText(QObject::tr("0 plays of 0 different tracks."));
+                });
+                QObject::connect(close, &QPushButton::clicked, &stats, &QDialog::accept);
+                stats.resize(460, 320);
+                stats.exec();
             });
             layout->addWidget(new QLabel(tr("Volume"), &dialog));
             layout->addWidget(volume);
