@@ -175,7 +175,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Open With (submenu and the Open With dialog) | Partial: a submenu of the installed desktop entries (the first 12 by name) and a Choose Program... list; XP's registry's recommended programs and its own dialog are not read |
 | Context menu handlers from shell extensions | Missing |
 | Send To: removable drives and the actual contents of the SendTo folder | Done: `~/.local/share/win4wine/SendTo`'s `.desktop` targets (their `%f`/`%F`/`%u`/`%U`) and links to folders, plus the ready, writable mounted volumes other than the root and the home (copied into); `shellmenus.cpp` `addSendToFolder` |
-| Show in Groups, Choose Details, Customize This Folder | Missing (greyed) |
+| Show in Groups, Choose Details, Customize This Folder | Partial: View > Choose Details opens shell32's dialog 1096 and shows/hides Size, Type and Date Modified, with each column's width; saved as `folder/hiddenColumns` and `folder/columnWidths`. Move Up/Down are greyed, Show in Groups and Customize This Folder remain greyed |
 | Undo (shell32's undo stack) | Missing (greyed) |
 | Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial (Folder and Text Document only) |
 | Auto Arrange in folder windows | Missing (greyed; implemented on the desktop) |

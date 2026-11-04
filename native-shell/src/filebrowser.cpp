@@ -34,6 +34,7 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
+#include "xpdialog.h"
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDrag>
@@ -1356,6 +1357,12 @@ void FileBrowser::buildPanes()
     // 20 with Tahoma 8, as XP's Details header (its art is 18)
     m_details->header()->setFixedHeight(m_details->fontMetrics().height() + 7);
     setColumnChars(m_details, {30, 16, 20, 20});
+    {
+        const QSettings settings(settingsPath(), QSettings::IniFormat);
+        const QStringList hidden = settings.value(QStringLiteral("folder/hiddenColumns")).toStringList();
+        for (int column = 1; column < 4; ++column)
+            m_details->setColumnHidden(column, hidden.contains(QString::number(column)));
+    }
     connect(m_details, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) {
         showViewContextMenu(m_details, at);
     });
@@ -1580,6 +1587,74 @@ void FileBrowser::buildMenus()
     }
     // Only picture folders have it.
     m_filmstripAction->setVisible(false);
+    QAction *detailsAction = view->addAction(tr("Choose &Details..."), this, [this] {
+        if (!shellmenus::shell32())
+            return;
+        QDialog dialog(this);
+        const xpdialog::Page page = xpdialog::build(*shellmenus::shell32(), 1096, &dialog);
+        dialog.setWindowTitle(page.caption);
+        auto *list = new QListWidget(&dialog);
+        if (QWidget *place = page.controls.value(1001)) {
+            list->setGeometry(place->geometry());
+            place->hide();
+        }
+        const QList<QPair<QString, int>> columns = {{tr("Name"), 0}, {tr("Size"), 1}, {tr("Type"), 2}, {tr("Date Modified"), 3}};
+        for (const auto &[name, column] : columns) {
+            auto *item = new QListWidgetItem(name, list);
+            item->setData(Qt::UserRole, column);
+            if (column == 0) {
+                item->setCheckState(Qt::Checked);
+                item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
+            } else {
+                item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+                item->setCheckState(m_details->isColumnHidden(column) ? Qt::Unchecked : Qt::Checked);
+            }
+        }
+        list->setCurrentRow(0);
+        auto *widthEdit = qobject_cast<QLineEdit *>(page.controls.value(1005));
+        if (widthEdit)
+            widthEdit->setText(QString::number(m_details->columnWidth(list->currentRow())));
+        QObject::connect(list, &QListWidget::currentRowChanged, &dialog, [&, list, widthEdit] {
+            if (widthEdit && list->currentItem())
+                widthEdit->setText(QString::number(m_details->columnWidth(list->currentItem()->data(Qt::UserRole).toInt())));
+        });
+        if (auto *show = qobject_cast<QPushButton *>(page.controls.value(1006)))
+            QObject::connect(show, &QPushButton::clicked, &dialog, [list] { if (list->currentItem()) list->currentItem()->setCheckState(Qt::Checked); });
+        if (auto *hide = qobject_cast<QPushButton *>(page.controls.value(1007)))
+            QObject::connect(hide, &QPushButton::clicked, &dialog, [list] {
+                if (list->currentItem() && list->currentItem()->data(Qt::UserRole).toInt() != 0)
+                    list->currentItem()->setCheckState(Qt::Unchecked);
+            });
+        for (int id : {1003, 1004})
+            if (QWidget *button = page.controls.value(id))
+                button->setEnabled(false);
+        if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(1)))
+            QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
+                QStringList hidden, widths;
+                for (int i = 0; i < list->count(); ++i) {
+                    const QListWidgetItem *item = list->item(i);
+                    const int column = item->data(Qt::UserRole).toInt();
+                    if (column != 0 && item->checkState() != Qt::Checked)
+                        hidden.append(QString::number(column));
+                    widths.append(QString::number(m_details->columnWidth(column)));
+                    if (column == list->currentRow() && widthEdit)
+                        m_details->setColumnWidth(column, widthEdit->text().toInt());
+                }
+                QSettings write(settingsPath(), QSettings::IniFormat);
+                write.setValue(QStringLiteral("folder/hiddenColumns"), hidden);
+                write.setValue(QStringLiteral("folder/columnWidths"), widths);
+                dialog.accept();
+            });
+        if (auto *cancel = qobject_cast<QPushButton *>(page.controls.value(2)))
+            QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        const QSettings settings(settingsPath(), QSettings::IniFormat);
+        const QStringList hidden = settings.value(QStringLiteral("folder/hiddenColumns")).toStringList();
+        for (int column = 1; column < 4; ++column)
+            m_details->setColumnHidden(column, hidden.contains(QString::number(column)));
+    });
+    detailsAction->setEnabled(true);
     view->addSeparator();
     QMenu *arrange = view->addMenu(tr("Arrange Icons &by"));
     const struct { int string; const char *fallback; int column; } orders[] = {{8976, "Name", 0}, {8978, "Size", 1}, {8979, "Type", 2}, {8980, "Date Modified", 3}};

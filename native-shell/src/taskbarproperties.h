@@ -36,7 +36,7 @@ struct TaskbarSettings
     bool locked = true;
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
-    bool quickLaunchLargeIcons = false;   // its View menu's Large Icons (24-pixel pictures)
+    bool quickLaunchLargeIcons = false;   // its View menu's Large Icons (32-pixel icons)
     bool classicStartMenu = false;
     bool classicFavorites = false, classicLogOff = true, classicRun = true, classicSmallIcons = false;
     // The Start panel's Customize (dialogs 1135 and 1036): places not in panelHidden, Favorites,

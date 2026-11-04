@@ -132,9 +132,11 @@ const Part TASK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("ta
 // the hot frame from 104, the task band 4 after the last button.
 const Part QUICK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskbar")};
 const int QUICK_WIDTH = 23, QUICK_ICON_X = 3, QUICK_ICON_Y = 7, QUICK_BAND_END = 4;
-// ITBar's large toolbar pictures with an alpha channel: 24 x 24, the button 24 + 20 wide (itbar.cpp
-// TB_BMP_CX_ALPHABITMAP and CSFToolbar::v_CalcWidth).
-const int QUICK_LARGE_ICON = 24, QUICK_LARGE_WIDTH = 44, QUICK_LARGE_ICON_X = 10, QUICK_LARGE_ICON_Y = 3;
+// View > Large Icons, measured on XP's taskbar: the 32-pixel icons, a button every 39 pixels (32 + 7, as 16 + 7
+// for the small ones), the icon 3 in and 7 down as the small ones; the bar grows from 30 to 46 rows (the
+// icon and 14, as 16 and 14 make 30), under the unlocked bar's 4 sizing rows.
+const int QUICK_LARGE_ICON = 32, QUICK_LARGE_WIDTH = 39, QUICK_LARGE_ICON_X = 3, QUICK_LARGE_ICON_Y = 7,
+          QUICK_LARGE_BAR_EXTRA = 16;
 // Show Text: the name 4 after the icon and 4 before the button's end (XP's at 134 for "Windows Media
 // Player"); Show Title: the name at the band's start, then 4 before the buttons
 const int QUICK_TEXT_GAP = 4, QUICK_TEXT_END = 4, QUICK_TITLE_GAP = 4;
@@ -467,6 +469,8 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         }
         const bool autoHide = settings.autoHide != m_settings.autoHide || settings.locked != m_settings.locked;
         const bool icons = settings.quickLaunchLargeIcons != m_settings.quickLaunchLargeIcons;
+        // the bar's height follows Quick Launch's large icons
+        const bool height = icons || settings.quickLaunch != m_settings.quickLaunch;
         m_settings = settings;
         if (icons)
             loadQuickLaunch();
@@ -476,6 +480,8 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         updateTrayHiding();
         if (autoHide) {
             setHidden(false, false);
+            placeOnScreen();
+        } else if (height) {
             placeOnScreen();
         }
         relayout();
@@ -535,10 +541,17 @@ void Taskbar::themeChanged()
     update();
 }
 
+int Taskbar::baseHeight() const
+{
+    // the bar's own rows, taller for Quick Launch's large icons (Windows Classic's not measured: the same 16)
+    const int bar = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
+    return bar + (m_settings.quickLaunch && m_settings.quickLaunchLargeIcons ? theme()->scaled(QUICK_LARGE_BAR_EXTRA) : 0);
+}
+
 QRect Taskbar::shownRect() const
 {
     const QRect monitor = QGuiApplication::primaryScreen()->geometry();
-    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT) + sizingHeight();
+    const int height = baseHeight() + sizingHeight();
     return QRect(monitor.x(), monitor.bottom() + 1 - height, monitor.width(), height);
 }
 
@@ -627,7 +640,7 @@ void Taskbar::placeOnScreen()
     const QScreen *screen = QGuiApplication::primaryScreen();
     const QRect monitor = screen->geometry();
     m_top = sizingHeight();
-    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT) + m_top;
+    const int height = baseHeight() + m_top;
     m_slideTimer.stop();
     setGeometry(m_hidden && m_settings.autoHide ? hiddenRect() : shownRect());
     if (m_settings.autoHide && !m_hidden)

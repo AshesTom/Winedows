@@ -126,6 +126,7 @@ private:
     // double-click rectangle brings it back 50 ms later (timer 3). It slides for 400 ms going and
     // 200 ms coming (the tray's 0x4f0 and 0x4f4), a frame each 20 ms.
     QRect shownRect() const;
+    int baseHeight() const;
     int sizingHeight() const;
     void setOnTop();
     int barHeight() const { return height() - m_top; }
