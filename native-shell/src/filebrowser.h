@@ -141,6 +141,7 @@ private:
     bool m_pictureFolder = false;
     bool m_foldersShown = false, m_searchShown = false, m_noTasks = false, m_singleClick = false;
     bool m_groups = false;
+    bool m_autoArrange = true;
     int m_groupColumn = 0;
     QStyledItemDelegate *m_detailsDelegate = nullptr;
     QString m_pendingRename, m_searchFrom;

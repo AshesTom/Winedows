@@ -1252,6 +1252,7 @@ FileBrowser::FileBrowser(const QString &location)
     const QSettings settings(settingsPath(), QSettings::IniFormat);
     m_view = View(qBound(0, settings.value(QStringLiteral("view"), int(Tiles)).toInt(), int(Filmstrip)));
     m_groups = settings.value(QStringLiteral("folder/groups"), false).toBool();
+    m_autoArrange = settings.value(QStringLiteral("folder/autoArrange"), true).toBool();
     m_foldersShown = settings.value(QStringLiteral("folders"), false).toBool();
 
     m_files = new QFileSystemModel(this);
@@ -2132,7 +2133,7 @@ void FileBrowser::configureList(QListView *list, View shown)
 {
     auto *delegate = delegateOf(list);
     list->setFlow(QListView::LeftToRight);
-    list->setMovement(QListView::Static);
+    list->setMovement(m_autoArrange ? QListView::Static : QListView::Free);
     list->setWrapping(true);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -3072,8 +3073,19 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
             orders->insertAction(first, action);
         }
     }
+    // Auto Arrange keeps the icons on their grid; off, they can be dragged about.
+    if (QAction *arrange = items.value(CMD_AUTO_ARRANGE)) {
+        arrange->setCheckable(true);
+        arrange->setChecked(m_autoArrange);
+        connect(arrange, &QAction::triggered, this, [this, arrange](bool on) {
+            m_autoArrange = on;
+            QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("folder/autoArrange"), on);
+            arrange->setChecked(on);
+            configureList(m_list, shownView());
+        });
+    }
     // What this window does not have yet
-    for (int command : {CMD_AUTO_ARRANGE, CMD_ALIGN, CMD_CUSTOMIZE})
+    for (int command : {CMD_ALIGN, CMD_CUSTOMIZE})
         if (QAction *action = items.value(command))
             action->setEnabled(false);
     if (QAction *undo = items.value(CMD_UNDO)) {
