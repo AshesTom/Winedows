@@ -108,6 +108,13 @@ private:
     QString currentFolder() const;     // empty for a virtual folder
     void newFolder();
     void newTextDocument();
+    void newShortcut();
+    void newBitmapImage();
+    void newWaveSound();
+    void newWordPadDocument();
+    void newBriefcase();
+    void newCompressedFolder();
+    void newFile(const QString &name, const QByteArray &contents);
     void renameSelected();
     void deleteSelected(bool permanent);
     void showProperties();

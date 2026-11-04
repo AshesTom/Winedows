@@ -36,6 +36,7 @@
 #include <QDialog>
 #include "xpdialog.h"
 #include <QDialogButtonBox>
+#include <QBuffer>
 #include <QDir>
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -1601,8 +1602,17 @@ void FileBrowser::buildMenus()
 {
     setMenuBar(new BrandMenuBar(this));
     QMenu *file = menuBar()->addMenu(tr("&File"));
-    m_newFolderAction = file->addAction(tr("New &Folder"), this, &FileBrowser::newFolder);
-    m_newTextAction = file->addAction(tr("New &Text Document"), this, &FileBrowser::newTextDocument);
+    QMenu *newMenu = file->addMenu(tr("&New"));
+    m_newFolderAction = newMenu->addAction(tr("&Folder"), this, &FileBrowser::newFolder);
+    newMenu->addAction(tr("&Shortcut"), this, &FileBrowser::newShortcut);
+    newMenu->addSeparator();
+    m_newTextAction = newMenu->addAction(tr("&Text Document"), this, &FileBrowser::newTextDocument);
+    newMenu->addAction(tr("&Bitmap Image"), this, &FileBrowser::newBitmapImage);
+    newMenu->addAction(tr("&WordPad Document"), this, &FileBrowser::newWordPadDocument);
+    newMenu->addAction(tr("&Wave Sound"), this, &FileBrowser::newWaveSound);
+    newMenu->addSeparator();
+    newMenu->addAction(tr("&Briefcase"), this, &FileBrowser::newBriefcase);
+    newMenu->addAction(tr("Compressed (&zipped) Folder"), this, &FileBrowser::newCompressedFolder);
     file->addSeparator();
     file->addAction(tr("Create &Shortcut"), this, [this] {
         for (const QString &path : selectedPaths()) {
@@ -3079,6 +3089,11 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
     QMenu *create = menu->addMenu(tr("Ne&w"));
     create->addAction(fileicons::shell(fileicons::Folder), tr("&Folder"), this, &FileBrowser::newFolder);
     create->addAction(fileicons::shell(fileicons::Document), tr("&Text Document"), this, &FileBrowser::newTextDocument);
+    create->addAction(tr("&Bitmap Image"), this, &FileBrowser::newBitmapImage);
+    create->addAction(tr("&WordPad Document"), this, &FileBrowser::newWordPadDocument);
+    create->addAction(tr("&Wave Sound"), this, &FileBrowser::newWaveSound);
+    create->addAction(tr("&Briefcase"), this, &FileBrowser::newBriefcase);
+    create->addAction(tr("Compressed (&zipped) Folder"), this, &FileBrowser::newCompressedFolder);
     menu->addSeparator();
     QHash<int, QAction *> properties = xpprogram::fillMenu(menu, *shell32(), MENU_PROPERTIES);
     if (QAction *action = properties.value(CMD_PROPERTIES))
@@ -3113,6 +3128,90 @@ void FileBrowser::newTextDocument()
     file.close();
     m_pendingRename = file.fileName();
     QTimer::singleShot(250, this, &FileBrowser::renamePending);
+}
+
+void FileBrowser::newFile(const QString &name, const QByteArray &contents)
+{
+    const QString folder = currentFolder();
+    if (folder.isEmpty())
+        return;
+    const QString free = fileops::freeName(folder, name);
+    QFile file(QDir(folder).filePath(free));
+    if (!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size()) {
+        QMessageBox::warning(this, windowTitle(), tr("Cannot create '%1'.").arg(free));
+        return;
+    }
+    file.close();
+    m_pendingRename = file.fileName();
+    QTimer::singleShot(250, this, &FileBrowser::renamePending);
+}
+
+void FileBrowser::newShortcut()
+{
+    const QString folder = currentFolder();
+    if (folder.isEmpty())
+        return;
+    const QString target = QFileDialog::getOpenFileName(this, tr("Create Shortcut"), QDir::homePath());
+    if (target.isEmpty())
+        return;
+    const QString name = fileops::freeName(folder, tr("New Shortcut"));
+    if (!QFile::link(target, QDir(folder).filePath(name)))
+        QMessageBox::warning(this, windowTitle(), tr("Cannot create the shortcut '%1'.").arg(name));
+}
+
+void FileBrowser::newBitmapImage()
+{
+    QImage image(1, 1, QImage::Format_RGB32);
+    image.fill(Qt::white);
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "BMP");
+    newFile(tr("New Bitmap Image.bmp"), bytes);
+}
+
+void FileBrowser::newWordPadDocument()
+{
+    newFile(tr("New WordPad Document.rtf"), QByteArray("{\\rtf1}"));
+}
+
+void FileBrowser::newWaveSound()
+{
+    // a 44-byte PCM header with no samples, as a new WordPad document is empty
+    QByteArray wave(44, '\0');
+    wave.replace(0, 4, "RIFF");
+    wave.replace(8, 4, "WAVEfmt ");
+    wave[16] = 16;
+    wave[20] = 1;    // PCM
+    wave[22] = 1;    // mono
+    wave[24] = 0x44; wave[25] = 0xAC;   // 44100 Hz
+    wave[28] = 0x88; wave[29] = 0x58; wave[30] = 0x01; wave[31] = 0x00;
+    wave[32] = 2;    // block alignment
+    wave[34] = 16;   // bits per sample
+    wave.replace(36, 4, "data");
+    newFile(tr("New Wave Sound.wav"), wave);
+}
+
+void FileBrowser::newBriefcase()
+{
+    const QString folder = currentFolder();
+    if (folder.isEmpty())
+        return;
+    const QString name = fileops::freeName(folder, tr("New Briefcase"));
+    if (!QDir(folder).mkdir(name))
+        QMessageBox::warning(this, windowTitle(), tr("Cannot create the folder '%1'.").arg(name));
+    else {
+        m_pendingRename = QDir(folder).filePath(name);
+        QTimer::singleShot(250, this, &FileBrowser::renamePending);
+    }
+}
+
+void FileBrowser::newCompressedFolder()
+{
+    // an empty ZIP archive: its end-of-central-directory record alone
+    QByteArray zip(22, '\0');
+    zip.replace(0, 4, "PK\x05\x06");
+    newFile(tr("New Compressed (zipped) Folder.zip"), zip);
 }
 
 void FileBrowser::renamePending()
