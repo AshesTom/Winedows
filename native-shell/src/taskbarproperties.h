@@ -22,6 +22,7 @@ struct TaskbarSettings
 {
     bool group = true;
     bool clock = true;
+    bool autoHide = false;   // StuckRects2's ABS_AUTOHIDE
     static TaskbarSettings load();
     void save() const;
 };

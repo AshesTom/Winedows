@@ -18,6 +18,7 @@
 #include "xpprogram.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QDateTime>
 #include <QFile>
 #include <QGuiApplication>
@@ -302,15 +303,37 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     });
     connect(theme(), &ShellTheme::changed, this, &Taskbar::themeChanged);
 
+    m_autoHideTimer.setInterval(500);
+    connect(&m_autoHideTimer, &QTimer::timeout, this, &Taskbar::checkAutoHide);
+    m_unhideTimer.setSingleShot(true);
+    m_unhideTimer.setInterval(50);
+    connect(&m_unhideTimer, &QTimer::timeout, this, [this] { setHidden(false); });
+    m_slideTimer.setInterval(20);
+    connect(&m_slideTimer, &QTimer::timeout, this, [this] {
+        const qint64 elapsed = m_slideClock.elapsed();
+        if (elapsed >= m_slideDuration) {
+            m_slideTimer.stop();
+            setGeometry(m_slideTo);
+            return;
+        }
+        // as the tray moves it: its centre, in proportion to the time gone
+        const QPoint shift = (m_slideTo.center() - m_slideFrom.center()) * double(elapsed) / m_slideDuration;
+        setGeometry(m_slideFrom.translated(shift));
+    });
     m_clockTimer.setSingleShot(true);
     connect(&m_clockTimer, &QTimer::timeout, this, &Taskbar::tickClock);
     themeChanged();
     tickClock();
     const auto reloadSettings = [this] {
         const TaskbarSettings settings = TaskbarSettings::load();
-        if (settings.group == m_settings.group && settings.clock == m_settings.clock)
+        if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide)
             return;
+        const bool autoHide = settings.autoHide != m_settings.autoHide;
         m_settings = settings;
+        if (autoHide) {
+            setHidden(false, false);
+            placeOnScreen();
+        }
         relayout();
         update();
     };
@@ -348,14 +371,69 @@ void Taskbar::themeChanged()
     update();
 }
 
+QRect Taskbar::shownRect() const
+{
+    const QRect monitor = QGuiApplication::primaryScreen()->geometry();
+    const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
+    return QRect(monitor.x(), monitor.bottom() + 1 - height, monitor.width(), height);
+}
+
+QRect Taskbar::hiddenRect() const
+{
+    // explorer.exe's hidden rectangle: the bar's top at the monitor's bottom less SM_CYFRAME / 2
+    const QRect monitor = QGuiApplication::primaryScreen()->geometry();
+    const int frame = theme()->scaled(4);   // SM_CYFRAME on XP
+    QRect rect = shownRect();
+    rect.moveTop(monitor.bottom() + 1 - frame / 2);
+    return rect;
+}
+
+void Taskbar::checkAutoHide()
+{
+    if (!m_settings.autoHide || m_hidden || m_slideTimer.isActive())
+        return;
+    // not while the pointer, a menu, the Start panel or the keyboard is on the bar
+    if (geometry().contains(QCursor::pos()) || m_startPanel || QApplication::activePopupWidget() || isActiveWindow())
+        return;
+    setHidden(true);
+}
+
+void Taskbar::setHidden(bool hidden, bool animate)
+{
+    m_unhideTimer.stop();
+    if (!m_settings.autoHide)
+        hidden = false;
+    m_hidden = hidden;
+    m_hiddenMouse = QCursor::pos();
+    const QRect target = hidden ? hiddenRect() : shownRect();
+    if (m_settings.autoHide && !hidden)
+        m_autoHideTimer.start();
+    else
+        m_autoHideTimer.stop();
+    if (!animate || !isVisible() || geometry() == target) {
+        m_slideTimer.stop();
+        setGeometry(target);
+        return;
+    }
+    m_slideFrom = geometry();
+    m_slideTo = target;
+    m_slideDuration = hidden ? 400 : 200;
+    m_slideClock.start();
+    m_slideTimer.start();
+}
+
 void Taskbar::placeOnScreen()
 {
     const QScreen *screen = QGuiApplication::primaryScreen();
     const QRect monitor = screen->geometry();
     const int height = theme()->scaled(theme()->classic() ? CLASSIC_BAR_HEIGHT : BAR_HEIGHT);
-    setGeometry(monitor.x(), monitor.bottom() + 1 - height, monitor.width(), height);
-    // The screen's bottom edge may be another monitor's: struts count from the root's.
-    const int bottom = screen->virtualGeometry().bottom() - monitor.bottom() + height;
+    m_slideTimer.stop();
+    setGeometry(m_hidden && m_settings.autoHide ? hiddenRect() : shownRect());
+    if (m_settings.autoHide && !m_hidden)
+        m_autoHideTimer.start();
+    // The screen's bottom edge may be another monitor's: struts count from the root's. An
+    // auto-hidden bar keeps no room: windows have the whole screen, as XP's work area.
+    const int bottom = m_settings.autoHide ? 0 : screen->virtualGeometry().bottom() - monitor.bottom() + height;
     const quint32 start = monitor.left(), end = monitor.right();
     x11::setProperty32(winId(), "_NET_WM_STRUT", XCB_ATOM_CARDINAL, {0, 0, 0, quint32(bottom)});
     x11::setProperty32(winId(), "_NET_WM_STRUT_PARTIAL", XCB_ATOM_CARDINAL,
@@ -722,6 +800,15 @@ void Taskbar::setHover(Hit hit)
 
 void Taskbar::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_hidden) {
+        // the tray's test: farther than SM_CXDOUBLECLK x SM_CYDOUBLECLK from where it was
+        const QPoint moved = event->globalPosition().toPoint() - m_hiddenMouse;
+        if (moved.x() * moved.x() + moved.y() * moved.y() > 4 * 4 && !m_unhideTimer.isActive()) {
+            m_hiddenMouse = event->globalPosition().toPoint();
+            m_unhideTimer.start();
+        }
+        return;
+    }
     setHover(hitAt(event->position().toPoint()));
 }
 
@@ -996,6 +1083,9 @@ void Taskbar::showStartMenu(bool keyboard)
         m_startPanel->close();
         return;
     }
+    // the panel stands on the shown bar
+    if (m_hidden || m_slideTimer.isActive())
+        setHidden(false, false);
     // On XP's Luna taskbar the panel stands on the bar's top; under Windows Classic, on the Start button's
     // top left corner (2 in, over the bar's top 4 rows).
     auto *panel = new StartPanel(mapToGlobal(theme()->renderer() ? QPoint(0, 0) : m_startRect.topLeft()), [this] {

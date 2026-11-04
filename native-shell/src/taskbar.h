@@ -75,6 +75,14 @@ private:
     void showGroupMenu(int button, QPoint at);
     void showTaskbarMenu(QPoint at, bool tray);
     void tickClock();
+    // Auto-hide, as explorer.exe's tray does it: a 500 ms check hides the bar once the pointer is off it
+    // (timer 2), leaving SM_CYFRAME / 2 rows on the screen; a move on those rows wider than the
+    // double-click rectangle brings it back 50 ms later (timer 3). It slides for 400 ms going and
+    // 200 ms coming (the tray's 0x4f0 and 0x4f4), a frame each 20 ms.
+    QRect shownRect() const;
+    QRect hiddenRect() const;
+    void checkAutoHide();
+    void setHidden(bool hidden, bool animate = true);
     void endSession(const char *request);
     void turnOff();
     QString clockText() const;
@@ -97,6 +105,12 @@ private:
     Hit m_hover, m_pressed;
     QPointer<StartPanel> m_startPanel;
     QElapsedTimer m_startClosed;
+    QTimer m_autoHideTimer, m_unhideTimer, m_slideTimer;
+    bool m_hidden = false;
+    QPoint m_hiddenMouse;
+    QRect m_slideFrom, m_slideTo;
+    QElapsedTimer m_slideClock;
+    int m_slideDuration = 0;
     xcb_window_t m_activeAtPress = 0;
     QString m_clock;
     QTimer m_clockTimer;
