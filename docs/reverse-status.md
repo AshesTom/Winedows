@@ -276,7 +276,7 @@ Binary: `explorer.exe`. Port: [`startmenu.cpp`](../native-shell/src/startmenu.cp
 | Item | Source | Status |
 |---|---|---|
 | Arrow routing between panes (`GetNextDlgGroupItem`, the pane whose rectangle holds the item's height, the nearest item; Left/Right swapped right-to-left) | `DV2ControlHost`, `sub_103ea34` | Done |
-| `Start_MinMFU` 6 by default, policy 0x40000069 | `sub_1008c35` | Read; the ranking itself is not ported |
+| `Start_MinMFU` 6 by default, policy 0x40000069 | `sub_1008c35` | Read; the ranking is ported as an approximation (a launch count and the time of the last use, its weight halved every two weeks; shell32.dll's own decay is not read) |
 | Keys watched on XP's own panel in Wine: nothing selected at opening, Down first / Up last, panes in a ring, letters by access key or first letter, Right into a cascade with its first entry, Left and Escape close it | XP's explorer in Wine, captured after each key | Done |
 | Access-key names (8236 My Recent Documents, 8234 Control Panel, 7020–7023, 730, 731) underlined only when the keys opened the panel | `explorer.exe` strings; XP in Wine | Done |
 | Selection in COLOR_HIGHLIGHT (not HotTracking), its rectangles; infotips (300–307, 7000–7005, 7015, 7016) and their places | XP in Wine, pixel-measured | Done: identical pixels |
@@ -285,7 +285,7 @@ Binary: `explorer.exe`. Port: [`startmenu.cpp`](../native-shell/src/startmenu.cp
 
 | Original feature | Status |
 |---|---|
-| The MFU ranking (UserAssist counts and their decay in `shell32.dll`) | Missing: the shell counts its own launches |
+| The MFU ranking (UserAssist counts and their decay in `shell32.dll`) | Partial: launches keep a count and a last-used time in `native-programs.conf`, and `programs::mostUsed` halves a count's weight every two weeks; shell32.dll's exact decay is not reproduced, and only launches through this shell are counted |
 | The infotip's own drawing (pale gradient, 6 px margin) | Done: a `QLabel` tooltip window with XP's pale gradient, a 1-pixel border and 6-pixel padding, placed at the item's words and under the selection (`StartPanel::showInfoTip`), instead of Qt's 2-pixel tooltip; the menus' shadow gives it XP's drop shadow |
 
 ---
@@ -414,7 +414,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Taskbar | The taskband's extra rows (a resized bar), and the scrollbar's thumb and tracks | Section 6 |
 | Taskbar | Deskbands such as Windows Media Player's | Section 2 |
 | Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings. Low resolution done: once, after 2.5 s, when the screen is under 800 x 600 and a tray icon can point at it; the others remain |
-| Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7. Remove from This List is done (right-click a recent program, `programs::removeUse`); the ranking still uses this shell's counts and the gone-item prompt is missing |
+| Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7. Remove from This List is done (right-click a recent program, `programs::removeUse`); the ranking now decays this shell's counts over time; the gone-item prompt is missing |
 | Start menu | Pin to Start menu, dragging items in the panel and in All Programs, Sort by Name | shell32's verbs; StartMenu band. Pin/Unpin works from a recent program's menu (`StartMenu/Pinned`, shell32 strings 5381/5382); dragging and Sort by Name are missing |
 | Start menu | Newly installed programs highlighted in All Programs (8229) | String 8229 |
 | Start menu | Favorites (8235), Windows Security (7022), Undock Computer (7012, 7014), Disconnect (7017) | Strings |

@@ -6,6 +6,7 @@
 #include "session.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QXmlStreamReader>
 #include <QDir>
 #include <QDialog>
@@ -25,6 +26,7 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -129,6 +131,41 @@ QString usePath()
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-programs.conf");
 }
 
+// A launch count with the time it was last used: XP's UserAssist keeps both, and its Start menu
+// ranks a program lower as that time recedes.
+struct Use
+{
+    int count = 0;
+    qint64 last = 0;   // ms since the epoch, 0 when only an old count was stored
+};
+
+Use readUse(const QSettings &uses, const QString &id)
+{
+    const QString text = uses.value(id).toString();
+    const qsizetype separator = text.indexOf(QLatin1Char(';'));
+    if (separator < 0)
+        return {text.toInt(), 0};
+    return {text.left(separator).toInt(), text.mid(separator + 1).toLongLong()};
+}
+
+double useScore(Use use, qint64 now)
+{
+    if (use.last <= 0 || now <= use.last)
+        return use.count;
+    // XP's shell32 halves a use's weight as it ages; this port uses a two-week half-life.
+    return use.count * std::pow(0.5, double(now - use.last) / (14.0 * 24 * 60 * 60 * 1000));
+}
+
+void noteUse(const QString &id)
+{
+    QSettings uses(usePath(), QSettings::IniFormat);
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const Use previous = readUse(uses, id);
+    const double decayed = previous.last > 0 ? useScore(previous, now) : previous.count;
+    const int count = qMax(1, qRound(decayed)) + 1;
+    uses.setValue(id, QStringLiteral("%1;%2").arg(count).arg(now));
+}
+
 QString commandOutput(const QString &program, const QStringList &arguments)
 {
     QProcess process;
@@ -207,8 +244,7 @@ QIcon iconOf(const Program &program)
 void launch(const Program &program)
 {
     QProcess::startDetached(program.command.first(), program.command.mid(1), QDir::homePath());
-    QSettings uses(usePath(), QSettings::IniFormat);
-    uses.setValue(program.id, uses.value(program.id, 0).toInt() + 1);
+    noteUse(program.id);
 }
 
 void launchWith(const Program &program, const QStringList &files)
@@ -231,6 +267,7 @@ void launchWith(const Program &program, const QStringList &files)
     if (!inserted)
         command += files;
     QProcess::startDetached(command.first(), command.mid(1), QDir::homePath());
+    noteUse(program.id);
 }
 
 QList<Program> allPrograms()
@@ -313,8 +350,11 @@ QList<Program> mostUsed(int count)
 {
     QSettings uses(usePath(), QSettings::IniFormat);
     QStringList ids = uses.allKeys();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     std::sort(ids.begin(), ids.end(), [&](const QString &a, const QString &b) {
-        return uses.value(a).toInt() > uses.value(b).toInt();
+        const Use left = readUse(uses, a), right = readUse(uses, b);
+        const double leftScore = useScore(left, now), rightScore = useScore(right, now);
+        return leftScore != rightScore ? leftScore > rightScore : left.last > right.last;
     });
     QList<Program> out;
     const QHash<QString, QString> files = entryFiles();
