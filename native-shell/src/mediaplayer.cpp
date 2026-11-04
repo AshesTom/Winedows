@@ -186,6 +186,24 @@ const QStringList &mediaFilters()
     return filters;
 }
 
+// The plays a library track has had and when it last ran, for the auto playlists.
+QPair<int, qint64> playHistory(const QString &url)
+{
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+    const QString text = settings.value(QStringLiteral("history/") + url).toString();
+    const QStringList parts = text.split(QLatin1Char(';'));
+    return {parts.value(0).toInt(), parts.value(1).toLongLong()};
+}
+
+void notePlayed(const QUrl &url)
+{
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+    const QString key = QStringLiteral("history/") + url.toString();
+    const QStringList parts = settings.value(key).toString().split(QLatin1Char(';'));
+    const int count = parts.value(0).toInt() + 1;
+    settings.setValue(key, QStringLiteral("%1;%2").arg(count).arg(QDateTime::currentMSecsSinceEpoch()));
+}
+
 // The main menu's commands that this player carries out (wmploc.dll's menu 102).
 enum Command {
     Open = 57601, OpenUrl = 18872, CloseMedia = 57602, Exit = 57665, PlayPause = 18808, Stop = 18809, Fast = 18834, Normal = 18835,
@@ -521,6 +539,7 @@ void MediaPlayer::playIndex(int index)
     setPlayState(9);
     m_player->setSource(m_items[index].url);
     m_player->play();
+    notePlayed(m_items[index].url);
     changedAll(QStringLiteral("player"), {"currentmedia", "url"});
     changedAll(QStringLiteral("player.currentmedia"), {"name", "duration", "durationstring", "sourceurl"});
     changedAll(QStringLiteral("player.controls"), {"isavailable"});
@@ -1893,7 +1912,7 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         split->setStretchFactor(1, 1);
         layout->addWidget(search);
         layout->addWidget(split, 1);
-        struct Track { QString path, title, artist, album; QDateTime modified; };
+        struct Track { QString path, title, artist, album; QDateTime modified; int plays = 0; qint64 played = 0; };
         QList<Track> tracks;
         QStringList patterns;
         for (const QString &filter : mediaFilters())
@@ -1904,7 +1923,9 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
             const QFileInfo info(path);
             if (!patterns.contains(info.suffix().toLower(), Qt::CaseInsensitive))
                 continue;
-            tracks.append({path, info.completeBaseName(), info.dir().dirName(), info.dir().dirName(), info.lastModified()});
+            const QPair<int, qint64> history = playHistory(QUrl::fromLocalFile(path).toString());
+            tracks.append({path, info.completeBaseName(), info.dir().dirName(), info.dir().dirName(), info.lastModified(), history.first,
+                           history.second});
         }
         const auto addCategory = [categories](const QString &name, int kind, const QString &value, QTreeWidgetItem *parent = nullptr) {
             auto *item = parent ? new QTreeWidgetItem(parent, {name}) : new QTreeWidgetItem(categories, {name});
@@ -1913,7 +1934,10 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
             return item;
         };
         addCategory(QObject::tr("All Music"), 0, QString());
-        addCategory(QObject::tr("Recently Added"), 1, QString());
+        auto *automatic = addCategory(QObject::tr("Auto Playlists"), 6, QString());
+        addCategory(QObject::tr("Recently Added"), 1, QString(), automatic);
+        addCategory(QObject::tr("Recently Played"), 4, QString(), automatic);
+        addCategory(QObject::tr("Most Played"), 5, QString(), automatic);
         auto *artists = addCategory(QObject::tr("Artist"), 2, QString());
         auto *albums = addCategory(QObject::tr("Album"), 3, QString());
         QStringList artistNames, albumNames;
@@ -1925,6 +1949,7 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         albumNames.sort(Qt::CaseInsensitive);
         for (const QString &name : std::as_const(artistNames)) addCategory(name, 2, name, artists);
         for (const QString &name : std::as_const(albumNames)) addCategory(name, 3, name, albums);
+        automatic->setExpanded(true);
         artists->setExpanded(true);
         albums->setExpanded(true);
         for (const Track &track : std::as_const(tracks)) {
@@ -1933,6 +1958,8 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
             item->setData(0, Qt::UserRole + 1, track.modified.toMSecsSinceEpoch());
             item->setData(0, Qt::UserRole + 2, track.artist);
             item->setData(0, Qt::UserRole + 3, track.album);
+            item->setData(0, Qt::UserRole + 4, track.plays);
+            item->setData(0, Qt::UserRole + 5, track.played);
         }
         list->setColumnWidth(0, 260);
         const auto applyFilter = [list, categories, search] {
@@ -1945,12 +1972,24 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
                 QTreeWidgetItem *item = list->topLevelItem(i);
                 bool match = true;
                 if (kind == 1) match = item->data(0, Qt::UserRole + 1).toLongLong() >= recent;
+                else if (kind == 4) match = item->data(0, Qt::UserRole + 5).toLongLong() >= recent;
+                else if (kind == 5) match = item->data(0, Qt::UserRole + 4).toInt() > 0;
                 else if (kind == 2) match = item->data(0, Qt::UserRole + 2).toString() == value;
                 else if (kind == 3) match = item->data(0, Qt::UserRole + 3).toString() == value;
                 if (match && !text.isEmpty())
                     match = item->text(0).contains(text, Qt::CaseInsensitive) || item->text(1).contains(text, Qt::CaseInsensitive)
                         || item->text(2).contains(text, Qt::CaseInsensitive);
                 item->setHidden(!match);
+            }
+            if (kind == 5) {
+                QList<QTreeWidgetItem *> rows;
+                while (list->topLevelItemCount())
+                    rows.append(list->takeTopLevelItem(0));
+                std::stable_sort(rows.begin(), rows.end(), [](const QTreeWidgetItem *a, const QTreeWidgetItem *b) {
+                    return a->data(0, Qt::UserRole + 4).toInt() > b->data(0, Qt::UserRole + 4).toInt();
+                });
+                for (QTreeWidgetItem *row : std::as_const(rows))
+                    list->addTopLevelItem(row);
             }
         };
         QObject::connect(categories, &QTreeWidget::currentItemChanged, library, [applyFilter] { applyFilter(); });
