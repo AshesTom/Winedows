@@ -1886,8 +1886,17 @@ void SkinView::paintPlaylist(QPainter &painter, Element *element, const QRect &r
             painter.fillRect(row.adjusted(-2, 0, 2, 0), selected);
         const QStringList columns = items[i].toStringList();
         painter.setPen(i == current ? playing : foreground);
-        painter.drawText(row, Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(columns.value(0), Qt::ElideRight, row.width() - 40));
-        painter.drawText(row, Qt::AlignRight | Qt::AlignVCenter, columns.value(1));
+        const int durationWidth = metrics.horizontalAdvance(columns.value(1)) + 8;
+        const int titleWidth = row.width() > 360 ? row.width() * 50 / 100 : row.width() - durationWidth;
+        painter.drawText(QRect(row.x(), row.y(), titleWidth, row.height()), Qt::AlignLeft | Qt::AlignVCenter,
+                         metrics.elidedText(columns.value(0), Qt::ElideRight, titleWidth - 4));
+        if (row.width() > 360) {
+            painter.drawText(QRect(row.x() + titleWidth, row.y(), row.width() * 24 / 100, row.height()), Qt::AlignLeft | Qt::AlignVCenter,
+                             metrics.elidedText(columns.value(2), Qt::ElideRight, row.width() * 24 / 100 - 4));
+            painter.drawText(QRect(row.x() + titleWidth + row.width() * 24 / 100, row.y(), row.width() * 20 / 100, row.height()),
+                             Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(columns.value(3), Qt::ElideRight, row.width() * 20 / 100 - 4));
+        }
+        painter.drawText(QRect(row.x(), row.y(), row.width(), row.height()), Qt::AlignRight | Qt::AlignVCenter, columns.value(1));
     }
 }
 

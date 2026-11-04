@@ -984,7 +984,8 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
         } else if (name == QLatin1String("playlistnames")) {
             QVariantList names;
             for (int i = 0; i < m_items.size(); ++i)
-                names.append(QStringList{m_items[i].title, mediaProperty(i, QStringLiteral("durationstring")).toString()});
+                names.append(QStringList{m_items[i].title, mediaProperty(i, QStringLiteral("durationstring")).toString(),
+                                         m_items[i].artist, m_items[i].album});
             return names;
         } else if (name == QLatin1String("playlistcurrent")) {
             return m_current;
