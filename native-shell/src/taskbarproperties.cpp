@@ -8,6 +8,7 @@
 #include <QAbstractButton>
 #include <QCheckBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
@@ -96,6 +97,12 @@ TaskbarSettings TaskbarSettings::load()
     loaded.classicLogOff = settings.value(QStringLiteral("StartMenu/ClassicLogOff"), true).toBool();
     loaded.classicRun = settings.value(QStringLiteral("StartMenu/ClassicRun"), true).toBool();
     loaded.classicSmallIcons = settings.value(QStringLiteral("StartMenu/ClassicSmallIcons"), false).toBool();
+    loaded.panelHidden = settings.value(QStringLiteral("StartMenu/PanelHidden")).toStringList();
+    loaded.panelFavorites = settings.value(QStringLiteral("StartMenu/PanelFavorites"), false).toBool();
+    loaded.panelSmallIcons = settings.value(QStringLiteral("StartMenu/PanelSmallIcons"), false).toBool();
+    loaded.panelRecentDocs = settings.value(QStringLiteral("StartMenu/PanelRecentDocs"), true).toBool();
+    loaded.panelHoverOpen = settings.value(QStringLiteral("StartMenu/PanelHoverOpen"), false).toBool();
+    loaded.panelMinMFU = settings.value(QStringLiteral("StartMenu/PanelMinMFU"), 6).toInt();
     loaded.startButtonBalloonTip = settings.value(QStringLiteral("StartMenu/StartButtonBalloonTip"), 0).toInt();
     return loaded;
 }
@@ -119,6 +126,15 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("StartMenu/ClassicLogOff"), classicLogOff);
     settings.setValue(QStringLiteral("StartMenu/ClassicRun"), classicRun);
     settings.setValue(QStringLiteral("StartMenu/ClassicSmallIcons"), classicSmallIcons);
+    if (panelHidden.isEmpty())
+        settings.remove(QStringLiteral("StartMenu/PanelHidden"));
+    else
+        settings.setValue(QStringLiteral("StartMenu/PanelHidden"), panelHidden);
+    settings.setValue(QStringLiteral("StartMenu/PanelFavorites"), panelFavorites);
+    settings.setValue(QStringLiteral("StartMenu/PanelSmallIcons"), panelSmallIcons);
+    settings.setValue(QStringLiteral("StartMenu/PanelRecentDocs"), panelRecentDocs);
+    settings.setValue(QStringLiteral("StartMenu/PanelHoverOpen"), panelHoverOpen);
+    settings.setValue(QStringLiteral("StartMenu/PanelMinMFU"), panelMinMFU);
     settings.setValue(QStringLiteral("StartMenu/StartButtonBalloonTip"), startButtonBalloonTip);
 }
 
@@ -258,6 +274,99 @@ static void showClassicCustomize(QWidget *parent)
     dialog.exec();
 }
 
+// explorer.exe's Customize Start Menu (property sheet pages 1135 General and 1036 Advanced): the
+// Start panel's places, its program count, its icon size and its recent documents. The pages' Add/
+// Remove/Advanced/Sort/Clear remain greyed.
+static void showStartPanelCustomize(QWidget *parent)
+{
+    if (!explorer())
+        return;
+    QDialog dialog(parent);
+    dialog.setWindowTitle(xpfiles::string(*explorer(), 1311).isEmpty() ? QObject::tr("Customize Start Menu") : xpfiles::string(*explorer(), 1311));
+    auto *tabs = new xpdialog::SheetTabs(&dialog);
+    auto *general = new QWidget;
+    auto *advanced = new QWidget;
+    const xpdialog::Page generalPage = xpdialog::build(*explorer(), 1135, general);
+    const xpdialog::Page advancedPage = xpdialog::build(*explorer(), 1036, advanced);
+    tabs->addTab(general, generalPage.caption.isEmpty() ? QObject::tr("General") : generalPage.caption);
+    tabs->addTab(advanced, advancedPage.caption.isEmpty() ? QObject::tr("Advanced") : advancedPage.caption);
+    const TaskbarSettings settings = TaskbarSettings::load();
+    auto *large = qobject_cast<QAbstractButton *>(generalPage.controls.value(1302));
+    auto *small = qobject_cast<QAbstractButton *>(generalPage.controls.value(1303));
+    if (large && small) {
+        large->setAutoExclusive(true);
+        small->setAutoExclusive(true);
+        (settings.panelSmallIcons ? small : large)->setChecked(true);
+    }
+    if (auto *count = qobject_cast<QLineEdit *>(generalPage.controls.value(1304)))
+        count->setText(QString::number(settings.panelMinMFU));
+    for (int id : {1310})
+        if (QWidget *button = generalPage.controls.value(id))
+            button->setEnabled(false);
+    if (QWidget *button = advancedPage.controls.value(1309))
+        button->setEnabled(false);
+    if (auto *recent = qobject_cast<QAbstractButton *>(advancedPage.controls.value(1308)))
+        recent->setChecked(settings.panelRecentDocs);
+    if (auto *hover = qobject_cast<QAbstractButton *>(advancedPage.controls.value(1306)))
+        hover->setChecked(settings.panelHoverOpen);
+    QWidget *place = advancedPage.controls.value(1123);
+    auto *tree = new QTreeWidget(advanced);
+    if (place) {
+        tree->setGeometry(place->geometry());
+        place->hide();
+    }
+    tree->setHeaderHidden(true);
+    tree->setRootIsDecorated(false);
+    struct Option
+    {
+        const char *key;
+        const char *label;
+        bool favorites;
+    };
+    const QList<Option> options = {
+        {"Documents", "My Documents", false}, {"Recent", "My Recent Documents", false}, {"Pictures", "My Pictures", false},
+        {"Music", "My Music", false}, {"Computer", "My Computer", false}, {"ControlPanel", "Control Panel", false},
+        {"Network", "Network Connections", false}, {"Printers", "Printers and Faxes", false}, {"Help", "Help and Support", false},
+        {"Search", "Search", false}, {"Run", "Run...", false}, {"Favorites", "Favorites", true},
+    };
+    for (const Option &option : options) {
+        auto *item = new QTreeWidgetItem(tree, {QObject::tr(option.label)});
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        const bool shown = option.favorites ? settings.panelFavorites : !settings.panelHidden.contains(QLatin1String(option.key));
+        item->setCheckState(0, shown ? Qt::Checked : Qt::Unchecked);
+        item->setData(0, Qt::UserRole, QString::fromLatin1(option.key));
+        item->setData(1, Qt::UserRole, option.favorites);
+    }
+    auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    ok->setDefault(true);
+    xpdialog::arrangeSheet(&dialog, tabs, {ok, cancel});
+    QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
+        TaskbarSettings changed = TaskbarSettings::load();
+        changed.panelSmallIcons = small && small->isChecked();
+        if (auto *count = qobject_cast<QLineEdit *>(generalPage.controls.value(1304)))
+            changed.panelMinMFU = qBound(0, count->text().toInt(), 30);
+        if (auto *recent = qobject_cast<QAbstractButton *>(advancedPage.controls.value(1308)))
+            changed.panelRecentDocs = recent->isChecked();
+        if (auto *hover = qobject_cast<QAbstractButton *>(advancedPage.controls.value(1306)))
+            changed.panelHoverOpen = hover->isChecked();
+        changed.panelHidden.clear();
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            const QTreeWidgetItem *item = tree->topLevelItem(i);
+            const bool on = item->checkState(0) == Qt::Checked;
+            if (item->data(1, Qt::UserRole).toBool())
+                changed.panelFavorites = on;
+            else if (!on)
+                changed.panelHidden.append(item->data(0, Qt::UserRole).toString());
+        }
+        changed.save();
+        emit TaskbarSettingsNotifier::instance()->changed();
+        dialog.accept();
+    });
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    dialog.exec();
+}
+
 QWidget *TaskbarProperties::startMenuPage()
 {
     auto *page = new QWidget;
@@ -277,9 +386,11 @@ QWidget *TaskbarProperties::startMenuPage()
     }
     for (int id : {ID_CUSTOMIZE, ID_CUSTOMIZE_CLASSIC})
         if (QWidget *control = dialog.controls.value(id))
-            control->setEnabled(id == ID_CUSTOMIZE_CLASSIC);
+            control->setEnabled(true);
     if (auto *customizeClassic = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_CUSTOMIZE_CLASSIC)))
         connect(customizeClassic, &QAbstractButton::clicked, this, [this] { showClassicCustomize(this); });
+    if (auto *customizeStart = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_CUSTOMIZE)))
+        connect(customizeStart, &QAbstractButton::clicked, this, [this] { showStartPanelCustomize(this); });
     const auto follow = [this, preview] {
         if (preview)
             preview->setPixmap(picture(BITMAP_START_MENU + (m_classicRadio && m_classicRadio->isChecked() ? 1 : 0)));

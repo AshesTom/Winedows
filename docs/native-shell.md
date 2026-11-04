@@ -41,7 +41,7 @@ Not ported yet: Windows Media Player's tasks that `wmp.dll` draws itself other t
 and Faxes without `system-config-printer`), the Accessibility Options applets (the category is there, empty), the
 Search Companion's sounds, its other characters and its balloon mode, Map Network Drive and Synchronize (greyed), the
 the Start panel's own MFU ranking (UserAssist's counts and their decay are shell32's; here, launches counted by the shell), the taskband's extra rows when the buttons do not fit even grouped (its scroll arrows are
-there, but a taller bar is not), the Start panel's Customize in Taskbar and Start Menu Properties (the classic menu's dialog 9 works for four options), the Screen Saver and Settings pages,
+there, but a taller bar is not), the Start panel and classic Customize dialogs in Taskbar and Start Menu Properties (their Add/Remove/Clear lists are still greyed), the Screen Saver and Settings pages,
 a wireless picture for the network icon. Strings that XP's files do not give
 (the desktop's menus, the Linux Programs page) are in English.
 

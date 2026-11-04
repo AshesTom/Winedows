@@ -556,7 +556,7 @@ void StartPanel::addLeft(int &y, const QString &text, const QString &subtitle, c
     ShellTheme *theme = ShellTheme::instance();
     Item item;
     const int height = theme->scaled(big ? LEFT_BIG : LEFT_SMALL);
-    const int size = theme->scaled(32);
+    const int size = theme->scaled(TaskbarSettings::load().panelSmallIcons ? 24 : 32);
     item.rect = QRect(m_left.x() + theme->scaled(3), y, m_left.width() - theme->scaled(6), height);
     item.text = text;
     item.subtitle = subtitle;
@@ -612,6 +612,30 @@ QRect StartPanel::moreBand() const
     return m_more.adjusted(0, ShellTheme::instance()->scaled(ShellTheme::instance()->renderer() ? 1 : 2), 0, 0);
 }
 
+namespace {
+QList<MenuEntry> favoritesEntries()
+{
+    QList<MenuEntry> out;
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Favorites");
+    QDir().mkpath(folder);
+    const QFileInfoList entries = QDir(folder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &entry : entries) {
+        const QString path = entry.filePath();
+        if (entry.suffix() == QLatin1String("desktop")) {
+            if (const auto program = programs::fromFile(path))
+                out.append({program->name, programs::iconOf(*program), [program] { programs::launch(*program); }, {}});
+        } else if (entry.isDir()) {
+            out.append({entry.fileName(), fileicons::forFile(entry), [path] { FileBrowser::open(path); }, {}});
+        } else {
+            out.append({entry.fileName(), fileicons::forFile(entry), [path] { programs::open(path); }, {}});
+        }
+    }
+    if (out.isEmpty())
+        out.append({QObject::tr("(Empty)"), QIcon(), {}, {}, false, false});
+    return out;
+}
+} // namespace
+
 QList<MenuEntry> StartPanel::classicDocuments() const
 {
     // My Documents and My Pictures, a line, then the recent documents (or (Empty)), as XP's
@@ -666,26 +690,7 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
     QList<Row> middle;
     middle.append({word(CMD_PROGRAMS, "&Programs"), big(ICON_PROGRAMS), {}, [this] { return allPrograms(); }});
     if (classicSettings.classicFavorites)
-        middle.append({word(CMD_FAVORITES, "F&avorites"), big(ICON_RECENT), {}, [] {
-            QList<MenuEntry> out;
-            const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Favorites");
-            QDir().mkpath(folder);
-            const QFileInfoList entries = QDir(folder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
-            for (const QFileInfo &entry : entries) {
-                const QString path = entry.filePath();
-                if (entry.suffix() == QLatin1String("desktop")) {
-                    if (const auto program = programs::fromFile(path))
-                        out.append({program->name, programs::iconOf(*program), [program] { programs::launch(*program); }, {}});
-                } else if (entry.isDir()) {
-                    out.append({entry.fileName(), fileicons::forFile(entry), [path] { FileBrowser::open(path); }, {}});
-                } else {
-                    out.append({entry.fileName(), fileicons::forFile(entry), [path] { programs::open(path); }, {}});
-                }
-            }
-            if (out.isEmpty())
-                out.append({QObject::tr("(Empty)"), QIcon(), {}, {}, false, false});
-            return out;
-        }});
+        middle.append({word(CMD_FAVORITES, "F&avorites"), big(ICON_RECENT), {}, [] { return favoritesEntries(); }});
     middle.append({word(CMD_DOCUMENTS, "&Documents"), big(ICON_RECENT), {}, [this] { return classicDocuments(); }});
     const auto controlPanel = m_controlPanel;
     middle.append({word(CMD_SETTINGS, "&Settings"), big(ICON_SETTINGS), {}, [=] {
@@ -814,6 +819,8 @@ void StartPanel::build(QPoint bottomLeft)
         return;
     }
     ShellTheme *theme = ShellTheme::instance();
+    const TaskbarSettings panelSettings = TaskbarSettings::load();
+    const auto shown = [&panelSettings](const char *key) { return !panelSettings.panelHidden.contains(QLatin1String(key)); };
     // Keep XP's normal columns; grow them for large fonts and translated labels.
     const QFontMetrics placeMetrics(theme->systemFont(QStringLiteral("menufont"), true));
     int column = theme->scaled(COLUMN);
@@ -850,49 +857,73 @@ void StartPanel::build(QPoint bottomLeft)
     int y = userHeight + theme->scaled(classic ? CLASSIC_TOP : COLUMN_TOP);
     const auto opens = [](const QString &path) { return [path] { programs::open(path); }; };
     const auto tip = [this](int id) { m_items.last().tip = explorerString(id, ""); };
-    addPlace(y, ICON_DOCUMENTS, shellString(SHELL_DOCUMENTS, "My Documents"), true, opens(xdgDir(QStandardPaths::DocumentsLocation)));
-    tip(TIP_DOCUMENTS);
-    addPlace(y, ICON_RECENT, explorerString(EXPLORER_RECENT, "My Recent &Documents"), true, {}, true);
-    m_items.last().children = [this] { return recentDocuments(); };
-    tip(TIP_RECENT);
-    addPlace(y, ICON_PICTURES, shellString(SHELL_PICTURES, "My Pictures"), true, opens(xdgDir(QStandardPaths::PicturesLocation)));
-    tip(TIP_PICTURES);
-    addPlace(y, ICON_MUSIC, shellString(SHELL_MUSIC, "My Music"), true, opens(xdgDir(QStandardPaths::MusicLocation)));
-    tip(TIP_MUSIC);
-    addPlace(y, ICON_COMPUTER, shellString(SHELL_COMPUTER, "My Computer"), true, opens(QStringLiteral("file:///")));
-    tip(TIP_COMPUTER);
+    if (shown("Documents")) {
+        addPlace(y, ICON_DOCUMENTS, shellString(SHELL_DOCUMENTS, "My Documents"), true, opens(xdgDir(QStandardPaths::DocumentsLocation)));
+        tip(TIP_DOCUMENTS);
+    }
+    if (shown("Recent") && panelSettings.panelRecentDocs) {
+        addPlace(y, ICON_RECENT, explorerString(EXPLORER_RECENT, "My Recent &Documents"), true, {}, true);
+        m_items.last().children = [this] { return recentDocuments(); };
+        tip(TIP_RECENT);
+    }
+    if (shown("Pictures")) {
+        addPlace(y, ICON_PICTURES, shellString(SHELL_PICTURES, "My Pictures"), true, opens(xdgDir(QStandardPaths::PicturesLocation)));
+        tip(TIP_PICTURES);
+    }
+    if (shown("Music")) {
+        addPlace(y, ICON_MUSIC, shellString(SHELL_MUSIC, "My Music"), true, opens(xdgDir(QStandardPaths::MusicLocation)));
+        tip(TIP_MUSIC);
+    }
+    if (shown("Favorites") && panelSettings.panelFavorites) {
+        addPlace(y, ICON_RECENT, tr("F&avorites"), true, {}, true);
+        m_items.last().children = [] { return favoritesEntries(); };
+    }
+    if (shown("Computer")) {
+        addPlace(y, ICON_COMPUTER, shellString(SHELL_COMPUTER, "My Computer"), true, opens(QStringLiteral("file:///")));
+        tip(TIP_COMPUTER);
+    }
     Item separator;
     separator.separator = true;
     separator.rect = classic ? QRect(m_right.x() + theme->scaled(5), y + theme->scaled(PLACE_LINE), m_right.width() - theme->scaled(6), theme->scaled(2))
                              : QRect(m_right.x() + theme->scaled(10), y + theme->scaled(PLACE_LINE), m_right.width() - theme->scaled(20), theme->scaled(2));
     m_items.append(separator);
     y += theme->scaled(8);
-    addPlace(y, ICON_CONTROL_PANEL, explorerString(EXPLORER_CONTROL_PANEL, "&Control Panel"), false, m_controlPanel);
-    tip(TIP_CONTROL_PANEL);
+    if (shown("ControlPanel")) {
+        addPlace(y, ICON_CONTROL_PANEL, explorerString(EXPLORER_CONTROL_PANEL, "&Control Panel"), false, m_controlPanel);
+        tip(TIP_CONTROL_PANEL);
+    }
     // XP's next two: the programs' defaults (Add or Remove Programs here), and the network's connections
     addPlace(y, 0, tr("Set Program Access and Defaults"), false, [] { applets::open(QStringLiteral("programs")); });
     const auto moricons = xpfiles::resources(xpfiles::find(QStringLiteral("moricons.dll")));
     m_items.last().icon = moricons ? xpfiles::icon(*moricons, MORICONS_SPAD, theme->scaled(PLACE_ICON)) : QImage();
-    if (!QStandardPaths::findExecutable(QStringLiteral("nmcli")).isEmpty()) {
+    if (shown("Network") && !QStandardPaths::findExecutable(QStringLiteral("nmcli")).isEmpty()) {
         addPlace(y, ICON_CONNECT, explorerString(EXPLORER_CONNECT, "Connect To"), false, {}, true);
         m_items.last().children = [] { return connections(); };
         tip(TIP_CONNECT);
     }
     const bool printers = !QStandardPaths::findExecutable(QStringLiteral("system-config-printer")).isEmpty();
-    addPlace(y, ICON_PRINTERS, shellString(SHELL_PRINTERS, "Printers and Faxes"), false,
-             printers ? std::function<void()>([] { QProcess::startDetached(QStringLiteral("system-config-printer"), {}); }) : std::function<void()>());
+    if (shown("Printers"))
+        addPlace(y, ICON_PRINTERS, shellString(SHELL_PRINTERS, "Printers and Faxes"), false,
+                 printers ? std::function<void()>([] { QProcess::startDetached(QStringLiteral("system-config-printer"), {}); }) : std::function<void()>());
     separator.rect.moveTop(y + theme->scaled(PLACE_LINE));
     m_items.append(separator);
     y += theme->scaled(8);
-    addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "&Help and Support"), false, {});
-    tip(TIP_HELP);
-    addPlace(y, ICON_SEARCH, explorerString(EXPLORER_SEARCH, "&Search"), false, [] { FileBrowser::open(places::Search); });
-    tip(TIP_SEARCH);
-    addPlace(y, ICON_RUN, explorerString(EXPLORER_RUN, "&Run..."), false, [] { showRunDialog(); });
-    tip(TIP_RUN);
+    if (shown("Help")) {
+        addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "&Help and Support"), false, {});
+        tip(TIP_HELP);
+    }
+    if (shown("Search")) {
+        addPlace(y, ICON_SEARCH, explorerString(EXPLORER_SEARCH, "&Search"), false, [] { FileBrowser::open(places::Search); });
+        tip(TIP_SEARCH);
+    }
+    if (shown("Run")) {
+        addPlace(y, ICON_RUN, explorerString(EXPLORER_RUN, "&Run..."), false, [] { showRunDialog(); });
+        tip(TIP_RUN);
+    }
     const auto browser = programs::defaultBrowser(), mail = programs::defaultMail();
     const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0);
-    const int leftHeight = theme->scaled((classic ? CLASSIC_TOP : LEFT_TOP) + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + RECENT_PROGRAMS * LEFT_SMALL + LEFT_LINE) + moreHeight;
+    const int recentPrograms = qBound(0, panelSettings.panelMinMFU, 30);
+    const int leftHeight = theme->scaled((classic ? CLASSIC_TOP : LEFT_TOP) + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + recentPrograms * LEFT_SMALL + LEFT_LINE) + moreHeight;
     const int bodyHeight = std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(classic ? CLASSIC_BODY_END : BODY_END), leftHeight});
     m_right.setHeight(bodyHeight);
 
@@ -923,11 +954,11 @@ void StartPanel::build(QPoint bottomLeft)
     }
     // (Asking for two more: the browser and the mail may be among them.)
     int added = 0;
-    const QList<programs::Program> used = programs::mostUsed(RECENT_PROGRAMS + 2);
+    const QList<programs::Program> used = programs::mostUsed(recentPrograms + 2);
     for (const programs::Program &program : used) {
         if ((browser && program.id == browser->id) || (mail && program.id == mail->id))
             continue;
-        if (added++ >= RECENT_PROGRAMS)
+        if (added++ >= recentPrograms)
             break;
         addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
         m_items.last().tip = program.comment;
