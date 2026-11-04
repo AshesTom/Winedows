@@ -312,7 +312,7 @@ Binaries: `explorer.exe`, `shell32.dll`, `comctl32.dll` 6.0, `luna.msstyles`. Po
 
 | Original feature | Status |
 |---|---|
-| Task pane entries XP adds: Publish this folder to the Web, Local Disk / Documents / My Network Places in Other Places | Missing |
+| Task pane entries XP adds: Publish this folder to the Web, Local Disk / Documents / My Network Places in Other Places | Partial: folder windows' Other Places now add Local Disk and My Network Places, and My Network Places is a folder of local network places, GVfs mounts and RT_HTML-free links; Publish this folder to the Web is missing |
 | The caption under XP's own uxtheme | Not comparable in Wine (Wine draws it) |
 | The toolbar band's remaining differences | Wine's text rendering in the capture; not addressed |
 

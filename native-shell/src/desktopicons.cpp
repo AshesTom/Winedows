@@ -504,7 +504,7 @@ void DesktopIcons::open(const Item &item)
         else if (item.path == QLatin1String("::my-computer"))
             FileBrowser::open(places::Computer);
         else if (item.path == QLatin1String("::my-network-places"))
-            programs::open(QStringLiteral("network:///"));
+            FileBrowser::open(places::Network);
         else if (const auto browser = programs::defaultBrowser())
             programs::launch(*browser);
         return;

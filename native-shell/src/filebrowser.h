@@ -44,7 +44,7 @@ class SystemFolderWarning;
 
 // Addresses of the virtual folders
 namespace places {
-extern const QString Computer, RecycleBin, ControlPanel, Search;
+extern const QString Computer, RecycleBin, ControlPanel, Search, Network;
 bool isWeb(const QString &location);
 QString title(const QString &location);
 QIcon icon(const QString &location);
@@ -121,6 +121,8 @@ private:
     void recycleBinProperties();
     void customizeFolder();
     void manageComputer();
+    void addNetworkPlace();
+    void fillNetwork();
     void moveOrCopyTo(bool move);
     void startSearch(const SearchQuery &query);
     void continueSearch();

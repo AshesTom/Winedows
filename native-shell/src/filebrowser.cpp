@@ -72,6 +72,7 @@
 #include <QSortFilterProxyModel>
 #include <QSettings>
 #include <QSysInfo>
+#include <unistd.h>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardItemModel>
@@ -91,7 +92,8 @@
 
 namespace places {
 const QString Computer = QStringLiteral("::computer"), RecycleBin = QStringLiteral("::recycle"),
-              ControlPanel = QStringLiteral("::controlpanel"), Search = QStringLiteral("::search");
+              ControlPanel = QStringLiteral("::controlpanel"), Search = QStringLiteral("::search"),
+              Network = QStringLiteral("::network");
 
 static QString shellText(int id, const char *fallback)
 {
@@ -115,6 +117,8 @@ QString title(const QString &location)
         return controlpanel::categories().value(location.section(QLatin1Char('/'), 1).toInt()).name;
     if (location == Search)
         return QObject::tr("Search Results");
+    if (location == Network)
+        return shellText(9217, "My Network Places");
     const QFileInfo info(location);
     if (info.isRoot())
         return info.absoluteFilePath();
@@ -137,6 +141,8 @@ QIcon icon(const QString &location)
         return controlpanel::categories().value(location.section(QLatin1Char('/'), 1).toInt()).icon;
     if (location == Search)
         return fileicons::shell(fileicons::Search);
+    if (location == Network)
+        return fileicons::shell(18);
     return fileicons::forFile(QFileInfo(location));
 }
 } // namespace places
@@ -2446,6 +2452,57 @@ void FileBrowser::addVirtualHeader(const QString &text)
     m_virtual->appendRow(item);
 }
 
+void FileBrowser::fillNetwork()
+{
+    addVirtualHeader(tr("Network Places"));
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Network");
+    QDir().mkpath(folder);
+    const QFileInfoList entries = QDir(folder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &entry : entries) {
+        if (entry.isDir()) {
+            const QString path = entry.absoluteFilePath();
+            addVirtual(entry.fileName(), fileicons::shell(fileicons::Folder), [this, path] { navigate(path); }, tr("Network Share"));
+        } else if (entry.suffix() == QLatin1String("desktop")) {
+            if (const auto program = programs::fromFile(entry.absoluteFilePath()))
+                addVirtual(program->name, programs::iconOf(*program), [program] { programs::launch(*program); }, program->comment);
+        } else {
+            const QString path = entry.absoluteFilePath();
+            addVirtual(entry.fileName(), fileicons::forFile(entry), [path] { programs::open(path); }, tr("Shortcut"));
+        }
+    }
+    // GVfs' mounted shares
+    const QString run = QStringLiteral("/run/user/%1/gvfs").arg(getuid());
+    for (const QString &base : {run, QDir::homePath() + QStringLiteral("/.gvfs")}) {
+        const QDir dir(base);
+        if (!dir.exists())
+            continue;
+        for (const QFileInfo &share : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+            const QString path = share.absoluteFilePath();
+            addVirtual(share.fileName(), fileicons::shell(fileicons::Folder), [this, path] { navigate(path); }, tr("Network Share"));
+        }
+    }
+}
+
+void FileBrowser::addNetworkPlace()
+{
+    bool ok = false;
+    const QString address = QInputDialog::getText(this, tr("Add Network Place"), tr("Network address:"), QLineEdit::Normal,
+                                                  QStringLiteral("smb://"), &ok);
+    if (!ok || address.trimmed().isEmpty())
+        return;
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Network");
+    QDir().mkpath(folder);
+    const QString name = fileops::freeName(folder, QUrl(address).host().isEmpty() ? tr("Network Place") : QUrl(address).host() + QStringLiteral(".desktop"));
+    QFile file(QDir(folder).filePath(name.endsWith(QLatin1String(".desktop")) ? name : name + QStringLiteral(".desktop")));
+    if (file.open(QIODevice::WriteOnly)) {
+        const QString quote = QStringLiteral("\"");
+        file.write(QStringLiteral("[Desktop Entry]\nType=Application\nName=%1\nExec=xdg-open %2%3%2\n")
+                       .arg(QUrl(address).host().isEmpty() ? tr("Network Place") : QUrl(address).host(), quote, address)
+                       .toUtf8());
+    }
+    fillNetwork();
+}
+
 void FileBrowser::fillComputer()
 {
     addVirtualHeader(xpfiles::shellString(9425, "Files Stored on This Computer"));
@@ -2538,6 +2595,8 @@ void FileBrowser::showVirtual(const QString &location)
     m_actions.clear();
     if (location == places::Computer) {
         fillComputer();
+    } else if (location == places::Network) {
+        fillNetwork();
     } else if (location.startsWith(places::ControlPanel + QLatin1Char('/'))) {
         static_cast<ControlPanelCategories *>(m_categoryPage)->setCategory(location.section(QLatin1Char('/'), 1).toInt());
         m_pages->setCurrentWidget(m_categoryArea);
@@ -2744,6 +2803,14 @@ void FileBrowser::updatePane()
             tasks.tasks.append({tr("Restore this item"), fileicons::shell(fileicons::Document), [this] { fileops::restoreFromTrash(selectedPaths(), this); }});
         groups.append(tasks);
         others.tasks = {place(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)), place(documents), place(places::Computer)};
+    } else if (m_location == places::Network) {
+        groups.append({tr("Network Tasks"), true, {
+            {tr("Add a network place"), fileicons::shell(fileicons::Folder), [this] { addNetworkPlace(); }},
+            {tr("View network connections"), fileicons::shell(fileicons::ControlPanel), [] { applets::open(QStringLiteral("network")); }},
+        }});
+        others.tasks = {place(places::Computer), place(documents)};
+        m_pane->setGroups(groups);
+        return;
     } else if (m_location.startsWith(places::ControlPanel + QLatin1Char('/'))) {
         groups.append({xpfiles::shellString(STRING_SEE_ALSO, "See Also"), false, {
             {tr("Folder Options"), fileicons::shell(fileicons::Folder), [] { controlpanel::open(QStringLiteral("folders")); }},
@@ -2845,6 +2912,8 @@ void FileBrowser::updatePane()
         if (m_location != documents)
             others.tasks.append(place(documents));
         others.tasks.append(place(places::Computer));
+        others.tasks.append({tr("Local Disk"), fileicons::shell(fileicons::Drive), [this] { navigate(QStringLiteral("/")); }});
+        others.tasks.append(place(places::Network));
         // XP's Details: a picture's preview over its name, then "Label: value" lines
         const auto labelled = [](int label, const char *fallback, const QString &value) {
             return PaneTask{xpfiles::shellString(STRING_LABELLED, "%1!ls!: %2!ls!").replace(QLatin1String("%1!ls!"), xpfiles::shellString(label, fallback))
