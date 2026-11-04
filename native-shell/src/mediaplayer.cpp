@@ -29,6 +29,7 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QSlider>
 #include <QMenuBar>
 #include <QCursor>
@@ -2083,9 +2084,15 @@ void MediaPlayer::command(int id)
             auto *volume = new QSlider(Qt::Horizontal, &dialog);
             volume->setRange(0, 100);
             volume->setValue(qRound(m_audio->volume() * 100));
+            auto *effect = new QComboBox(&dialog);
+            effect->addItems({QStringLiteral("Bars"), QStringLiteral("Spikes"), QStringLiteral("Ambience"), QStringLiteral("Battery"),
+                              QStringLiteral("Plenoptic")});
+            effect->setCurrentText(m_mediacenter.value(QStringLiteral("effecttype"), QStringLiteral("Bars")).toString());
             layout->addWidget(shuffle);
             layout->addWidget(repeat);
             layout->addWidget(mute);
+            layout->addWidget(new QLabel(tr("Visualization"), &dialog));
+            layout->addWidget(effect);
             layout->addWidget(new QLabel(tr("Volume"), &dialog));
             layout->addWidget(volume);
             auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -2095,6 +2102,7 @@ void MediaPlayer::command(int id)
                 m_loop = repeat->isChecked();
                 m_audio->setMuted(mute->isChecked());
                 m_audio->setVolume(volume->value() / 100.0);
+                set(QStringLiteral("mediacenter"), QStringLiteral("effecttype"), effect->currentText());
                 dialog.accept();
             });
             QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);

@@ -809,13 +809,18 @@ QVariant SkinView::property(const Element *element, const QString &name) const
     if (tag == QLatin1String("theme") && name == QLatin1String("currentviewid"))
         return m_view ? m_view->values.value(QStringLiteral("id")) : QVariant();
     if (tag == QLatin1String("effects")) {
+        const QString effect = m_model->get(QStringLiteral("mediacenter"), QStringLiteral("effecttype")).toString();
+        const QStringList effects{QStringLiteral("Bars"), QStringLiteral("Spikes"), QStringLiteral("Ambience"), QStringLiteral("Battery"),
+                                  QStringLiteral("Plenoptic")};
         if (name == QLatin1String("currenteffecttitle"))
-            return QStringLiteral("Bars and Waves");
+            return effect.isEmpty() ? QStringLiteral("Bars and Waves") : effect;
         if (name == QLatin1String("currentpresettitle"))
-            return QStringLiteral("Bars");
+            return effect.isEmpty() ? QStringLiteral("Bars") : effect;
         if (name == QLatin1String("currentpreset") || name == QLatin1String("currenteffect"))
-            return 0;
-        if (name == QLatin1String("effectcount") || name == QLatin1String("currenteffectpresetcount"))
+            return qMax(0, effects.indexOf(effect.isEmpty() ? QStringLiteral("Bars") : effect));
+        if (name == QLatin1String("effectcount"))
+            return effects.size();
+        if (name == QLatin1String("currenteffectpresetcount"))
             return 1;
     }
     if (element->members.contains(name))
@@ -1773,16 +1778,63 @@ void SkinView::paintEffects(QPainter &painter, Element *element, const QRect &re
     if (bands.isEmpty())
         return;
     Q_UNUSED(element);
-    // Bars and Waves' Bars: green bars on black, with peaks
+    const QString effect = m_model->get(QStringLiteral("mediacenter"), QStringLiteral("effecttype")).toString().toLower();
     const int count = bands.size();
-    const qreal width = qreal(rect.width()) / count;
-    for (int i = 0; i < count; ++i) {
-        const int height = int(bands[i] * rect.height());
-        const QRectF bar(rect.x() + i * width + 1, rect.bottom() + 1 - height, qMax<qreal>(1, width - 2), height);
-        QLinearGradient gradient(bar.bottomLeft(), QPointF(bar.x(), rect.top()));
-        gradient.setColorAt(0, QColor(0, 120, 0));
-        gradient.setColorAt(1, QColor(160, 255, 60));
-        painter.fillRect(bar, gradient);
+    const qreal time = QDateTime::currentMSecsSinceEpoch() / 1000.0;
+    if (effect.contains(QLatin1String("spike"))) {
+        // Spikes: a line from the bottom centre to each band's level.
+        painter.setRenderHint(QPainter::Antialiasing);
+        for (int i = 0; i < count; ++i) {
+            const qreal x = rect.x() + (i + 0.5) * rect.width() / count;
+            const qreal height = bands[i] * rect.height();
+            painter.setPen(QPen(QColor::fromHsv((i * 360 / count) % 360, 220, 255), 2));
+            painter.drawLine(QPointF(x, rect.bottom()), QPointF(x, rect.bottom() - height));
+        }
+    } else if (effect.contains(QLatin1String("ambience"))) {
+        // Ambience: drifting coloured lights, one per band.
+        painter.setRenderHint(QPainter::Antialiasing);
+        for (int i = 0; i < count; ++i) {
+            const qreal x = rect.x() + rect.width() * (0.5 + 0.45 * std::sin(time * (0.2 + i * 0.03) + i));
+            const qreal y = rect.y() + rect.height() * (0.5 + 0.4 * std::cos(time * (0.17 + i * 0.02) + i * 1.7));
+            const qreal radius = 2 + bands[i] * rect.height() * 0.15;
+            QColor colour = QColor::fromHsvF(std::fmod(0.7 + i * 0.015 + time * 0.02, 1.0), 0.7, 1.0, 0.6);
+            painter.setBrush(colour);
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(QPointF(x, y), radius, radius);
+        }
+    } else if (effect.contains(QLatin1String("battery"))) {
+        // Battery: a grid of cells that light with the bands.
+        const int across = 8, down = 4;
+        for (int row = 0; row < down; ++row)
+            for (int column = 0; column < across; ++column) {
+                const int i = row * across + column;
+                const bool lit = i < count && bands[i] > (down - row) * 0.2f;
+                const QRect cell(rect.x() + column * rect.width() / across + 2, rect.y() + row * rect.height() / down + 2,
+                                 rect.width() / across - 4, rect.height() / down - 4);
+                painter.fillRect(cell, lit ? QColor(120, 220, 70) : QColor(20, 50, 20));
+            }
+    } else if (effect.contains(QLatin1String("plenoptic"))) {
+        // Plenoptic: spokes from the centre.
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QPointF centre = rect.center();
+        const qreal radius = qMin(rect.width(), rect.height()) / 2.0;
+        for (int i = 0; i < count; ++i) {
+            const qreal angle = 2 * M_PI * i / count + time * 0.2;
+            const qreal length = radius * (0.2 + bands[i] * 0.8);
+            painter.setPen(QPen(QColor::fromHsv((i * 360 / count) % 360, 200, 255), 2));
+            painter.drawLine(centre, centre + QPointF(std::cos(angle) * length, std::sin(angle) * length));
+        }
+    } else {
+        // Bars and Waves' Bars: green bars on black, with peaks
+        const qreal width = qreal(rect.width()) / count;
+        for (int i = 0; i < count; ++i) {
+            const int height = int(bands[i] * rect.height());
+            const QRectF bar(rect.x() + i * width + 1, rect.bottom() + 1 - height, qMax<qreal>(1, width - 2), height);
+            QLinearGradient gradient(bar.bottomLeft(), QPointF(bar.x(), rect.top()));
+            gradient.setColorAt(0, QColor(0, 120, 0));
+            gradient.setColorAt(1, QColor(160, 255, 60));
+            painter.fillRect(bar, gradient);
+        }
     }
 }
 

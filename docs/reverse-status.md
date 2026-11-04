@@ -89,7 +89,7 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Copy from CD, Copy to CD or Device, CD and DVD playback | Partial: the CD task page says to insert an audio CD; no drive is enumerated and no copy/playback is done |
 | Premium Services | Partial: its task page says no premium services are available |
 | Full-mode menu bar (show, hide, auto-hide) | Done: `app.titleBarVisible` ("Show menu bar", `appautohidebtn`) puts the skin in a framed window under menu 102, remembered between runs; `app.titleBarAutoHide` (`titleBarAutoHide`) hides the bar, the pointer within the skin's top 3 pixels brings it back, and 500 ms after leaving the bar/skin it hides again |
-| Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Missing (an approximate FFT bar display stands in) |
+| Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Partial: Options lets the player choose Bars, Spikes, Ambience, Battery or Plenoptic, each an approximate FFT drawing; `wmpvis.dll`'s own effects are not loaded |
 | Audio effect of the equalizer, SRS WOW, crossfading, auto volume levelling | Missing |
 | Full metadata (`WM/Lyrics`, `getItemInfoByType`) | Partial: title, artist, album, duration, genre, year, track, composer, bitrate and file size, with `getItemInfoByType` and a ten-name `getAttributeName`; `WM/Lyrics` falls back to the Comment tag (Qt has no Lyrics key); album art from the file's tags or its folder's `Folder.jpg` / `AlbumArtSmall.jpg`, as `WMPImage_AlbumArtLarge` / `Small` |
 | `librarytree` element | Missing (created, not drawn) |
