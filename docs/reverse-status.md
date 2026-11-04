@@ -97,7 +97,7 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Full playlist control (columns, dragging, `dropDownList`, its shortcut menu) | Partial (selection, double-click to play, wheel scrolling) |
 | Full-screen mode with `FullScreenTopLayout` and `FullScreenBottomLayout` | Partial: the display fills the screen under both layouts, which hide after 3 s unless `pinFullScreenControls`; `fullScreenRequest`, Alt+Enter, Esc and `view.returnToMediaCenter` enter and leave it. The Customize button's full-screen playlist (`showFullScreenPlaylist`) is not drawn |
 | `theme.openDialog`; additional theme views beyond a plain window | Partial |
-| Options, Properties and Statistics dialogs | Missing |
+| Options, Properties and Statistics dialogs | Partial: Tools > Options opens a basic sheet (Shuffle, Repeat, Mute, Volume); Properties shows the current item's Title/Artist/Album/Duration/Location, play state and volume (the nearest to Statistics); wmploc.dll's own options pages and statistics counters are not read |
 | Pixel comparison with the real WMP 9 running in Wine | Missing |
 
 ---

@@ -26,6 +26,10 @@
 #include <QMediaMetaData>
 #include <QMediaPlayer>
 #include <QMenu>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QCheckBox>
+#include <QSlider>
 #include <QMenuBar>
 #include <QCursor>
 #include <QMenuBar>
@@ -186,6 +190,7 @@ enum Command {
     VolumeUp = 18815, VolumeDown = 18816, Mute = 18817, About = 57664, GoToFirst = 16000, SkinChooser = 16007,
     ShowTitle = 18791, ShowMetadata = 18787, ShowPlaylist = 18783, ShowResizeBars = 18790, ShowEnhancements = 18789,
     HideTaskbar = 19724, FullScreen = 18782, FullMode = 18780, SkinMode = 18781,
+    Properties = 18779, Options = 19498, NowPlayingOptions = 18825, OtherOptions = 19999,
 };
 
 // The Skin Chooser task: wmploc.dll's dialog 203 (its toolbar, the list of skins, the preview and
@@ -1719,7 +1724,7 @@ void MediaPlayer::connectMenu(const QHash<int, QAction *> &actions)
         const int id = it.key();
         static const QSet<int> handled{Open, OpenUrl, CloseMedia, Exit, PlayPause, Stop, Fast, Normal, Slow, Previous, Next, Rewind,
                                        FastForward, Shuffle, Repeat, VolumeUp, VolumeDown, Mute, FullScreen, HideTaskbar,
-                                       FullMode, SkinMode};
+                                       FullMode, SkinMode, Properties, Options, NowPlayingOptions, OtherOptions};
         action->setEnabled(handled.contains(id) || (id >= GoToFirst && id <= SkinChooser));
         if (id == Shuffle || id == Repeat || id == Mute) {
             action->setCheckable(true);
@@ -2001,6 +2006,60 @@ void MediaPlayer::command(int id)
     case HideTaskbar:
         set(QStringLiteral("app"), QStringLiteral("taskbarvisible"), !m_app.value(QStringLiteral("taskbarvisible")).toBool());
         break;
+    case Properties:
+    case Options:
+    case NowPlayingOptions:
+    case OtherOptions: {
+        QDialog dialog(m_window);
+        dialog.setWindowTitle(id == Properties ? tr("Properties") : tr("Options"));
+        auto *layout = new QVBoxLayout(&dialog);
+        if (id == Properties) {
+            const QUrl url = m_items.value(m_current).url;
+            const QMediaMetaData meta = m_player->metaData();
+            auto *form = new QFormLayout;
+            form->addRow(tr("Title"), new QLabel(meta.value(QMediaMetaData::Title).toString().isEmpty() ? url.fileName() : meta.value(QMediaMetaData::Title).toString()));
+            form->addRow(tr("Artist"), new QLabel(meta.value(QMediaMetaData::AlbumArtist).toString()));
+            form->addRow(tr("Album"), new QLabel(meta.value(QMediaMetaData::AlbumTitle).toString()));
+            form->addRow(tr("Duration"), new QLabel(QString::fromLatin1("%1:%2").arg(m_player->duration() / 60000).arg((m_player->duration() / 1000) % 60, 2, 10, QLatin1Char('0'))));
+            form->addRow(tr("Location"), new QLabel(url.toLocalFile()));
+            form->addRow(tr("Play state"), new QLabel(QString::number(m_playState)));
+            form->addRow(tr("Volume"), new QLabel(QString::number(qRound(m_audio->volume() * 100))));
+            layout->addLayout(form);
+        } else {
+            auto *shuffle = new QCheckBox(tr("Shuffle"), &dialog);
+            shuffle->setChecked(m_shuffle);
+            auto *repeat = new QCheckBox(tr("Repeat"), &dialog);
+            repeat->setChecked(m_loop);
+            auto *mute = new QCheckBox(tr("Mute"), &dialog);
+            mute->setChecked(m_audio->isMuted());
+            auto *volume = new QSlider(Qt::Horizontal, &dialog);
+            volume->setRange(0, 100);
+            volume->setValue(qRound(m_audio->volume() * 100));
+            layout->addWidget(shuffle);
+            layout->addWidget(repeat);
+            layout->addWidget(mute);
+            layout->addWidget(new QLabel(tr("Volume"), &dialog));
+            layout->addWidget(volume);
+            auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            layout->addWidget(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+                m_shuffle = shuffle->isChecked();
+                m_loop = repeat->isChecked();
+                m_audio->setMuted(mute->isChecked());
+                m_audio->setVolume(volume->value() / 100.0);
+                dialog.accept();
+            });
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        }
+        auto *buttons = id == Properties ? new QDialogButtonBox(QDialogButtonBox::Close, &dialog) : nullptr;
+        if (buttons) {
+            layout->addWidget(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        }
+        dialog.exec();
+        break;
+    }
     default:
         if (id >= GoToFirst && id <= SkinChooser) {
             static const char *const tasks[] = {"NowPlaying", "MediaGuide", "CDAudio", "MediaLibrary", "RadioTuner", "PortableDevice",
