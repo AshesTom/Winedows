@@ -408,7 +408,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 
 | Area | Original feature | Evidence |
 |---|---|---|
-| Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx (the native button keeps the flash colour while the window wants attention) | `sub_1002819`; user32 not reversed |
+| Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx | `sub_1002819`; user32 not reversed | Partial: the button alternates its flash state every 500 ms while `_NET_WM_STATE_DEMANDS_ATTENTION` is set; 500 ms is user32's default, not read from it |
 | Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604; Close is `EndTask(window, FALSE, Ctrl held)` (`sub_102fea7`), and a hung window's button menu offers only Close (`sub_102ed44`, `IsHungAppWindow`). Done: Ctrl+Close kills the X client at once; Close sends WM_CLOSE and, if the window is still there after HungAppTimeout (5000, `hivedef.inf`) with no window of its own owned by it (a save question), asks 603 and 604 (Yes/No) under the window's title. X has no IsHungAppWindow; `_NET_WM_PING` is not used. The hung window's reduced menu is missing |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
 | Taskbar | The taskband's extra rows (a resized bar) | Section 6 |

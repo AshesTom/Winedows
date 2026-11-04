@@ -675,6 +675,13 @@ void Taskbar::attentionChanged()
     // the flag goes with the flashing
     m_unhidFor &= attention;
     m_attention = attention;
+    if (attention.isEmpty()) {
+        m_flashTimer.stop();
+        m_flashOn = true;
+    } else if (!m_flashTimer.isActive()) {
+        m_flashOn = true;
+        m_flashTimer.start();
+    }
 }
 
 void Taskbar::setHidden(bool hidden, bool animate)
@@ -1134,12 +1141,12 @@ void Taskbar::drawButton(QPainter &painter, int index)
     w4w::Renderer *renderer = theme()->renderer();
     if (renderer) {
         Part part = withState(TASK_BUTTON, state);
-        if (attention && !active)
+        if (attention && !active && m_flashOn)
             part = TASK_FLASH;
         renderer->draw(&painter, rect, part);
     } else {
         const bool down = active || pressed;
-        if (attention && !active)
+        if (attention && !active && m_flashOn)
             painter.fillRect(rect, theme()->system(QStringLiteral("highlight"), Qt::darkBlue));
         else if (active) {
             // Windows Classic's active button: the face and white, in a checker
@@ -1156,7 +1163,8 @@ void Taskbar::drawButton(QPainter &painter, int index)
     if (!icon.isNull())
         painter.drawImage(rect.x() + iconX + down, top + down, icon);
     const int textRaise = down - theme()->scaled(renderer ? TEXT_RAISE : 0);
-    const QColor text = renderer ? renderer->colour(TASK_TOOLBAR, QStringLiteral("textcolor")).value_or(Qt::white) : QColor(attention && !active ? Qt::white : Qt::black);
+    const QColor text = renderer ? renderer->colour(TASK_TOOLBAR, QStringLiteral("textcolor")).value_or(Qt::white)
+                                 : QColor(attention && !active && m_flashOn ? Qt::white : Qt::black);
     int textX = rect.x() + iconX + theme()->scaled(ICON_SIZE + TASK_TEXT_GAP) + down;
     int textEnd = rect.right() - theme()->scaled(renderer ? TASK_TEXT_END : 4);
     QString words = task.title;

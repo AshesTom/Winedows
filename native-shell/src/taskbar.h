@@ -162,6 +162,8 @@ private:
     int m_scrollDragFromY = 0, m_scrollDragPage = 0;
     int m_scrollPage = 0, m_scrollPages = 1, m_scrollColumns = 1;
     QTimer m_scrollRepeat;
+    QTimer m_flashTimer;
+    bool m_flashOn = true;
     QList<Button> m_buttons;
     TaskbarSettings m_settings = TaskbarSettings::load();
     QFileSystemWatcher m_settingsWatcher;
