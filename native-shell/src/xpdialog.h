@@ -40,6 +40,7 @@ public:
     explicit SheetTabs(QWidget *parent = nullptr);
     void addTab(QWidget *page, const QString &text);
     void setCurrentIndex(int index);
+    void setExtraHeight(int extra);
     int currentIndex() const { return m_current; }
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
@@ -61,12 +62,12 @@ private:
     QList<QRect> m_rects;
     QRect m_pane;
     QSize m_pageSize;
-    int m_current = 0, m_hot = -1;
+    int m_current = 0, m_hot = -1, m_extraHeight = 0;
 };
 
 // A sheet's window as comctl32's template 1006 lays it out: the tabs, and the buttons at the
 // lower right, 50 x 14 dialog units each and 4 apart, 4 from the edges.
-void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &buttons);
+void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &buttons, int extraHeight = 0);
 
 // Run's place: the lower left corner of the work area, above the Start button, frame included.
 void placeLowerLeft(QWidget *window);

@@ -3,6 +3,7 @@
 
 #include "fileicons.h"
 #include "programs.h"
+#include "theme.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
@@ -446,7 +447,7 @@ void show(const QStringList &paths, QWidget *parent)
     auto *cancel = new QPushButton(QObject::tr("Cancel"), dialog);
     auto *apply = new QPushButton(QObject::tr("&Apply"), dialog);
     ok->setDefault(true);
-    xpdialog::arrangeSheet(dialog, tabs, {ok, cancel, apply});
+    xpdialog::arrangeSheet(dialog, tabs, {ok, cancel, apply}, ShellTheme::instance()->scaled(58));
     apply->setEnabled(false);
     const auto changed = [apply] { apply->setEnabled(true); };
     if (name)

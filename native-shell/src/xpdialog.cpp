@@ -285,6 +285,13 @@ void SheetTabs::addTab(QWidget *page, const QString &text)
     updateGeometry();
 }
 
+void SheetTabs::setExtraHeight(int extra)
+{
+    m_extraHeight = extra;
+    updateGeometry();
+    arrange();
+}
+
 void SheetTabs::setCurrentIndex(int index)
 {
     if (index < 0 || index >= m_texts.size())
@@ -328,7 +335,7 @@ QSize SheetTabs::sizeHint() const
     const QSize page = m_pageSize;
     const int width = page.width() + 2 * PANE_MARGIN;
     const int rows = int(rowsFor(width - 2 * SELECTED_GROW).size());
-    return QSize(width, (rows - 1) * ROW_STEP + TAB_HEIGHT - 1 + page.height() + 2 * PANE_MARGIN);
+    return QSize(width, (rows - 1) * ROW_STEP + TAB_HEIGHT - 1 + page.height() + 2 * PANE_MARGIN + m_extraHeight);
 }
 
 void SheetTabs::arrange()
@@ -445,8 +452,10 @@ void placeUpperLeft(QWidget *window)
     window->move(room.left() + frame.border, room.top() + frame.top);
 }
 
-void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &buttons)
+void arrangeSheet(QDialog *dialog, SheetTabs *tabs, const QList<QPushButton *> &buttons, int extraHeight)
 {
+    if (extraHeight)
+        tabs->setExtraHeight(extraHeight);
     auto *layout = new QVBoxLayout(dialog);
     layout->setSizeConstraint(QLayout::SetFixedSize);
     layout->setContentsMargins(unitX(4), unitY(4), unitX(4), unitY(4));
