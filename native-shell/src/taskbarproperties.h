@@ -7,6 +7,9 @@
 
 #include <QDialog>
 #include <QHash>
+#include <QImage>
+
+#include <functional>
 
 class QAbstractButton;
 class QCheckBox;
@@ -44,6 +47,8 @@ namespace traynotify {
 enum Behavior { HideWhenInactive = 0, AlwaysHide = 1, AlwaysShow = 2 };
 Behavior behavior(const QString &name);
 void setCurrent(const QStringList &names);
+// The icon of an item, as the notification area has it (Past Items have none).
+void setIconLookup(std::function<QImage(const QString &)> lookup);
 // explorer.exe's dialog 7, over PARENT
 void customize(QWidget *parent);
 } // namespace traynotify

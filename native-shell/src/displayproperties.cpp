@@ -564,8 +564,103 @@ void DisplayProperties::fillThemes()
     m_theme->addItem(text(STRING_BROWSE, "Browse..."), QStringLiteral("browse"));
 }
 
+// Customize Desktop's Change Icon: shell32's PickIconDlg over the icon groups of a file. XP browses the
+// file system; here shell32.dll and moricons.dll are offered first, and Browse... takes any file.
+struct IconChoice
+{
+    QString file, group;
+};
+
+static QListWidgetItem *addIconChoice(QListWidget *list, const QString &file, const QString &group, int size)
+{
+    const auto pe = xpfiles::resources(xpfiles::find(file));
+    if (!pe)
+        return nullptr;
+    const QImage image = xpfiles::icon(*pe, group, size);
+    if (image.isNull())
+        return nullptr;
+    auto *item = new QListWidgetItem(QIcon(QPixmap::fromImage(image)), group);
+    item->setData(Qt::UserRole, file + QLatin1Char('|') + group);
+    list->addItem(item);
+    return item;
+}
+
+static void fillIconChoices(QListWidget *list, const QString &file, int size)
+{
+    list->clear();
+    if (!xpfiles::resources(xpfiles::find(file)))
+        return;
+    const auto pe = xpfiles::resources(xpfiles::find(file));
+    if (!pe)
+        return;
+    QStringList groups = pe->names(QStringLiteral("14"));
+    std::sort(groups.begin(), groups.end(), [](const QString &a, const QString &b) {
+        bool na = false, nb = false;
+        const int ia = a.toInt(&na), ib = b.toInt(&nb);
+        if (na && nb)
+            return ia < ib;
+        if (na != nb)
+            return na;
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+    });
+    for (const QString &group : std::as_const(groups))
+        addIconChoice(list, file, group, size);
+}
+
+static bool pickDesktopIcon(QWidget *parent, IconChoice *choice)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("Change Icon"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *list = new QListWidget(&dialog);
+    list->setViewMode(QListView::IconMode);
+    list->setIconSize(QSize(32, 32));
+    list->setGridSize(QSize(64, 52));
+    list->setResizeMode(QListView::Adjust);
+    list->setMovement(QListView::Static);
+    layout->addWidget(list, 1);
+    auto *buttons = new QHBoxLayout;
+    auto *browse = new QPushButton(QObject::tr("&Browse..."), &dialog);
+    auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    ok->setDefault(true);
+    buttons->addWidget(browse);
+    buttons->addStretch(1);
+    buttons->addWidget(ok);
+    buttons->addWidget(cancel);
+    layout->addLayout(buttons);
+    QString file = choice->file.isEmpty() ? QStringLiteral("shell32.dll") : choice->file;
+    fillIconChoices(list, file, 32);
+    if (list->count() == 0 && file != QLatin1String("shell32.dll"))
+        fillIconChoices(list, QStringLiteral("shell32.dll"), 32);
+    if (list->count())
+        list->setCurrentRow(0);
+    QObject::connect(browse, &QPushButton::clicked, &dialog, [&] {
+        const QString chosen = QFileDialog::getOpenFileName(&dialog, QObject::tr("Change Icon"), QDir::rootPath(),
+                                                            QObject::tr("Programs and libraries (*.dll *.exe *.ocx *.icl);;All files (*)"));
+        if (!chosen.isEmpty()) {
+            file = chosen;
+            fillIconChoices(list, file, 32);
+            if (list->count())
+                list->setCurrentRow(0);
+        }
+    });
+    QObject::connect(ok, &QPushButton::clicked, &dialog, &QDialog::accept);
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted || !list->currentItem())
+        return false;
+    const QString value = list->currentItem()->data(Qt::UserRole).toString();
+    const qsizetype bar = value.lastIndexOf(QLatin1Char('|'));
+    if (bar <= 0)
+        return false;
+    choice->file = value.left(bar);
+    choice->group = value.mid(bar + 1);
+    return true;
+}
+
 // shell32's Desktop Items, modal to Display Properties. Here its four check boxes choose the desktop's icons
-// (DesktopIcons reads them); the icons' own pictures, the cleanup wizard and the Web page are greyed.
+// (DesktopIcons reads them); Change Icon and Restore Default change the item's picture; the cleanup wizard and
+// the Web page are greyed.
 static void showDesktopItems(QWidget *owner)
 {
     if (!shell32())
@@ -599,16 +694,81 @@ static void showDesktopItems(QWidget *owner)
         list->setWrapping(false);
         list->setIconSize(QSize(32, 32));
         list->setMovement(QListView::Static);
-        ShellTheme *theme = ShellTheme::instance();
-        const QList<QPair<int, int>> icons = {{16, 9216}, {235, 9227}, {18, 9217}, {33, 0}, {32, 0}};
+        // The list's rows and their settings keys: My Computer, My Documents, My Network Places, the
+        // Recycle Bin full and empty. Change Icon (30070) and Restore Default (30071) act on the row.
+        const QList<QPair<QString, bool>> rows = {{QStringLiteral("MyComputer"), false},
+                                                  {QStringLiteral("MyDocuments"), false},
+                                                  {QStringLiteral("MyNetworkPlaces"), false},
+                                                  {QStringLiteral("RecycleBinFull"), true},
+                                                  {QStringLiteral("RecycleBinEmpty"), true}};
+        const QList<DesktopItem> items = {DesktopItem::Computer, DesktopItem::Documents, DesktopItem::Network};
         const QString bin = xpfiles::string(*shell32(), 8964);
-        for (int i = 0; i < icons.size(); ++i) {
-            QString name = icons[i].second ? xpfiles::string(*shell32(), icons[i].second) : bin;
-            if (!icons[i].second)
-                name += QLatin1String(i == 3 ? " (full)" : " (empty)");
-            list->addItem(new QListWidgetItem(QIcon(QPixmap::fromImage(theme->shellIcon(icons[i].first, 32))), name));
+        for (int i = 0; i < rows.size(); ++i) {
+            QImage image;
+            QString name;
+            if (rows[i].second) {
+                const bool full = rows[i].first == QLatin1String("RecycleBinFull");
+                image = recycleBinIcon(full, 32);
+                name = bin + QLatin1String(full ? " (full)" : " (empty)");
+            } else {
+                image = desktopItemIcon(items[i], 32);
+                name = xpfiles::string(*shell32(), items[i] == DesktopItem::Computer ? 9216 : items[i] == DesktopItem::Documents ? 9227 : 9217);
+            }
+            auto *item = new QListWidgetItem(QIcon(QPixmap::fromImage(image)), name);
+            item->setData(Qt::UserRole, rows[i].first);
+            list->addItem(item);
         }
         list->setCurrentRow(0);
+        auto *change = qobject_cast<QPushButton *>(page.controls.value(30070));
+        auto *restore = qobject_cast<QPushButton *>(page.controls.value(30071));
+        if (change)
+            change->setEnabled(true);
+        if (restore)
+            restore->setEnabled(true);
+        const auto currentKey = [list] {
+            return list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString();
+        };
+        QObject::connect(change, &QPushButton::clicked, &dialog, [&, list, currentKey] {
+            const QString key = currentKey();
+            if (key.isEmpty())
+                return;
+            IconChoice choice;
+            const QString value = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("desktop/icon.") + key).toString();
+            const qsizetype comma = value.lastIndexOf(QLatin1Char(','));
+            if (comma > 0) {
+                choice.file = value.left(comma);
+                choice.group = value.mid(comma + 1);
+            } else {
+                choice.file = QStringLiteral("shell32.dll");
+            }
+            if (!pickDesktopIcon(&dialog, &choice))
+                return;
+            setDesktopIconOverride(key, choice.file, choice.group);
+            QImage image;
+            if (const auto pe = xpfiles::resources(xpfiles::find(choice.file)))
+                image = xpfiles::icon(*pe, choice.group, 32);
+            if (QListWidgetItem *item = list->currentItem())
+                item->setIcon(QIcon(QPixmap::fromImage(image)));
+        });
+        QObject::connect(restore, &QPushButton::clicked, &dialog, [&, list, currentKey] {
+            const QString key = currentKey();
+            if (key.isEmpty())
+                return;
+            clearDesktopIconOverride(key);
+            QImage image;
+            if (key == QLatin1String("RecycleBinFull"))
+                image = recycleBinIcon(true, 32);
+            else if (key == QLatin1String("RecycleBinEmpty"))
+                image = recycleBinIcon(false, 32);
+            else if (key == QLatin1String("MyComputer"))
+                image = desktopItemIcon(DesktopItem::Computer, 32);
+            else if (key == QLatin1String("MyDocuments"))
+                image = desktopItemIcon(DesktopItem::Documents, 32);
+            else if (key == QLatin1String("MyNetworkPlaces"))
+                image = desktopItemIcon(DesktopItem::Network, 32);
+            if (QListWidgetItem *item = list->currentItem())
+                item->setIcon(QIcon(QPixmap::fromImage(image)));
+        });
     }
     auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
     auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);

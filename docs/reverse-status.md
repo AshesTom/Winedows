@@ -137,7 +137,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Moving and resizing the unlocked taskbar (other screen edges, more rows) | Missing: unlocked, it shows its sizing bar and grippers but stays one row at the bottom |
 | Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
-| Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog lists names without icons, and the open chevron does not close by itself |
+| Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog now shows Current Items' icons (Past Items have none), and the open chevron does not close by itself |
 | Classic Start menu | Done (section 14) |
 | Both Customize dialogs (dialogs 9, 1036, 1135) | Missing (greyed) |
 | The "?" button and context help | Missing |
@@ -174,7 +174,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | File-type verbs from the registry (Print, Edit, Play, Add to Playlist…) | Missing |
 | Open With (submenu and the Open With dialog) | Missing |
 | Context menu handlers from shell extensions | Missing |
-| Send To: removable drives and the actual contents of the SendTo folder | Missing |
+| Send To: removable drives and the actual contents of the SendTo folder | Done: `~/.local/share/win4wine/SendTo`'s `.desktop` targets (their `%f`/`%F`/`%u`/`%U`) and links to folders, plus the ready, writable mounted volumes other than the root and the home (copied into); `shellmenus.cpp` `addSendToFolder` |
 | Show in Groups, Choose Details, Customize This Folder | Missing (greyed) |
 | Undo (shell32's undo stack) | Missing (greyed) |
 | Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial (Folder and Text Document only) |
@@ -339,7 +339,7 @@ Binary: `shell32.dll`. Port: [`desktopicons.cpp`](../native-shell/src/desktopico
 | Item | Source | Status |
 |---|---|---|
 | Desktop Items: My Documents (9227, icon 235), My Computer (9216, 16), My Network Places (9217, 18), Internet Explorer (9222; the default browser here), hidden by default | `shell32.dll` | Done, saved in `native-explorer.conf` `[desktop]` |
-| Customize Desktop: the Desktop Items sheet (string 30371), General (dialog 29953) and Web (29954); its check boxes are `BS_3STATE` | `shell32.dll` | Partial: the four check boxes work; the icon list is shown; Change Icon, Restore Default, the cleanup wizard and the Web page are greyed |
+| Customize Desktop: the Desktop Items sheet (string 30371), General (dialog 29953) and Web (29954); its check boxes are `BS_3STATE` | `shell32.dll` | Partial: the four check boxes work; the icon list is shown; Change Icon (30070) and Restore Default (30071) change `desktop/icon.<key>` from a file's icon groups (shell32.dll and moricons.dll first, Browse... for another file); the cleanup wizard and the Web page are greyed |
 | Icon spacing | comctl32 v6 uses SM_CXICONSPACING / SM_CYICONSPACING (`sub_30006d74`, `sub_3004487f`); the prefix says 75 x 75 | Partial: 75 px kept; XP in Wine showed 82 vertically, not explained |
 | Recycle Bin's corner place | XP in Wine (10 px left, 7 px higher than the native) | Done: the default place is the last cell's left less 10 and its top less 7, until the bin is moved |
 | Labels' drop shadow: the desktop's listview draws each label with comctl32's `DrawShadowText` (call at `0x7741a8de`: white text, black shadow, offset 2, 2). DrawShadowText (`0x77446973`) draws the text into a 32-bit DIB 10 larger, every lit pixel to 255, blurs it (`sub_774466d1`: the mean of the 4 pixels to the right, then the sum of 5 rows over 4, clamped, premultiplied with the shadow colour + 1) and AlphaBlends it at (-4, -8) plus the offset, then draws the text | `comctl32.dll` 6.0.2600.5512 | Done (`ShellTheme::drawShadowedText`, which already followed it, now used for the desktop's labels instead of a hard black copy 1 pixel off); the comparison with XP was limited by the icons' different places on the wallpaper |

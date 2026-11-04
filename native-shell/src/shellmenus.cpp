@@ -4,6 +4,7 @@
 #include "filebrowser.h"
 #include "fileicons.h"
 #include "fileops.h"
+#include "programs.h"
 #include "xpfiles.h"
 #include "xpprogram.h"
 
@@ -15,6 +16,7 @@
 #include <QMenu>
 #include <QProcess>
 #include <QStandardPaths>
+#include <QStorageInfo>
 
 namespace shellmenus {
 
@@ -64,6 +66,61 @@ void compressToZip(const QStringList &paths)
     QProcess::startDetached(QStringLiteral("bsdtar"), arguments, folder);
 }
 
+QString sendToFolder()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/SendTo");
+}
+
+// A desktop entry's command with %f, %F, %u, %U and %% filled, as a SendTo target runs.
+QStringList sendToCommand(const programs::Program &program, const QStringList &paths)
+{
+    QStringList command = program.command;
+    bool inserted = false;
+    for (QString &argument : command) {
+        if (argument == QLatin1String("%f") || argument == QLatin1String("%u")) {
+            argument = paths.value(0);
+            inserted = true;
+        } else if (argument == QLatin1String("%F") || argument == QLatin1String("%U")) {
+            argument = paths.join(QLatin1Char(' '));
+            inserted = true;
+        } else if (argument == QLatin1String("%%")) {
+            argument = QStringLiteral("%");
+        }
+    }
+    if (!inserted)
+        command += paths;
+    return command;
+}
+
+void addSendToFolder(QMenu *targets, const QStringList &paths, QWidget *parent)
+{
+    const QString folder = sendToFolder();
+    QDir().mkpath(folder);
+    const QFileInfoList entries = QDir(folder).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &entry : entries) {
+        const QString path = entry.filePath();
+        if (entry.suffix() == QLatin1String("desktop")) {
+            const auto program = programs::fromFile(path);
+            if (!program)
+                continue;
+            QIcon icon = programs::iconOf(*program);
+            if (icon.isNull())
+                icon = fileicons::shell(fileicons::Document);
+            targets->addAction(icon, program->name, parent, [program, paths] {
+                const QStringList command = sendToCommand(*program, paths);
+                if (!command.isEmpty())
+                    QProcess::startDetached(command.value(0), command.mid(1));
+            });
+        } else if (entry.isSymLink() || entry.isDir()) {
+            const QFileInfo target = entry.isSymLink() ? QFileInfo(entry.symLinkTarget()) : entry;
+            if (!target.isDir())
+                continue;
+            targets->addAction(fileicons::shell(fileicons::Folder), entry.completeBaseName(), parent,
+                               [paths, target, parent] { fileops::transfer(paths, target.absoluteFilePath(), fileops::Action::Copy, parent); });
+        }
+    }
+}
+
 void addSendTo(QMenu *menu, const QStringList &paths, QWidget *parent)
 {
     if (!shell32())
@@ -76,6 +133,20 @@ void addSendTo(QMenu *menu, const QStringList &paths, QWidget *parent)
     // which no extracted file has.
     QMenu *targets = popup->menu();
     targets->clear();
+    // XP's SendTo folder, then the removable drives the shell adds, then the built-in targets.
+    addSendToFolder(targets, paths, parent);
+    for (const QStorageInfo &volume : QStorageInfo::mountedVolumes()) {
+        if (!volume.isValid() || !volume.isReady() || volume.isReadOnly())
+            continue;
+        const QString root = volume.rootPath();
+        const QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+        if (root == QLatin1String("/") || root == home || home.startsWith(root + QLatin1Char('/')))
+            continue;
+        targets->addAction(fileicons::shell(fileicons::Drive), QObject::tr("Removable Disk (%1)").arg(volume.displayName()), parent,
+                           [paths, root, parent] { fileops::transfer(paths, root, fileops::Action::Copy, parent); });
+    }
+    if (!targets->actions().isEmpty())
+        targets->addSeparator();
     if (const auto zip = xpfiles::resources(xpfiles::find(QStringLiteral("zipfldr.dll")));
         zip && !QStandardPaths::findExecutable(QStringLiteral("bsdtar")).isEmpty())
         targets->addAction(QIcon(QPixmap::fromImage(xpfiles::icon(*zip, zip->names(QStringLiteral("14")).value(0), 16))),

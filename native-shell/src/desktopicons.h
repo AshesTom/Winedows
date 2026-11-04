@@ -19,6 +19,12 @@ class QWidget;
 enum class DesktopItem { Documents, Computer, Network, Internet };
 bool desktopItemShown(DesktopItem item);
 void setDesktopItemShown(DesktopItem item, bool shown);
+// Customize Desktop's Change Icon and Restore Default: a file and an icon group, kept as
+// desktop/icon.<key>; no setting means the item's XP default.
+QImage desktopItemIcon(DesktopItem item, int size);
+QImage recycleBinIcon(bool full, int size);
+void setDesktopIconOverride(const QString &key, const QString &file, const QString &group);
+void clearDesktopIconOverride(const QString &key);
 
 class DesktopIcons : public QObject
 {

@@ -372,6 +372,13 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         update();
     });
     connect(m_tray, &Tray::changed, this, &Taskbar::trayChanged);
+    // Customize Notifications shows each current item's icon.
+    traynotify::setIconLookup([this](const QString &name) -> QImage {
+        for (const TrayIcon &icon : m_tray->icons())
+            if (trayName(icon) == name)
+                return icon.image;
+        return QImage();
+    });
     // explorer.exe's IconDemoteTimerTick: every 5 minutes, icons idle for TrayIconResidentInterval
     // (an hour) go behind the chevron
     m_demoteTimer.setInterval(TRAY_DEMOTE_TICK_MS);

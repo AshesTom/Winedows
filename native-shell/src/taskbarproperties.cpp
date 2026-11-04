@@ -268,11 +268,22 @@ QVariantMap behaviors()
 {
     return QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("TrayNotify/Behaviors")).toMap();
 }
+
+std::function<QImage(const QString &)> &iconFinder()
+{
+    static std::function<QImage(const QString &)> lookup;
+    return lookup;
+}
 } // namespace
 
 Behavior behavior(const QString &name)
 {
     return Behavior(behaviors().value(name, int(HideWhenInactive)).toInt());
+}
+
+void setIconLookup(std::function<QImage(const QString &)> lookup)
+{
+    iconFinder() = std::move(lookup);
 }
 
 void setCurrent(const QStringList &names)
@@ -328,6 +339,11 @@ void customize(QWidget *parent)
         for (const QString &name : names) {
             auto *item = new QTreeWidgetItem(list, {name, choices.value(chosen.value(name, 0).toInt())});
             item->setData(0, Qt::UserRole, name);
+            if (iconFinder()) {
+                const QImage icon = iconFinder()(name);
+                if (!icon.isNull())
+                    item->setIcon(0, QIcon(QPixmap::fromImage(icon)));
+            }
         }
     };
     fill(STRING_CURRENT, settings.value(QStringLiteral("TrayNotify/Current")).toStringList());

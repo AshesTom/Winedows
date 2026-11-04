@@ -115,6 +115,58 @@ QString placeKey(const QString &path)
 
 } // namespace
 
+QString desktopIconKey(DesktopItem item)
+{
+    switch (item) {
+    case DesktopItem::Documents: return QStringLiteral("MyDocuments");
+    case DesktopItem::Computer: return QStringLiteral("MyComputer");
+    case DesktopItem::Network: return QStringLiteral("MyNetworkPlaces");
+    case DesktopItem::Internet: return QStringLiteral("Internet");
+    }
+    return QString();
+}
+
+QImage iconOverride(const QString &key, int size)
+{
+    const QString value = QSettings(explorerSettingsPath(), QSettings::IniFormat).value(QStringLiteral("desktop/icon.") + key).toString();
+    const qsizetype comma = value.lastIndexOf(QLatin1Char(','));
+    if (comma <= 0)
+        return QImage();
+    const QString file = value.left(comma), group = value.mid(comma + 1);
+    if (const auto pe = xpfiles::resources(xpfiles::find(file)))
+        return xpfiles::icon(*pe, group, size);
+    return QImage();
+}
+
+QImage desktopItemIcon(DesktopItem item, int size)
+{
+    const QImage custom = iconOverride(desktopIconKey(item), size);
+    if (!custom.isNull())
+        return custom;
+    for (const DesktopItemInfo &info : DESKTOP_ITEMS)
+        if (info.item == item)
+            return ShellTheme::instance()->shellIcon(info.icon, size);
+    return QImage();
+}
+
+QImage recycleBinIcon(bool full, int size)
+{
+    const QImage custom = iconOverride(full ? QStringLiteral("RecycleBinFull") : QStringLiteral("RecycleBinEmpty"), size);
+    if (!custom.isNull())
+        return custom;
+    return ShellTheme::instance()->shellIcon(full ? ICON_TRASH_FULL : ICON_TRASH_EMPTY, size);
+}
+
+void setDesktopIconOverride(const QString &key, const QString &file, const QString &group)
+{
+    QSettings(explorerSettingsPath(), QSettings::IniFormat).setValue(QStringLiteral("desktop/icon.") + key, file + QLatin1Char(',') + group);
+}
+
+void clearDesktopIconOverride(const QString &key)
+{
+    QSettings(explorerSettingsPath(), QSettings::IniFormat).remove(QStringLiteral("desktop/icon.") + key);
+}
+
 bool desktopItemShown(DesktopItem item)
 {
     for (const DesktopItemInfo &info : DESKTOP_ITEMS)
@@ -207,7 +259,7 @@ void DesktopIcons::reload()
     if (bin.name.isEmpty())
         bin.name = QStringLiteral("Recycle Bin");
     const bool full = !QDir(trashFiles()).isEmpty();
-    bin.icon = theme->shellIcon(full ? ICON_TRASH_FULL : ICON_TRASH_EMPTY, theme->scaled(ICON_SIZE));
+    bin.icon = recycleBinIcon(full, theme->scaled(ICON_SIZE));
     const QRect area = workArea();
     // XP's corner: its Recycle Bin sits 10 pixels left of the last cell's left and 7 higher than the
     // native one (measured on XP in Wine, which also lays the cells 82 pixels apart vertically).
@@ -223,7 +275,7 @@ void DesktopIcons::reload()
         item.path = QLatin1String(info.key);
         item.shell = true;
         item.name = shell32 ? xpfiles::string(*shell32, info.name) : QString();
-        item.icon = theme->shellIcon(info.icon, theme->scaled(ICON_SIZE));
+        item.icon = info.item == DesktopItem::Internet ? QImage() : desktopItemIcon(info.item, theme->scaled(ICON_SIZE));
         if (info.item == DesktopItem::Internet) {
             // The default browser stands for Internet Explorer: its name and icon
             if (const auto browser = programs::defaultBrowser()) {
