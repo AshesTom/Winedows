@@ -31,6 +31,7 @@
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QTableWidget>
+#include <QTextBrowser>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
@@ -2057,6 +2058,28 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
                 {QStringLiteral("portabledevice"), QObject::tr("No portable device is connected.")},
                 {QStringLiteral("services"), QObject::tr("No premium services are available.")},
             };
+            // The task's RT_HTML page from wmploc.dll, when it has one (Media Guide, Radio Tuner,
+            // Premium Services); its script and res:// pictures are not run.
+            static const QHash<QString, QString> pages{
+                {QStringLiteral("mediaguide"), QStringLiteral("OFFLINE_MEDIAGUIDE.HTM")},
+                {QStringLiteral("radiotuner"), QStringLiteral("OFFLINE_RADIOTUNER.HTM")},
+                {QStringLiteral("services"), QStringLiteral("OFFLINE_SUBSCRIPTIONS.HTM")},
+            };
+            if (m_loc && pages.contains(m_task.toLower())) {
+                const QByteArray html = m_loc->find(QStringLiteral("23"), pages.value(m_task.toLower()));
+                if (!html.isEmpty()) {
+                    auto *view = new QTextBrowser(parent);
+                    QPalette palette = view->palette();
+                    palette.setColor(QPalette::Base, Qt::black);
+                    palette.setColor(QPalette::Text, Qt::white);
+                    view->setPalette(palette);
+                    QString text = QString::fromUtf8(html);
+                    if (text.contains(QChar::ReplacementCharacter))
+                        text = QString::fromLatin1(html);
+                    view->setHtml(text);
+                    return view;
+                }
+            }
             const QString message = messages.value(m_task.toLower());
             if (!message.isEmpty()) {
                 auto *page = new QWidget(parent);
