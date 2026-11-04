@@ -33,6 +33,7 @@ struct TaskbarSettings
     bool quickLaunch = false;
     bool desktopBand = false;   // the Toolbars menu's Desktop band
     QString customToolbar;      // the Toolbars menu's New Toolbar... folder
+    bool linksBand = false;     // the Toolbars menu's Links band
     bool locked = true;
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title

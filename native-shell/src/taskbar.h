@@ -53,7 +53,7 @@ private:
     struct Hit
     {
         // Task: a button, a window's or a group's
-        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Desktop, Custom, Chevron, ScrollUp, ScrollDown } kind = None;
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Desktop, Custom, Link, Chevron, ScrollUp, ScrollDown } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
     };
@@ -76,9 +76,11 @@ private:
     void loadQuickLaunch();
     void loadDesktopBand();
     void loadCustomToolbar();
+    void loadLinksBand();
     void runQuickItem(int index);
     void runDesktopItem(int index);
     void runCustomItem(int index);
+    void runLinkItem(int index);
     void toggleDesktop();
     void themeChanged();
     void relayout();
@@ -164,6 +166,9 @@ private:
     QList<QuickItem> m_customItems;
     QRect m_customBand;
     QFileSystemWatcher m_customWatcher;
+    QList<QuickItem> m_linksItems;
+    QRect m_linksBand;
+    QFileSystemWatcher m_linksWatcher;
     // Hide inactive icons: when each icon last changed or was clicked, the ones hidden, the chevron
     // (TrayNotifyHoriz::Button) and whether it has them all shown
     QHash<quint32, qint64> m_trayActive;

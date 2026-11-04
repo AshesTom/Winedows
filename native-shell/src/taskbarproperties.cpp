@@ -88,6 +88,7 @@ TaskbarSettings TaskbarSettings::load()
     loaded.quickLaunch = settings.value(QStringLiteral("Taskbar/QuickLaunch"), false).toBool();
     loaded.desktopBand = settings.value(QStringLiteral("Taskbar/DesktopBand"), false).toBool();
     loaded.customToolbar = settings.value(QStringLiteral("Taskbar/CustomToolbar")).toString();
+    loaded.linksBand = settings.value(QStringLiteral("Taskbar/LinksBand"), false).toBool();
     loaded.locked = !settings.value(QStringLiteral("Taskbar/TaskbarSizeMove"), false).toBool();
     loaded.onTop = settings.value(QStringLiteral("Taskbar/AlwaysOnTop"), true).toBool();
     loaded.quickLaunchText = settings.value(QStringLiteral("Taskbar/QuickLaunchText"), false).toBool();
@@ -122,6 +123,7 @@ void TaskbarSettings::save() const
         settings.remove(QStringLiteral("Taskbar/CustomToolbar"));
     else
         settings.setValue(QStringLiteral("Taskbar/CustomToolbar"), customToolbar);
+    settings.setValue(QStringLiteral("Taskbar/LinksBand"), linksBand);
     settings.setValue(QStringLiteral("Taskbar/TaskbarSizeMove"), !locked);
     settings.setValue(QStringLiteral("Taskbar/AlwaysOnTop"), onTop);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchText"), quickLaunchText);

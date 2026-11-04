@@ -459,7 +459,8 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         if (settings.group == m_settings.group && settings.groupSize == m_settings.groupSize
             && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
             && settings.quickLaunch == m_settings.quickLaunch && settings.desktopBand == m_settings.desktopBand
-            && settings.customToolbar == m_settings.customToolbar && settings.locked == m_settings.locked
+            && settings.customToolbar == m_settings.customToolbar && settings.linksBand == m_settings.linksBand
+            && settings.locked == m_settings.locked
             && settings.onTop == m_settings.onTop
             && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle
             && settings.quickLaunchLargeIcons == m_settings.quickLaunchLargeIcons
@@ -476,6 +477,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
             loadQuickLaunch();
         loadDesktopBand();
         loadCustomToolbar();
+        loadLinksBand();
         setOnTop();
         updateTrayHiding();
         if (autoHide) {
@@ -509,6 +511,12 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     loadCustomToolbar();
     connect(&m_customWatcher, &QFileSystemWatcher::directoryChanged, this, [this] {
         loadCustomToolbar();
+        relayout();
+        update();
+    });
+    loadLinksBand();
+    connect(&m_linksWatcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        loadLinksBand();
         relayout();
         update();
     });
@@ -750,6 +758,19 @@ void Taskbar::relayout()
         }
         m_customBand = QRect(first, 0, int(m_customItems.size()) * width, barHeight());
         bandStart = first + int(m_customItems.size()) * width + theme()->scaled(QUICK_BAND_END);
+    }
+    m_linksBand = QRect();
+    for (QuickItem &item : m_linksItems)
+        item.rect = QRect();
+    if (!m_linksItems.isEmpty()) {
+        const int first = bandStart;
+        const int width = theme()->scaled(QUICK_WIDTH);
+        for (int i = 0; i < m_linksItems.size(); ++i) {
+            const int height = renderer ? barHeight() : theme()->scaled(22);
+            m_linksItems[i].rect = QRect(first + i * width, renderer ? 0 : (barHeight() - height) / 2, width, height);
+        }
+        m_linksBand = QRect(first, 0, int(m_linksItems.size()) * width, barHeight());
+        bandStart = first + int(m_linksItems.size()) * width + theme()->scaled(QUICK_BAND_END);
     }
     if (header) {
         m_grippers.append(QRect(bandStart, 0, header, barHeight()));
@@ -1308,6 +1329,25 @@ void Taskbar::paintEvent(QPaintEvent *)
                                                        (item.rect.height() - theme()->scaled(ICON_SIZE)) / 2);
         painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
     }
+    for (int i = 0; i < m_linksItems.size(); ++i) {
+        const QuickItem &item = m_linksItems[i];
+        if (item.rect.isNull())
+            continue;
+        const Hit hit{Hit::Link, i};
+        const bool pressed = m_pressed == hit && m_hover == hit;
+        if (pressed || m_hover == hit) {
+            if (w4w::Renderer *renderer = theme()->renderer()) {
+                if (!renderer->draw(&painter, item.rect, withState(QUICK_BUTTON, pressed ? Pressed : Hot)))
+                    theme()->raised(painter, item.rect, pressed);
+            } else {
+                theme()->raised(painter, item.rect, pressed);
+            }
+        }
+        const int shift = pressed ? 1 : 0;
+        const QPoint at = item.rect.topLeft() + QPoint((item.rect.width() - theme()->scaled(ICON_SIZE)) / 2,
+                                                       (item.rect.height() - theme()->scaled(ICON_SIZE)) / 2);
+        painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
+    }
     for (int i = 0; i < m_buttons.size(); ++i)
         drawButton(painter, i);
     drawScrollbar(painter);
@@ -1341,6 +1381,12 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
     for (int i = 0; i < m_customItems.size(); ++i)
         if (m_customItems[i].rect.contains(at)) {
             hit.kind = Hit::Custom;
+            hit.index = i;
+            return hit;
+        }
+    for (int i = 0; i < m_linksItems.size(); ++i)
+        if (m_linksItems[i].rect.contains(at)) {
+            hit.kind = Hit::Link;
             hit.index = i;
             return hit;
         }
@@ -1422,7 +1468,7 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
             showStartMenu(false);
         return;
     }
-    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Desktop || hit.kind == Hit::Custom || hit.kind == Hit::Chevron
+    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Desktop || hit.kind == Hit::Custom || hit.kind == Hit::Link || hit.kind == Hit::Chevron
                                                || hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown)) {
         m_pressed = hit;
         update();
@@ -1455,6 +1501,11 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     if (hit.kind == Hit::Custom && hit.index < m_customItems.size()) {
         if (event->button() == Qt::LeftButton && pressed == hit)
             runCustomItem(hit.index);
+        return;
+    }
+    if (hit.kind == Hit::Link && hit.index < m_linksItems.size()) {
+        if (event->button() == Qt::LeftButton && pressed == hit)
+            runLinkItem(hit.index);
         return;
     }
     if (hit.kind == Hit::Quick && hit.index < m_quickItems.size()) {
@@ -1720,6 +1771,14 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
             });
         }
         if (toolbars) {
+            auto *links = toolbars->addAction(tr("&Links"));
+            links->setCheckable(true);
+            links->setChecked(m_settings.linksBand);
+            connect(links, &QAction::triggered, this, [](bool on) {
+                TaskbarSettings settings = TaskbarSettings::load();
+                settings.linksBand = on;
+                settings.save();
+            });
             QAction *first = menu->actions().value(0);
             menu->insertMenu(first, toolbars);
             menu->insertSeparator(first);
@@ -1900,6 +1959,47 @@ void Taskbar::loadCustomToolbar()
             item.icon = fileicons::image(file, size);
         m_customItems.append(item);
     }
+}
+
+void Taskbar::loadLinksBand()
+{
+    m_linksItems.clear();
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Favorites/Links");
+    QDir().mkpath(folder);
+    if (!m_linksWatcher.directories().contains(folder))
+        m_linksWatcher.addPath(folder);
+    if (!m_settings.linksBand)
+        return;
+    const int size = theme()->scaled(ICON_SIZE);
+    const QFileInfoList files = QDir(folder).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &file : files) {
+        QuickItem item;
+        item.path = file.filePath();
+        item.name = file.completeBaseName();
+        if (file.suffix() == QLatin1String("desktop")) {
+            if (const auto program = programs::fromFile(file.filePath())) {
+                item.name = program->name;
+                item.icon = programs::iconOf(*program).pixmap(size).toImage();
+            }
+        }
+        if (item.icon.isNull())
+            item.icon = fileicons::image(file, size);
+        m_linksItems.append(item);
+    }
+}
+
+void Taskbar::runLinkItem(int index)
+{
+    if (index < 0 || index >= m_linksItems.size())
+        return;
+    const QuickItem &item = m_linksItems[index];
+    const QFileInfo file(item.path);
+    if (file.suffix() == QLatin1String("desktop")) {
+        if (const auto program = programs::fromFile(item.path))
+            programs::launch(*program);
+        return;
+    }
+    programs::open(item.path);
 }
 
 void Taskbar::runCustomItem(int index)

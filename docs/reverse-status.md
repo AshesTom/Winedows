@@ -118,7 +118,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Quick Launch: its buttons themed `TaskBar::Toolbar.Button` (the task buttons' art without an edge), 23 wide and the band's height, the icon at (3, 7); the task band 4 pixels after the last button | `luna.msstyles`; XP's taskbar in Wine, locked and unlocked (grippers at 104 and 164) | Done; the 4-pixel band gap is read from the unlocked bar's grippers, since that test bar showed no task buttons |
 | Unlocked: `TaskBar.SizingBarBottom` (4 rows) above the bar, and a 10-pixel band header with `TaskBar::Rebar.Gripper` (6 wide, tiled down) before each band | XP's taskbar in Wine, unlocked: identical rows 734 to 767 apart from the icons | Done; saved as `Taskbar/TaskbarSizeMove`, from the sheet and the taskbar menu's Lock the Taskbar |
 | Keep the taskbar on top: off, the bar is in the windows' order and comes up when clicked | XP's behaviour (ABS_ALWAYSONTOP) | Done: `_NET_WM_STATE_BELOW`, which bridge-wm honours; saved as `Taskbar/AlwaysOnTop` |
-| The Toolbars submenu: browseui's band site menu 268 (Desktop 3, Quick Launch 4, New Toolbar 1) | `browselc.dll` | Done: Quick Launch, Desktop and New Toolbar (a folder chosen with a directory dialog, `Taskbar/CustomToolbar`) |
+| The Toolbars submenu: browseui's band site menu 268 (Desktop 3, Quick Launch 4, New Toolbar 1) | `browselc.dll` | Done: Quick Launch, Desktop, Links (added by IE's deskband in XP) and New Toolbar (a folder chosen with a directory dialog, `Taskbar/CustomToolbar`) |
 | Quick Launch's Show Text: one width for every button, the widest name's, the name 4 after the icon and 4 before the end, in TaskBar::Toolbar's white; Show Title: the folder's name at the band's start in TaskBar::Rebar's text colour (123 182 232) | XP's taskbar in Wine | Done: identical pixels |
 | The band's menu (unlocked, on its gripper or title): View (Large Icons, Small Icons), Open Folder, Show Text, Show Title, Close Toolbar, then the taskbar's | `browselc.dll` menus 258, 256 and 257; XP's taskbar in Wine | Done |
 | Quick Launch's View > Large Icons: the 32-pixel icons, a button every 39 pixels (32 + 7, as 16 + 7 for the small ones), the icon 3 in and 7 down; the bar grows from 30 to 46 rows (the icon and 14, as 16 and 14 make 30), under the unlocked bar's 4 sizing rows | XP's taskbar in Wine, unlocked, View > Large Icons on the Quick Launch band: icons at 117 and 156, 32 wide, from row 729, the bar's top at 718 (50 rows with the sizing bar) | Done: identical bar top and icon places (an earlier port used 24-pixel icons in 44-pixel buttons, which XP does not). Windows Classic's height not measured. Saved as `Taskbar/QuickLaunchLargeIcons` |
@@ -136,7 +136,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 |---|---|
 | Moving and resizing the unlocked taskbar (other screen edges, more rows) | Missing: unlocked, it shows its sizing bar and grippers but stays one row at the bottom |
 | Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
-| The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Partial: the Desktop band lists the Desktop folder's files and New Toolbar lists a chosen folder's, as 16-pixel buttons (`Taskbar/DesktopBand`, `Taskbar/CustomToolbar`); the Links band and the deskbands are missing |
+| The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Partial: the Desktop band lists the Desktop folder's files, Links lists `Favorites/Links` and New Toolbar a chosen folder, as 16-pixel buttons (`Taskbar/DesktopBand`, `Taskbar/LinksBand`, `Taskbar/CustomToolbar`); the deskbands are missing |
 | Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog now shows Current Items' icons (Past Items have none), and the open chevron closes on a click elsewhere on the bar (but not in another application) |
 | Classic Start menu | Done (section 14) |
 | Both Customize dialogs (dialogs 9, 1036, 1135) | Partial: the classic Start menu's dialog 9 and the Start panel's property sheet (General 1135, Advanced 1036) open from Taskbar and Start Menu Properties. Dialog 9's four tree options work; the Start panel's places tree, program count, icon size, recent documents and hover-open are saved and read. Add/Remove/Advanced/Sort/Clear and the pages' Clear List buttons are greyed |
@@ -395,7 +395,7 @@ bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`p
 ## 13. What explorer.exe does that is not ported yet
 
 The largest blocks still open, across the sections: Windows Media Player's Media Library and visualizations, Show in
-Groups, the Picture and Fax Viewer's annotations, printing wizard and help, the Links band, moving and sizing the
+Groups, the Picture and Fax Viewer's annotations, printing wizard and help, moving and sizing the
 taskbar, the file Properties sheet's height (58 pixels short), and the remaining parts of the Customize Start Menu
 dialogs (Add, Remove, Sort, Clear) and of Open With.
 
@@ -412,7 +412,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604 |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
 | Taskbar | The taskband's extra rows (a resized bar), and the scrollbar's thumb and tracks | Section 6 |
-| Taskbar | Links band; deskbands | Section 2 |
+| Taskbar | Deskbands such as Windows Media Player's | Section 2 |
 | Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings |
 | Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7 |
 | Start menu | Pin to Start menu, dragging items in the panel and in All Programs, Sort by Name | shell32's verbs; StartMenu band |
