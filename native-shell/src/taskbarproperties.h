@@ -23,6 +23,7 @@ struct TaskbarSettings
     bool group = true;
     bool clock = true;
     bool autoHide = false;   // StuckRects2's ABS_AUTOHIDE
+    bool quickLaunch = false;   // the Quick Launch band in the taskbar's rebar
     static TaskbarSettings load();
     void save() const;
 };

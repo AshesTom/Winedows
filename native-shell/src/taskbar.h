@@ -49,7 +49,7 @@ private:
     struct Hit
     {
         // Task: a button, a window's or a group's
-        enum Kind { None, Start, Task, TrayIcon, Clock, Band } kind = None;
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
     };
@@ -61,6 +61,17 @@ private:
         QRect rect;         // null when it does not fit
     };
 
+    // Quick Launch: the shortcuts of its folder, a toolbar band between the Start button and the
+    // tasks (browseui's ISF band, themed TaskBar::Toolbar)
+    struct QuickItem
+    {
+        QString path, name;
+        QImage icon;
+        QRect rect;
+    };
+    void loadQuickLaunch();
+    void runQuickItem(int index);
+    void toggleDesktop();
     void themeChanged();
     void relayout();
     void layoutButtons(int bandStart, int bandEnd);
@@ -100,6 +111,8 @@ private:
     QFileSystemWatcher m_settingsWatcher;
     QSet<QString> m_grouped;   // the programs whose windows share a button
     QList<QRect> m_trayIconRects;
+    QList<QuickItem> m_quickItems;
+    QFileSystemWatcher m_quickWatcher;
     arrange::Undo m_undo;
     int m_undoString = 0;      // explorer.exe's name for what Undo puts back
     Hit m_hover, m_pressed;

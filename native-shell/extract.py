@@ -49,6 +49,8 @@ ICON_FILES = {
     'browseui.dll': 'system32', 'blue_ss.dll': 'themes/Luna/Shell/NormalColor', 'home_ss.dll': 'themes/Luna/Shell/Homestead',
     'metal_ss.dll': 'themes/Luna/Shell/Metallic', 'timedate.cpl': 'cpl', 'mmsys.cpl': 'cpl', 'sysdm.cpl': 'cpl',
     'nusrmgr.cpl': 'cpl', 'appwiz.cpl': 'cpl', 'ncpa.cpl': 'cpl',
+    # The taskbar's Toolbars menu (browseui's band site menu)
+    'browselc.dll': 'system32',
     # The Start menu's Set Program Access and Defaults picture
     'moricons.dll': 'system32',
     # Windows Classic's colour schemes (schemes.conf is made from it)

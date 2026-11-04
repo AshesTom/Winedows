@@ -9,6 +9,8 @@
 #include "applets.h"
 #include "balloon.h"
 #include "filebrowser.h"
+#include "fileicons.h"
+#include "programs.h"
 #include "sessiondialog.h"
 #include "sounds.h"
 #include "startmenu.h"
@@ -18,6 +20,9 @@
 #include "xpprogram.h"
 
 #include <QApplication>
+#include <QFileInfo>
+#include <QCoreApplication>
+#include <QSettings>
 #include <QCursor>
 #include <QDateTime>
 #include <QFile>
@@ -62,6 +67,8 @@ const int TASK_ICON_X = 10, TASK_ICON_Y = 7, TASK_TEXT_GAP = 3, TASK_TEXT_END = 
 const int GROUP_ARROW_WIDTH = 5, GROUP_ARROW_GAP = 4;
 // explorer.exe's menus: the taskbar's (205) and a group's (210), their commands, and Undo's words
 const int MENU_TASKBAR = 205, MENU_GROUP = 210;
+// browselc.dll's band site menu (Toolbars) and its Quick Launch
+const int MENU_BANDS = 268, CMD_BAND_QUICK_LAUNCH = 4;
 enum {
     CMD_CASCADE = 403, CMD_TILE_HORIZONTALLY = 404, CMD_TILE_VERTICALLY = 405, CMD_SHOW_DESKTOP = 407, CMD_ADJUST_TIME = 408,
     CMD_PROPERTIES = 413, CMD_UNDO = 416, CMD_TASK_MANAGER = 420, CMD_CUSTOMIZE_NOTIFICATIONS = 421, CMD_LOCK = 424,
@@ -84,6 +91,13 @@ enum { Normal = 1, Hot = 2, Pressed = 3, Checked = 5, HotChecked = 6 };
 const Part START_BUTTON{QStringLiteral("button"), {}, {}, 1, QStringLiteral("start")};
 const Part TASK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskband")};
 const Part TASK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("taskband")};
+// The Quick Launch toolbar's buttons: 23 wide (the icon and comctl32's 7 of padding) and the band's
+// height, their art (TaskBar::Toolbar.Button, the task buttons' without an edge) showing rows 3 to 27
+// as the task buttons'; measured on XP's with the taskbar locked: icons at 107 and 130, 7 rows down,
+// the hot frame from 104, the task band 4 after the last button.
+const Part QUICK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskbar")};
+const int QUICK_WIDTH = 23, QUICK_ICON_X = 3, QUICK_ICON_Y = 7, QUICK_BAND_END = 4;
+const int ICON_SHOW_DESKTOP = 3;    // explorer.exe's fourth icon, Show Desktop's
 const Part TASK_FLASH{QStringLiteral("taskband"), QStringLiteral("flashbutton"), {}, 1, {}};
 const Part BACKGROUND{QStringLiteral("taskbar"), QStringLiteral("backgroundbottom"), {}, 1, {}};
 const Part TRAY_BACKGROUND{QStringLiteral("traynotify"), QStringLiteral("background"), {}, 1, QStringLiteral("traynotifyhoriz")};
@@ -91,6 +105,12 @@ const Part CLOCK{QStringLiteral("clock"), {}, {}, 0, QStringLiteral("traynotify"
 const Part GROUP_COUNT{QStringLiteral("taskband"), QStringLiteral("groupcount"), {}, 0, {}};
 const Part GROUP_LIST{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("taskbandgroupmenu")};
 const Part GROUP_LIST_ITEM{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 2, QStringLiteral("taskbandgroupmenu")};
+
+// Quick Launch's folder, the one XP keeps under Application Data\Microsoft\Internet Explorer
+QString quickLaunchFolder()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Quick Launch");
+}
 
 Part withState(Part part, int state)
 {
@@ -326,7 +346,8 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     tickClock();
     const auto reloadSettings = [this] {
         const TaskbarSettings settings = TaskbarSettings::load();
-        if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide)
+        if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
+            && settings.quickLaunch == m_settings.quickLaunch)
             return;
         const bool autoHide = settings.autoHide != m_settings.autoHide;
         m_settings = settings;
@@ -343,6 +364,12 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     QDir().mkpath(settingsFolder);
     m_settingsWatcher.addPath(settingsFolder);
     connect(&m_settingsWatcher, &QFileSystemWatcher::directoryChanged, this, reloadSettings);
+    loadQuickLaunch();
+    connect(&m_quickWatcher, &QFileSystemWatcher::directoryChanged, this, [this] {
+        loadQuickLaunch();
+        relayout();
+        update();
+    });
     // bridge-wm and the session's supervisor know XP's taskbar by this class.
     x11::setString(winId(), "_WIN4WINE_CLASS", "Shell_TrayWnd");
 }
@@ -475,6 +502,14 @@ void Taskbar::relayout()
         m_startRect = QRect(theme()->scaled(2), theme()->scaled(4), startWidth, height() - theme()->scaled(6));
         bandStart = m_startRect.right() + 1 + theme()->scaled(6);
     }
+    // Quick Launch's band first, its buttons from the band's start
+    for (int i = 0; i < m_quickItems.size(); ++i)
+        m_quickItems[i].rect = m_settings.quickLaunch
+            ? QRect(bandStart + i * theme()->scaled(QUICK_WIDTH), renderer ? 0 : (height() - theme()->scaled(22)) / 2,
+                    theme()->scaled(QUICK_WIDTH), renderer ? height() : theme()->scaled(22))
+            : QRect();
+    if (m_settings.quickLaunch)
+        bandStart += int(m_quickItems.size()) * theme()->scaled(QUICK_WIDTH) + theme()->scaled(QUICK_BAND_END);
 
     const QFontMetrics clockMetrics(m_clockFont);
     const int icons = int(m_tray->icons().size());
@@ -759,6 +794,31 @@ void Taskbar::paintEvent(QPaintEvent *)
         painter.drawLine(0, 1, width(), 1);
     }
     drawStart(painter);
+    for (int i = 0; i < m_quickItems.size(); ++i) {
+        const QuickItem &item = m_quickItems[i];
+        if (item.rect.isNull())
+            continue;
+        const Hit hit{Hit::Quick, i};
+        const bool pressed = m_pressed == hit && m_hover == hit;
+        if (pressed || m_hover == hit) {
+            w4w::Renderer *renderer = theme()->renderer();
+            if (!renderer || !renderer->draw(&painter, item.rect, withState(QUICK_BUTTON, pressed ? Pressed : Hot))) {
+                // Windows Classic's flat toolbar: a raised edge under the pointer, sunk when pressed
+                const QColor light = theme()->system(QStringLiteral("btnhighlight"), Qt::white);
+                const QColor dark = theme()->system(QStringLiteral("btnshadow"), Qt::gray);
+                painter.setPen(pressed ? dark : light);
+                painter.drawLine(item.rect.topLeft(), item.rect.topRight());
+                painter.drawLine(item.rect.topLeft(), item.rect.bottomLeft());
+                painter.setPen(pressed ? light : dark);
+                painter.drawLine(item.rect.bottomLeft(), item.rect.bottomRight());
+                painter.drawLine(item.rect.topRight(), item.rect.bottomRight());
+            }
+        }
+        const int shift = pressed ? 1 : 0;
+        const QPoint at = theme()->renderer() ? item.rect.topLeft() + QPoint(theme()->scaled(QUICK_ICON_X), theme()->scaled(QUICK_ICON_Y))
+                                              : item.rect.topLeft() + QPoint((item.rect.width() - 16) / 2, (item.rect.height() - 16) / 2);
+        painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
+    }
     for (int i = 0; i < m_buttons.size(); ++i)
         drawButton(painter, i);
     drawTray(painter);
@@ -771,6 +831,12 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
         hit.kind = Hit::Start;
         return hit;
     }
+    for (int i = 0; i < m_quickItems.size(); ++i)
+        if (m_quickItems[i].rect.contains(at)) {
+            hit.kind = Hit::Quick;
+            hit.index = i;
+            return hit;
+        }
     for (int i = 0; i < m_buttons.size(); ++i)
         if (m_buttons[i].rect.contains(at)) {
             hit.kind = Hit::Task;
@@ -827,7 +893,7 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
             showStartMenu(false);
         return;
     }
-    if (event->button() == Qt::LeftButton && hit.kind == Hit::Task) {
+    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick)) {
         m_pressed = hit;
         update();
     }
@@ -845,6 +911,13 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     const Hit pressed = m_pressed;
     m_pressed = Hit();
     update();
+    if (hit.kind == Hit::Quick && hit.index < m_quickItems.size()) {
+        if (event->button() == Qt::LeftButton && pressed == hit)
+            runQuickItem(hit.index);
+        else if (event->button() == Qt::RightButton)
+            showTaskbarMenu(event->globalPosition().toPoint(), false);
+        return;
+    }
     if (hit.kind == Hit::Task && hit.index < m_buttons.size()) {
         const Button &button = m_buttons[hit.index];
         const QPoint global = event->globalPosition().toPoint();
@@ -896,6 +969,8 @@ bool Taskbar::event(QEvent *event)
         }
         else if (hit.kind == Hit::TrayIcon && hit.index < m_tray->icons().size())
             text = m_tray->icons()[hit.index].tooltip;
+        else if (hit.kind == Hit::Quick && hit.index < m_quickItems.size())
+            text = m_quickItems[hit.index].name;
         else if (hit.kind == Hit::Clock)
             text = QLocale::system().toString(QDate::currentDate(), QLocale::LongFormat);
         if (text.isEmpty())
@@ -1038,6 +1113,31 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray)
             taskManager = QStandardPaths::findExecutable(QLatin1String(name));
     if (QAction *action = actions.value(CMD_TASK_MANAGER))
         action->setEnabled(!taskManager.isEmpty());
+    // Toolbars: browseui's band site menu (browselc.dll's 268) above the rest, as the tray puts it.
+    // Of its bands this taskbar has Quick Launch; Desktop, New Toolbar and the deskbands are greyed.
+    if (const auto browselc = xpfiles::resources(xpfiles::find(QStringLiteral("browselc.dll")))) {
+        // the template's first popup holds the "&Toolbars" popup
+        auto *holder = new QMenu(menu);
+        const QHash<int, QAction *> bands = xpprogram::fillMenu(holder, *browselc, MENU_BANDS);
+        QMenu *toolbars = holder->actions().isEmpty() ? nullptr : holder->actions().first()->menu();
+        for (auto it = bands.begin(); it != bands.end(); ++it)
+            if (!it.value()->menu())
+                it.value()->setEnabled(it.key() == CMD_BAND_QUICK_LAUNCH);
+        if (QAction *quick = bands.value(CMD_BAND_QUICK_LAUNCH)) {
+            quick->setCheckable(true);
+            quick->setChecked(m_settings.quickLaunch);
+            connect(quick, &QAction::triggered, this, [](bool on) {
+                TaskbarSettings settings = TaskbarSettings::load();
+                settings.quickLaunch = on;
+                settings.save();
+            });
+        }
+        if (toolbars) {
+            QAction *first = menu->actions().value(0);
+            menu->insertMenu(first, toolbars);
+            menu->insertSeparator(first);
+        }
+    }
     // This taskbar cannot move or change its size.
     if (QAction *lock = actions.value(CMD_LOCK)) {
         lock->setCheckable(true);
@@ -1064,7 +1164,7 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray)
             m_undo.clear();
             break;
         case CMD_SHOW_DESKTOP:
-            x11::sendToManager(x11::root(), "_NET_SHOWING_DESKTOP", {quint32(desktopShown ? 0 : 1)});
+            toggleDesktop();
             break;
         case CMD_TASK_MANAGER:
             QProcess::startDetached(taskManager, {});
@@ -1140,4 +1240,90 @@ void Taskbar::endSession(const char *request)
         QProcess::startDetached(QStringLiteral("systemctl"), {qstrcmp(request, "reboot") == 0 ? QStringLiteral("reboot") : QStringLiteral("poweroff")});
     }
     QApplication::quit();
+}
+
+void Taskbar::loadQuickLaunch()
+{
+    const QString folder = quickLaunchFolder();
+    if (!QFileInfo::exists(folder)) {
+        // As XP's setup fills it: Show Desktop (shell.inf's command file), the browser and the player
+        QDir().mkpath(folder);
+        QFile desktop(QDir(folder).filePath(QStringLiteral("Show Desktop.scf")));
+        if (desktop.open(QIODevice::WriteOnly))
+            desktop.write("[Shell]\r\nCommand=2\r\nIconFile=explorer.exe,3\r\n[Taskbar]\r\nCommand=ToggleDesktop\r\n");
+        desktop.close();
+        if (const auto browser = programs::defaultBrowser())
+            if (const QString entry = QStandardPaths::locate(QStandardPaths::ApplicationsLocation, browser->id); !entry.isEmpty())
+                QFile::copy(entry, QDir(folder).filePath(browser->id));
+        QFile player(QDir(folder).filePath(QStringLiteral("Windows Media Player.desktop")));
+        if (player.open(QIODevice::WriteOnly))
+            player.write(QStringLiteral("[Desktop Entry]\nType=Application\nName=Windows Media Player\nExec=%1\n")
+                             .arg(QFileInfo(QCoreApplication::applicationFilePath()).dir().filePath(QStringLiteral("wmplayer")))
+                             .toUtf8());
+    }
+    if (!m_quickWatcher.directories().contains(folder))
+        m_quickWatcher.addPath(folder);
+
+    m_quickItems.clear();
+    const int size = theme()->scaled(ICON_SIZE);
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    QFileInfoList files = QDir(folder).entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+    // the folder's order: by name, as a new Quick Launch band lists it
+    std::sort(files.begin(), files.end(), [](const QFileInfo &a, const QFileInfo &b) {
+        return QString::localeAwareCompare(a.completeBaseName(), b.completeBaseName()) < 0;
+    });
+    for (const QFileInfo &file : std::as_const(files)) {
+        QuickItem item;
+        item.path = file.filePath();
+        item.name = file.completeBaseName();
+        if (file.suffix().compare(QLatin1String("scf"), Qt::CaseInsensitive) == 0) {
+            if (explorer) {
+                // ExtractIcon's index: the icon groups in the resource directory's order, by number
+                QStringList groups = explorer->names(QStringLiteral("14"));
+                std::sort(groups.begin(), groups.end(), [](const QString &a, const QString &b) { return a.toInt() < b.toInt(); });
+                item.icon = xpfiles::icon(*explorer, groups.value(ICON_SHOW_DESKTOP), size);
+            }
+        } else if (file.suffix() == QLatin1String("desktop")) {
+            const auto program = programs::fromFile(file.filePath());
+            if (!program)
+                continue;
+            item.name = program->name;
+            if (QFileInfo(program->command.value(0)).fileName() == QLatin1String("wmplayer")) {
+                // the player's own icon, wmploc.dll's 102
+                if (const auto loc = xpfiles::resources(xpfiles::find(QStringLiteral("wmploc.dll"))))
+                    item.icon = xpfiles::icon(*loc, 102, size);
+            } else {
+                item.icon = programs::iconOf(*program).pixmap(size).toImage();
+            }
+        }
+        if (item.icon.isNull())
+            item.icon = fileicons::image(file, size);
+        m_quickItems.append(item);
+    }
+}
+
+void Taskbar::toggleDesktop()
+{
+    const QList<quint32> showing = x11::property32(x11::root(), x11::atom("_NET_SHOWING_DESKTOP"));
+    const bool shown = !showing.isEmpty() && showing.first();
+    x11::sendToManager(x11::root(), "_NET_SHOWING_DESKTOP", {quint32(shown ? 0 : 1)});
+}
+
+void Taskbar::runQuickItem(int index)
+{
+    const QuickItem &item = m_quickItems[index];
+    const QFileInfo file(item.path);
+    if (file.suffix().compare(QLatin1String("scf"), Qt::CaseInsensitive) == 0) {
+        // a shell command file: [Taskbar] Command=ToggleDesktop is Show Desktop
+        const QSettings scf(item.path, QSettings::IniFormat);
+        if (scf.value(QStringLiteral("Taskbar/Command")).toString().compare(QLatin1String("ToggleDesktop"), Qt::CaseInsensitive) == 0)
+            toggleDesktop();
+        return;
+    }
+    if (file.suffix() == QLatin1String("desktop")) {
+        if (const auto program = programs::fromFile(item.path))
+            programs::launch(*program);
+        return;
+    }
+    programs::open(file.isSymLink() ? file.symLinkTarget() : item.path);
 }

@@ -111,7 +111,10 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Taskbar preview: 145 when auto-hidden, otherwise 146 + 1 (unlocked) + 2 (not grouping) + 4 (no Quick Launch) | `FUN_01038be8`, `FUN_0103750d`; `{control, step}` table at `0x1038c7c` | Done |
 | Notification area preview: 180 + 1 (no clock) + 2 (not hiding inactive icons) | Table at `0x1038c6c` | Done |
 | Start menu preview: 170, or 171 for the classic menu | `FUN_01038a95`, `FUN_0103a4d5` | Done |
-| Page initialisation (TaskbarGlomming, HideClock, policy restrictions) | `FUN_01039650` | Done for the three supported settings |
+| Page initialisation (TaskbarGlomming, HideClock, policy restrictions) | `FUN_01039650` | Done for the four supported settings |
+| Quick Launch: its buttons themed `TaskBar::Toolbar.Button` (the task buttons' art without an edge), 23 wide and the band's height, the icon at (3, 7); the task band 4 pixels after the last button | `luna.msstyles`; XP's taskbar in Wine, locked and unlocked (grippers at 104 and 164) | Done; the 4-pixel band gap is read from the unlocked bar's grippers, since that test bar showed no task buttons |
+| The Toolbars submenu: browseui's band site menu 268 (Desktop 3, Quick Launch 4, New Toolbar 1) | `browselc.dll` | Done for Quick Launch; the others are greyed |
+| Show Desktop: `Show Desktop.scf` with `[Taskbar] Command=ToggleDesktop`, explorer.exe's icon index 3 | XP's setup (`shell.inf`) | Done |
 | Auto-hide: flags at tray `+0x44` (1 on, 2 hidden); a 500 ms check (timer 2) hides the bar when the pointer is off it; a move on the hidden bar wider than SM_CXDOUBLECLK x SM_CYDOUBLECLK arms timer 3 (50 ms), which shows it | `FUN_01030c59`, `FUN_01021ff7`, `FUN_0101f7be`, `FUN_01032b15` | Done |
 | The hidden rectangle: the bar's top at the monitor's bottom less SM_CYFRAME / 2 (2 rows) | `FUN_0100a3cb`, `FUN_01030b04`; metrics stored at `0x101a0ae` | Done |
 | The slide: the centre moved in proportion to the time, a frame each 20 ms, 400 ms hiding and 200 ms showing (`+0x4f0`, `+0x4f4`, set at `0x101858a`) | `FUN_01032865` | Done; the slide always runs (XP's runs only with menu animation on) |
@@ -121,7 +124,8 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Original feature | Status |
 |---|---|
 | Lock the taskbar, Keep on top | Missing (greyed, showing the taskbar's actual state); Auto-hide is done and saved as `Taskbar/AutoHide` |
-| Show Quick Launch, and the Quick Launch toolbar itself | Missing |
+| Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`; dragging items onto it, its shortcut menu and the chevron for overflow are missing |
+| The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
 | Hide inactive icons and Customize Notifications (dialog 7) | Missing |
 | Classic Start menu and both Customize dialogs (dialogs 9, 1036, 1135) | Missing |
 | The "?" button and context help | Missing |
