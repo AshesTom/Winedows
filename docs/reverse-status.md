@@ -45,7 +45,8 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Attribute names (DISPID to name) | `wmp.dll` TYPELIB (MSFT format), read at run time | Done |
 | `jscript:`, `wmpprop:`, `wmpenabled:` and `wmpdisabled:` prefixes | `FUN_4b630f93` | Done |
 | Predefined `.wms` objects (PlayButton, SeekSlider, PlayElement…) and their default attributes | `wmp.dll` REGISTRY scripts under `MediaPlayer\Objects` | Done |
-| `mediacenter` defaults: AppColorLight `#6071BF`, AppColorMedium `#394472`, AppColorDark `#212741`, ItemPlayingColor `#89E116`, ItemErrorColor `#FAAC4C`, PlaylistWidth 186, MetadataHeight 160, SettingsHeight 135, UserDisplayView `VizView` | Second argument of the registry getters (`sub_4b5de80d`, `sub_4b71b186`) | Done for these values; Partial for the boolean settings, which were chosen by hand |
+| `mediacenter` defaults: AppColorLight `#6071BF`, AppColorMedium `#394472`, AppColorDark `#212741`, ItemPlayingColor `#89E116`, ItemErrorColor `#FAAC4C`, PlaylistWidth 186, MetadataHeight 160, SettingsHeight 135, UserDisplayView `VizView`; ShowTitles 1, ShowEffects 1, ShowCaptions 0, SnapToVideo 1, VizAutoSelect 0, VideoZoom 100, CaptionsHeight 100, PlaylistHeight 100, SettingsWidth 100, UserWMPShowSettings 0, UserWMPShowMetadata 1 | Second argument of the registry getters (`sub_4b5de80d`, `sub_4b71b186`): each is a "push default, push name, call" sequence | Done; ShowPlaylist, ShowResizeBars and QuickHide have no getter found and are chosen by hand |
+| Default album art: 520/521 any media, 525/526 audio, 527/528 video, 529/530 CD, 531/532 DVD (75 and 200 pixels) | `wmploc.dll` RT_BITMAP sizes and content; `MediaInfo.js` asks `helper.getCurrentArtID(large)` | Partial: the pairing is read from the bitmaps, not from `getCurrentArtID`'s code, which was not located |
 | Plugin views (VizView, VideoView, BorderView, EQView, SRSView…) and their class IDs | `wmp.dll` `.data` table at `0x4b9b3130` | Partial: the view-to-skin mapping is inferred from names, not from the plugins' code |
 | Event argument names (`NewState`, `Item`, `bstrItemName`…) | `_WMPOCXEvents` in the type library | Done (transcribed) |
 | Main menu (File, View, Play, Tools, Help) and command IDs | Menu 102 of `wmploc.dll` | Done |
@@ -87,9 +88,9 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Full-mode menu bar (show, hide, auto-hide) | Missing (only the Play menu, as a popup) |
 | Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Missing (an approximate FFT bar display stands in) |
 | Audio effect of the equalizer, SRS WOW, crossfading, auto volume levelling | Missing |
-| Full metadata (`WM/Lyrics`, album art, `getItemInfoByType`) | Partial (title, artist, album, duration) |
+| Full metadata (`WM/Lyrics`, `getItemInfoByType`) | Partial (title, artist, album, duration; album art from the file's tags or its folder's `Folder.jpg` / `AlbumArtSmall.jpg`, as `WMPImage_AlbumArtLarge` / `Small`) |
 | `listbox`/`popup`, `editbox` and `librarytree` elements | Missing (created, not drawn or interactive) |
-| Full playlist control (columns, selection, dragging, `dropDownList`) | Partial (read-only list) |
+| Full playlist control (columns, dragging, `dropDownList`, its shortcut menu) | Partial (selection, double-click to play, wheel scrolling) |
 | Full-screen mode with `FullScreenTopLayout` and `FullScreenBottomLayout` | Missing |
 | `theme.openDialog`; additional theme views beyond a plain window | Partial |
 | Options, Properties and Statistics dialogs | Missing |

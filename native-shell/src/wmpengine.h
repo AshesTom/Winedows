@@ -178,6 +178,8 @@ private:
     void paintButtonGroup(QPainter &painter, Element *element, const QRect &rect);
     void paintEffects(QPainter &painter, Element *element, const QRect &rect);
     void paintPlaylist(QPainter &painter, Element *element, const QRect &rect);
+    // the playlist's row under POINT, or -1; its lines are Tahoma 8 as it paints them
+    int playlistRow(Element *element, const QPoint &point) const;
     Element *hit(Element *element, const QPoint &point, const QPoint &origin, int *button) const;
     bool interactive(const Element *element) const;
     void setHover(Element *element, int button);
@@ -206,6 +208,7 @@ private:
     Element *m_hover = nullptr;
     int m_hoverButton = -1;
     Element *m_pressed = nullptr;
+    int m_playlistSelected = -1, m_playlistTop = 0;
     int m_pressedButton = -1;
     QTimer m_timer;                            // view.timerInterval
     QTimer m_animation;                        // moveTo, alphaBlendTo, scrolling text

@@ -67,6 +67,7 @@ private:
 
     std::optional<wmpskin::Node> skin(const QString &name) const;
     QString text(int id) const;
+    QImage albumArt(bool large) const;
     QVariant mediaProperty(int index, const QString &name);
     QVariant mediaCall(int index, const QString &name, const QVariantList &arguments);
     bool controlAvailable(const QString &name) const;

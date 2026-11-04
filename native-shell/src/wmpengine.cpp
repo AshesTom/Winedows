@@ -1223,7 +1223,9 @@ QImage SkinView::imageOf(const Element *element, const QString &name) const
     static QHash<QString, QImage> cache;
     const QString id = url + QLatin1Char('|') + m_folder + QLatin1Char('|') + QString::number(mapping ? 0 : hue) + QLatin1Char('|')
         + QString::number(mapping ? 1 : saturation) + QLatin1Char('|') + key.name() + (automatic ? QStringLiteral("|auto") : QString());
-    auto it = cache.constFind(id);
+    // the media's own pictures change with it: never kept
+    const bool media = url.startsWith(QLatin1String("WMPImage_"), Qt::CaseInsensitive);
+    auto it = media ? cache.constEnd() : cache.constFind(id);
     if (it != cache.constEnd())
         return *it;
     const QImage source = m_model->image(url, m_folder);
@@ -1232,7 +1234,8 @@ QImage SkinView::imageOf(const Element *element, const QString &name) const
     if (automatic && !mapping && !source.isNull())
         key = QColor::fromRgb(source.pixel(0, 0));
     const QImage result = mapping ? source : prepared(source, key, hue, saturation);
-    cache.insert(id, result);
+    if (!media)
+        cache.insert(id, result);
     return result;
 }
 
@@ -1530,16 +1533,35 @@ void SkinView::paintPlaylist(QPainter &painter, Element *element, const QRect &r
     QColor playing = toColor(property(element, QStringLiteral("itemplayingcolor")));
     if (!playing.isValid())
         playing = QColor(QStringLiteral("#8EEB6E"));
+    QColor selected = toColor(property(element, QStringLiteral("itemselectedcolor")));
+    if (!selected.isValid())
+        selected = QColor(QStringLiteral("#3F5A86"));
     painter.setClipRect(rect, Qt::IntersectClip);
-    for (int i = 0; i < items.size(); ++i) {
-        const QRect row(rect.x() + 4, rect.y() + 2 + i * line, rect.width() - 8, line);
+    m_playlistTop = qBound(0, m_playlistTop, qMax(0, int(items.size()) - 1));
+    for (int i = m_playlistTop; i < items.size(); ++i) {
+        const QRect row(rect.x() + 4, rect.y() + 2 + (i - m_playlistTop) * line, rect.width() - 8, line);
         if (row.top() > rect.bottom())
             break;
+        if (i == m_playlistSelected)
+            painter.fillRect(row.adjusted(-2, 0, 2, 0), selected);
         const QStringList columns = items[i].toStringList();
         painter.setPen(i == current ? playing : foreground);
         painter.drawText(row, Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(columns.value(0), Qt::ElideRight, row.width() - 40));
         painter.drawText(row, Qt::AlignRight | Qt::AlignVCenter, columns.value(1));
     }
+}
+
+int SkinView::playlistRow(Element *element, const QPoint &point) const
+{
+    const QRect rect = rectOf(element);
+    QFont font(QStringLiteral("Tahoma"));
+    font.setPointSizeF(8);
+    const int line = QFontMetrics(font).height() + 2;
+    if (!rect.contains(point) || point.y() < rect.y() + 2)
+        return -1;
+    const int row = m_playlistTop + (point.y() - rect.y() - 2) / line;
+    const int count = int(m_model->call(QStringLiteral("player"), QStringLiteral("playlistnames"), {}).toList().size());
+    return row < count ? row : -1;
 }
 
 // ---- the mouse ----
@@ -1690,6 +1712,8 @@ void SkinView::mousePressEvent(QMouseEvent *event)
         fireMouse(target, QStringLiteral("onmousedown"), event);
         if (target->tag == QLatin1String("slider") || target->tag == QLatin1String("customslider"))
             dragSlider(target, event->position().toPoint());
+        else if (target->tag == QLatin1String("playlist"))
+            m_playlistSelected = playlistRow(target, event->position().toPoint());
         update();
         return;
     }
@@ -1782,6 +1806,15 @@ void SkinView::mouseDoubleClickEvent(QMouseEvent *event)
 {
     int button = -1;
     Element *target = m_view ? hit(m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
+    if (target && target->tag == QLatin1String("playlist") && enabled(target)) {
+        // a double-click plays the item, as the playlist control does
+        if (const int row = playlistRow(target, event->position().toPoint()); row >= 0) {
+            m_playlistSelected = row;
+            m_model->call(QStringLiteral("player"), QStringLiteral("playlistplay"), {row});
+            update();
+        }
+        return;
+    }
     if (target && target != m_view && target->handlers.contains(QStringLiteral("ondblclick")))
         fireMouse(target, QStringLiteral("ondblclick"), event);
     else if (m_view && (!target || !interactive(target)))
@@ -1794,6 +1827,11 @@ void SkinView::wheelEvent(QWheelEvent *event)
 {
     int button = -1;
     Element *target = m_view ? hit(m_view, event->position().toPoint(), QPoint(), &button) : nullptr;
+    if (target && target->tag == QLatin1String("playlist")) {
+        m_playlistTop = qMax(0, m_playlistTop + (event->angleDelta().y() > 0 ? -3 : 3));
+        update();
+        return;
+    }
     if (target && (target->tag == QLatin1String("slider")) && enabled(target)) {
         const double min = toDouble(property(target, QStringLiteral("min"))), max = toDouble(property(target, QStringLiteral("max")), 100);
         const double step = (max - min) / 20 * (event->angleDelta().y() > 0 ? 1 : -1);

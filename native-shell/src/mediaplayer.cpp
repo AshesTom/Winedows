@@ -76,7 +76,11 @@ const QHash<QString, QStringList> &playerEvents()
     return events;
 }
 
-// mediacenter's settings and wmp.dll's defaults for them (its registry getters' second arguments).
+// mediacenter's settings and wmp.dll's defaults for them: the value its registry getters are given just
+// before the setting's name (push default, push name, call: ShowTitles 1, ShowEffects 1, ShowCaptions 0,
+// SnapToVideo 1, VizAutoSelect 0, VideoZoom 100, CaptionsHeight 100, PlaylistHeight 100, SettingsWidth 100,
+// UserWMPShowSettings 0, UserWMPShowMetadata 1, the colours and the panes' sizes). ShowPlaylist,
+// ShowResizeBars and QuickHide are not read from the registry there; they are chosen here.
 QHash<QString, QVariant> mediacenterDefaults()
 {
     return {
@@ -92,10 +96,10 @@ QHash<QString, QVariant> mediacenterDefaults()
         {QStringLiteral("itemplayingbackgroundcolor"), QStringLiteral("#000000")},
         {QStringLiteral("itemerrorcolor"), QStringLiteral("#FAAC4C")},
         {QStringLiteral("playlistwidth"), 186},
-        {QStringLiteral("playlistheight"), 186},
+        {QStringLiteral("playlistheight"), 100},
         {QStringLiteral("metadatawidth"), 186},
         {QStringLiteral("metadataheight"), 160},
-        {QStringLiteral("settingswidth"), 186},
+        {QStringLiteral("settingswidth"), 100},
         {QStringLiteral("settingsheight"), 135},
         {QStringLiteral("userdisplayview"), QStringLiteral("VizView")},
         {QStringLiteral("userwmpdisplayview"), QStringLiteral("VizView")},
@@ -110,7 +114,8 @@ QHash<QString, QVariant> mediacenterDefaults()
         {QStringLiteral("userwmpmetadatapreset"), 0},
         {QStringLiteral("usershowsettings"), false},
         {QStringLiteral("userwmpshowsettings"), false},
-        {QStringLiteral("userwmpshowmetadata"), false},
+        {QStringLiteral("userwmpshowmetadata"), true},
+        {QStringLiteral("metadataretrieval"), 3},
         {QStringLiteral("displaypreset"), 0},
         {QStringLiteral("settingspreset"), 0},
         {QStringLiteral("metadatapreset"), 0},
@@ -128,7 +133,7 @@ QHash<QString, QVariant> mediacenterDefaults()
         {QStringLiteral("showsettings"), false},
         {QStringLiteral("showresizebars"), true},
         {QStringLiteral("showplaylist"), true},
-        {QStringLiteral("showmetadata"), false},
+        {QStringLiteral("showmetadata"), true},
         {QStringLiteral("fullscreenavailable"), false},
         {QStringLiteral("fullscreenrequest"), false},
         {QStringLiteral("quickhide"), false},
@@ -142,7 +147,7 @@ QHash<QString, QVariant> mediacenterDefaults()
         {QStringLiteral("vizrequest"), 0},
         {QStringLiteral("vizautoselect"), false},
         {QStringLiteral("captionsheight"), 100},
-        {QStringLiteral("snaptovideo"), false},
+        {QStringLiteral("snaptovideo"), true},
         {QStringLiteral("pinfullscreencontrols"), false},
     };
 }
@@ -337,6 +342,10 @@ MediaPlayer::MediaPlayer(const QStringList &files)
         emit fired(QStringLiteral("player"), QStringLiteral("mediachange"),
                    {QVariant::fromValue(wmp::ObjectRef{QStringLiteral("player.currentmedia")})});
         emit fired(QStringLiteral("player"), QStringLiteral("currentmediaitemavailable"), {QStringLiteral("Title")});
+        if (!albumArt(true).isNull()) {
+            emit fired(QStringLiteral("player"), QStringLiteral("currentmediaitemavailable"), {QStringLiteral("WMPImage_AlbumArtLarge")});
+            emit fired(QStringLiteral("player"), QStringLiteral("currentmediaitemavailable"), {QStringLiteral("WMPImage_AlbumArtSmall")});
+        }
     });
     connect(m_player, &QMediaPlayer::hasVideoChanged, this, [this](bool video) {
         if (!video)
@@ -567,7 +576,7 @@ bool MediaPlayer::isMethod(const QString &object, const QString &name) const
     static const QHash<QString, QSet<QString>> methods{
         {QStringLiteral("player"), {QStringLiteral("launchurl"), QStringLiteral("close"), QStringLiteral("newmedia"),
                                     QStringLiteral("newplaylist"), QStringLiteral("openplayer"), QStringLiteral("playlistnames"),
-                                    QStringLiteral("playlistcurrent")}},
+                                    QStringLiteral("playlistcurrent"), QStringLiteral("playlistplay")}},
         {QStringLiteral("player.controls"), {QStringLiteral("play"), QStringLiteral("pause"), QStringLiteral("stop"), QStringLiteral("next"),
                                              QStringLiteral("previous"), QStringLiteral("fastforward"), QStringLiteral("fastreverse"),
                                              QStringLiteral("isavailable"), QStringLiteral("playitem"), QStringLiteral("step"),
@@ -895,6 +904,10 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
             return names;
         } else if (name == QLatin1String("playlistcurrent")) {
             return m_current;
+        } else if (name == QLatin1String("playlistplay")) {
+            const int index = arguments.value(0).toInt();
+            if (index >= 0 && index < m_items.size())
+                playIndex(index);
         }
         return {};
     }
@@ -1001,6 +1014,15 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
             return m_player->hasVideo() ? QStringLiteral("VideoView") : m_mediacenter.value(QStringLiteral("userdisplayview")).toString();
         if (name == QLatin1String("viewpresetcount"))
             return 1;
+        if (name == QLatin1String("getcurrentartid")) {
+            // wmploc.dll's art in pairs, 75 and 200 pixels: 520/521 any media, 525/526 music, 527/528 video
+            // (529/530 a CD, 531/532 a DVD)
+            const bool large = arguments.value(0).toBool();
+            int small = 520;
+            if (m_current >= 0)
+                small = m_player->hasVideo() ? 527 : 525;
+            return large ? small + 1 : small;
+        }
         if (name == QLatin1String("calclayout")) {
             calcLayout(arguments.value(0).toInt(), arguments.value(1).toInt(), arguments.value(2).toBool(), arguments.value(3).toBool());
             return {};
@@ -1059,6 +1081,9 @@ QImage MediaPlayer::image(const QString &url, const QString &skinFolder)
 {
     if (url.isEmpty())
         return {};
+    // the media's own picture: its tags' cover, or the Folder.jpg and AlbumArtSmall.jpg WMP keeps beside it
+    if (url.startsWith(QLatin1String("WMPImage_AlbumArt"), Qt::CaseInsensitive))
+        return albumArt(url.endsWith(QLatin1String("Large"), Qt::CaseInsensitive));
     static QHash<QString, QImage> cache;
     const QString key = skinFolder + QLatin1Char('|') + url;
     if (auto it = cache.constFind(key); it != cache.constEnd())
@@ -1102,6 +1127,28 @@ QImage MediaPlayer::image(const QString &url, const QString &skinFolder)
     }
     cache.insert(key, image);
     return image;
+}
+
+QImage MediaPlayer::albumArt(bool large) const
+{
+    if (m_current < 0 || m_current >= m_items.size())
+        return {};
+    const QMediaMetaData data = m_player->metaData();
+    for (const QMediaMetaData::Key key : {QMediaMetaData::CoverArtImage, QMediaMetaData::ThumbnailImage}) {
+        const QImage picture = data.value(key).value<QImage>();
+        if (!picture.isNull())
+            return picture;
+    }
+    const QUrl url = m_items[m_current].url;
+    if (!url.isLocalFile())
+        return {};
+    const QDir folder = QFileInfo(url.toLocalFile()).absoluteDir();
+    for (const QString &name : large ? QStringList{QStringLiteral("Folder.jpg"), QStringLiteral("AlbumArtSmall.jpg")}
+                                     : QStringList{QStringLiteral("AlbumArtSmall.jpg"), QStringLiteral("Folder.jpg")})
+        for (const QString &entry : folder.entryList({name}, QDir::Files))   // whatever its case
+            if (const QImage picture(folder.filePath(entry)); !picture.isNull())
+                return picture;
+    return {};
 }
 
 QString MediaPlayer::string(const QString &url)
