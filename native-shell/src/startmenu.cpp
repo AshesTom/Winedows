@@ -940,7 +940,13 @@ void StartPanel::build(QPoint bottomLeft)
         tip(TIP_RUN);
     }
     const auto browser = programs::defaultBrowser(), mail = programs::defaultMail();
-    const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0);
+    const QStringList pinnedIds = QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat)
+                                      .value(QStringLiteral("StartMenu/Pinned")).toStringList();
+    QList<programs::Program> pinnedPrograms;
+    for (const QString &id : pinnedIds)
+        if (const auto program = programs::find(id))
+            pinnedPrograms.append(*program);
+    const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0) + int(pinnedPrograms.size());
     const int recentPrograms = qBound(0, panelSettings.panelMinMFU, 30);
     const int leftHeight = theme->scaled((classic ? CLASSIC_TOP : LEFT_TOP) + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + recentPrograms * LEFT_SMALL + LEFT_LINE) + moreHeight;
     const int bodyHeight = std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(classic ? CLASSIC_BODY_END : BODY_END), leftHeight});
@@ -971,11 +977,16 @@ void StartPanel::build(QPoint bottomLeft)
         m_items.append(line);
         y += theme->scaled(LEFT_LINE);
     }
+    for (const programs::Program &program : std::as_const(pinnedPrograms)) {
+        addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
+        m_items.last().tip = program.comment;
+        m_items.last().programId = program.id;
+    }
     // (Asking for two more: the browser and the mail may be among them.)
     int added = 0;
     const QList<programs::Program> used = programs::mostUsed(recentPrograms + 2);
     for (const programs::Program &program : used) {
-        if ((browser && program.id == browser->id) || (mail && program.id == mail->id))
+        if ((browser && program.id == browser->id) || (mail && program.id == mail->id) || pinnedIds.contains(program.id))
             continue;
         if (added++ >= recentPrograms)
             break;
@@ -1504,9 +1515,21 @@ void StartPanel::mouseReleaseEvent(QMouseEvent *event)
         const QPoint at = event->position().toPoint();
         for (const Item &item : std::as_const(m_items))
             if (!item.separator && !item.programId.isEmpty() && item.rect.contains(at)) {
+                QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+                QStringList pinned = settings.value(QStringLiteral("StartMenu/Pinned")).toStringList();
+                const bool isPinned = pinned.contains(item.programId);
                 QMenu menu;
-                QAction *remove = menu.addAction(explorerString(8225, "Remove from This List"));
-                if (menu.exec(global) == remove) {
+                QAction *pin = menu.addAction(xpfiles::shellString(isPinned ? 5382 : 5381, isPinned ? "Unp&in from Start menu" : "P&in to Start menu"));
+                QAction *remove = isPinned ? nullptr : menu.addAction(explorerString(8225, "Remove from This List"));
+                QAction *chosen = menu.exec(global);
+                if (chosen == pin) {
+                    if (isPinned)
+                        pinned.removeAll(item.programId);
+                    else
+                        pinned.append(item.programId);
+                    settings.setValue(QStringLiteral("StartMenu/Pinned"), pinned);
+                    close();
+                } else if (remove && chosen == remove) {
                     programs::removeUse(item.programId);
                     close();
                 }
