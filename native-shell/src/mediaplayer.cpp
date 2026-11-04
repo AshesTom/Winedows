@@ -1028,6 +1028,31 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
             const int index = arguments.value(0).toInt();
             if (index >= 0 && index < m_items.size())
                 playIndex(index);
+        } else if (name == QLatin1String("playlistlibrary")) {
+            // the drop-down list's All Music: the Music folder into the current playlist
+            m_player->stop();
+            m_items.clear();
+            m_current = -1;
+            QStringList patterns;
+            for (const QString &filter : mediaFilters())
+                patterns.append(filter.mid(2));
+            QDirIterator it(QStandardPaths::writableLocation(QStandardPaths::MusicLocation), QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString path = it.next();
+                const QFileInfo info(path);
+                if (!patterns.contains(info.suffix().toLower(), Qt::CaseInsensitive))
+                    continue;
+                Item item;
+                item.url = QUrl::fromLocalFile(path);
+                item.title = info.completeBaseName();
+                item.artist = info.dir().dirName();
+                item.album = info.dir().dirName();
+                m_items.append(item);
+            }
+            emit fired(QStringLiteral("player"), QStringLiteral("playlistchange"), {1});
+            emit fired(QStringLiteral("player"), QStringLiteral("currentplaylistchange"), {1});
+            changedAll(QStringLiteral("player.currentplaylist"), {"count"});
+            return {};
         }
         return {};
     }

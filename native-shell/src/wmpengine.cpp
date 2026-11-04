@@ -800,6 +800,12 @@ QVariant SkinView::property(const Element *element, const QString &name) const
                 return QFontMetrics(textFont(element, false)).horizontalAdvance(property(element, QStringLiteral("value")).toString());
         }
     }
+    if (tag == QLatin1String("playlist")) {
+        if (name == QLatin1String("dropdownvisible"))
+            return false;
+        if (name == QLatin1String("dropdownlist"))
+            return QStringLiteral("showAll");
+    }
     if (tag == QLatin1String("buttongroup") && name == QLatin1String("buttoncount")) {
         int count = 0;
         for (const Element *child : element->children)
@@ -1877,9 +1883,12 @@ void SkinView::paintPlaylist(QPainter &painter, Element *element, const QRect &r
     if (!selected.isValid())
         selected = QColor(QStringLiteral("#3F5A86"));
     painter.setClipRect(rect, Qt::IntersectClip);
+    // the drop-down selector sits at the right edge, as PLAYLIST.dropDownVisible says
+    const bool dropdown = toBool(property(element, QStringLiteral("dropdownvisible")), false);
+    const int dropdownWidth = dropdown ? 14 : 0;
     m_playlistTop = qBound(0, m_playlistTop, qMax(0, int(items.size()) - 1));
     for (int i = m_playlistTop; i < items.size(); ++i) {
-        const QRect row(rect.x() + 4, rect.y() + 2 + (i - m_playlistTop) * line, rect.width() - 8, line);
+        const QRect row(rect.x() + 4, rect.y() + 2 + (i - m_playlistTop) * line, rect.width() - 8 - dropdownWidth, line);
         if (row.top() > rect.bottom())
             break;
         if (i == m_playlistSelected)
@@ -1898,6 +1907,27 @@ void SkinView::paintPlaylist(QPainter &painter, Element *element, const QRect &r
         }
         painter.drawText(QRect(row.x(), row.y(), row.width(), row.height()), Qt::AlignRight | Qt::AlignVCenter, columns.value(1));
     }
+    if (dropdown) {
+        const QRect button(rect.right() - dropdownWidth, rect.y(), dropdownWidth, qMin(rect.height(), line + 4));
+        painter.fillRect(button, background.isValid() ? background.darker(140) : QColor(32, 32, 32));
+        painter.setPen(foreground);
+        const QPoint centre = button.center();
+        painter.drawPolygon(QPolygonF({QPointF(centre.x() - 3, centre.y() - 1), QPointF(centre.x() + 3, centre.y() - 1),
+                                       QPointF(centre.x(), centre.y() + 3)}));
+    }
+}
+
+bool SkinView::playlistDropDown(const QPoint &point) const
+{
+    // the pointer is on the drop-down selector, not a row
+    if (!m_view)
+        return false;
+    int button = -1;
+    Element *target = hit(m_view, point, QPoint(), &button);
+    if (!target || target->tag != QLatin1String("playlist") || !toBool(property(target, QStringLiteral("dropdownvisible")), false))
+        return false;
+    const QRect rect = rectOf(target);
+    return point.x() >= rect.right() - 14 && point.y() < rect.y() + QFontMetrics(QFont(QStringLiteral("Tahoma"), 8)).height() + 6;
 }
 
 int SkinView::playlistRow(Element *element, const QPoint &point) const
@@ -2053,6 +2083,29 @@ void SkinView::mousePressEvent(QMouseEvent *event)
     if (qEnvironmentVariableIntValue("WMP_DEBUG") > 2)
         fprintf(stderr, "wmp: press %d,%d on %s %s button %d\n", event->position().toPoint().x(), event->position().toPoint().y(),
                 target ? qPrintable(target->tag) : "-", target ? qPrintable(target->values.value(QStringLiteral("id")).toString()) : "", button);
+    // the playlist's drop-down selector lists the current playlist and the library's music
+    if (target && target->tag == QLatin1String("playlist") && event->button() == Qt::LeftButton && playlistDropDown(event->position().toPoint())) {
+        QMenu menu;
+        QAction *current = menu.addAction(QObject::tr("Current playlist"));
+        current->setCheckable(true);
+        current->setChecked(true);
+        const QString list = toBool(property(target, QStringLiteral("dropdownvisible")), false)
+            ? property(target, QStringLiteral("dropdownlist")).toString().toLower() : QStringLiteral("showall");
+        if (list == QLatin1String("showcd"))
+            menu.addAction(QObject::tr("Audio CD (not available)"))->setEnabled(false);
+        else if (list == QLatin1String("showradio"))
+            menu.addAction(QObject::tr("Radio Tuner (not available)"))->setEnabled(false);
+        else if (list != QLatin1String("showcurrent"))
+            menu.addAction(QObject::tr("All Music"))->setData(QStringLiteral("library"));
+        QAction *chosen = menu.exec(event->globalPosition().toPoint());
+        if (chosen && chosen != current && chosen->data().toString() == QLatin1String("library")) {
+            m_model->call(QStringLiteral("player"), QStringLiteral("playlistlibrary"), {});
+            m_playlistTop = 0;
+            m_playlistSelected = -1;
+            update();
+        }
+        return;
+    }
     m_pressed = nullptr;
     m_pressedButton = -1;
     if (target && interactive(target) && enabled(target)) {
