@@ -29,6 +29,8 @@ std::optional<Program> fromFile(const QString &path);
 QIcon iconOf(const Program &program);
 // Starts it and counts the use, for the Start menu's most used programs.
 void launch(const Program &program);
+// Starts it with FILES, filling %f, %F, %u, %U and %% (or appending them).
+void launchWith(const Program &program, const QStringList &files);
 // Programs by their uses, most used first.
 QList<Program> mostUsed(int count);
 // The user's default programs, through xdg-settings and xdg-mime.

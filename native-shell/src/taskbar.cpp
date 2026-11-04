@@ -72,7 +72,7 @@ const int TASK_MAX_WIDTH = 160, EDGE = 2, GROUP_CHARS = 8, BAND_END = 3;
 const double TASK_MIN_FACTOR = 1.8;
 const int CLASSIC_SPACING = 3;      // TB_SETMETRICS' cxButtonSpacing without a visual style; 0 with one
 const int TASK_ICON_X = 10, TASK_ICON_Y = 7, TASK_TEXT_GAP = 3, TASK_TEXT_END = 7;
-const int GROUP_ARROW_WIDTH = 5, GROUP_ARROW_GAP = 4;
+const int GROUP_ARROW_WIDTH = 13, GROUP_ARROW_GAP = 4;   // SM_CYMENUCHECK, the toolbar's dxDDArrowChar
 // explorer.exe's menus: the taskbar's (205) and a group's (210), their commands, and Undo's words
 const int MENU_TASKBAR = 205, MENU_GROUP = 210;
 // browselc.dll's band site menu (Toolbars) and its Quick Launch
@@ -1014,11 +1014,16 @@ void Taskbar::drawButton(QPainter &painter, int index)
         painter.setPen(renderer ? renderer->colour(GROUP_COUNT, QStringLiteral("textcolor")).value_or(QColor(255, 204, 109)) : text);
         painter.drawText(countRect, Qt::AlignCenter | Qt::TextSingleLine, count);
         textX = countRect.right() + 1;
+        // comctl32's dropdown arrow: DrawScrollArrow in a dxDDArrowChar-wide (SM_CYMENUCHECK) rect at
+        // the button's right, in Marlett (pager.cpp: DrawCharButton).
         const int arrowWidth = theme()->scaled(GROUP_ARROW_WIDTH);
-        const int arrowX = textEnd - arrowWidth + 1 + down, arrowY = rect.y() + (rect.height() - arrowWidth / 2 - 1) / 2 + textRaise;
-        for (int row = 0; row <= arrowWidth / 2; ++row)
-            painter.fillRect(arrowX + row, arrowY + row, arrowWidth - 2 * row, 1, text);
-        textEnd = arrowX - theme()->scaled(GROUP_ARROW_GAP) - down;
+        const QRect arrowRect(textEnd - arrowWidth + 1 + down, rect.y() + textRaise, arrowWidth, rect.height() - textRaise);
+        QFont glyphs(QStringLiteral("Marlett"));
+        glyphs.setPixelSize(qMax(1, qMin(arrowWidth, arrowRect.height()) - 2));
+        painter.setFont(glyphs);
+        painter.setPen(text);
+        painter.drawText(arrowRect, Qt::AlignCenter, QStringLiteral("6"));
+        textEnd = arrowRect.left() - theme()->scaled(GROUP_ARROW_GAP) - down;
         words = task.appName;
     }
     const int textWidth = textEnd - textX;

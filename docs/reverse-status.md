@@ -171,8 +171,8 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 
 | Original feature | Status |
 |---|---|
-| File-type verbs from the registry (Print, Edit, Play, Add to Playlist…) | Missing |
-| Open With (submenu and the Open With dialog) | Missing |
+| File-type verbs from the registry (Print, Edit, Play, Add to Playlist…) | Partial: text, INI, INF, BAT and CMD files get Edit (Notepad) and Print (`lpr`), media files get Play (Media Player), from `hivecls.inf`'s `txtfile`/`batfile` and `AVIFile` verbs; the registry is not read, so other types and Add to Playlist are missing |
+| Open With (submenu and the Open With dialog) | Partial: a submenu of the installed desktop entries (the first 12 by name) and a Choose Program... list; XP's registry's recommended programs and its own dialog are not read |
 | Context menu handlers from shell extensions | Missing |
 | Send To: removable drives and the actual contents of the SendTo folder | Done: `~/.local/share/win4wine/SendTo`'s `.desktop` targets (their `%f`/`%F`/`%u`/`%U`) and links to folders, plus the ready, writable mounted volumes other than the root and the home (copied into); `shellmenus.cpp` `addSendToFolder` |
 | Show in Groups, Choose Details, Customize This Folder | Missing (greyed) |
@@ -244,7 +244,7 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 | Which program groups: with `TaskbarGroupSize` 0, the one with two windows or more whose most recent window was chosen least recently (`sub_102eae3`: the maximum of the items' `+0xc`); ungrouping when two more buttons fit, the most recent group with fewer windows than that. Mode 1 groups the program with the most windows first and takes apart the group with the fewest; mode 2 or more groups every program with at least that many windows and leaves them grouped | `sub_10050ec`, branches `0x1023dc8`, `0x1023def`, `0x1023e0f` | Done |
 | "Chosen": an item's `+0xc` is set at creation and before `SwitchToThisWindow` only, not on every activation | `sub_1005cf7`, `sub_102e07c` | Done |
 | Metrics: `cxButtonSpacing` 0 and `cxPad` 20 with a style, 3 and 8 without (`TB_SETMETRICS`) | `sub_10163ba` | Done |
-| Group button: the count centred in a gap as wide as the count with a "0" more, in `TaskBand.GroupCount` (Tahoma 8 bold, 255 204 109), `DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX`; the text moved by `iListGap` | `sub_102ee02`, custom draw at `0x1023a91` and `0x1023b4a` | Done |
+| Group button: the count centred in a gap as wide as the count with a "0" more, in `TaskBand.GroupCount` (Tahoma 8 bold, 255 204 109), `DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX`; the text moved by `iListGap`; comctl32's dropdown arrow in a `dxDDArrowChar` (SM_CYMENUCHECK, 13) rect at the right, Marlett '6' (DrawScrollArrow's `DrawCharButton`) | `sub_102ee02`, custom draw at `0x1023a91` and `0x1023b4a`; comctl32 `pager.cpp` `DrawScrollArrow` | Done |
 | Group list in `TaskBandGroupMenu` (menu band) | `sub_102eee0`; `luna.msstyles` (toolbar content margins 9, 0, 0, 0; button 9, 0, 3, 3) | Done: the row is the icon and the button's top and bottom margins (22 px with Luna), the toolbar's and button's left margins in |
 | The taskband's scrollbar: when the buttons do not fit at their least width, the taskband takes a vertical scrollbar at its right (SM_CXVSCROLL) and the toolbar's rows become pages; the arrows scroll a page and the toolbar is shifted by one row | `explorer.exe` `shell/explorer/taskband.cpp`: `_CheckSize`, `_GetNumberOfRowsCols`, `_CheckNeedScrollbars`; `luna.msstyles` `TaskBand::Scrollbar.ArrowBtn` (17 x 17, 16 states) | Partial: the scrollbar, its arrows, paging, the wheel and the keyboard's scroll-into-view are ported; the taskband's extra rows (a resized bar), the thumb and the tracks are not |
 | Menu 210 (Cascade, Tile Horizontally, Tile Vertically, Minimize Group, Close Group) | `explorer.exe` MENUEX resource | Done |
@@ -263,7 +263,7 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 |---|---|
 | The taskband's extra rows when buttons do not fit even grouped, and its scrollbar's thumb and tracks | Partial: the scrollbar's arrows and paging are done; a taller taskbar (more rows) is not |
 | Group visuals checked against XP | Not possible in Wine: XP's explorer never groups there (no exe path for a window) |
-| The drop-down arrow of a group button | Partial: drawn as a 5 x 3 triangle, not measured |
+
 
 ---
 

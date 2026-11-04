@@ -203,6 +203,28 @@ void launch(const Program &program)
     uses.setValue(program.id, uses.value(program.id, 0).toInt() + 1);
 }
 
+void launchWith(const Program &program, const QStringList &files)
+{
+    if (program.command.isEmpty())
+        return;
+    QStringList command = program.command;
+    bool inserted = false;
+    for (QString &argument : command) {
+        if (argument == QLatin1String("%f") || argument == QLatin1String("%u")) {
+            argument = files.value(0);
+            inserted = true;
+        } else if (argument == QLatin1String("%F") || argument == QLatin1String("%U")) {
+            argument = files.join(QLatin1Char(' '));
+            inserted = true;
+        } else if (argument == QLatin1String("%%")) {
+            argument = QStringLiteral("%");
+        }
+    }
+    if (!inserted)
+        command += files;
+    QProcess::startDetached(command.first(), command.mid(1), QDir::homePath());
+}
+
 QList<Program> mostUsed(int count)
 {
     QSettings uses(usePath(), QSettings::IniFormat);

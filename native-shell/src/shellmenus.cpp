@@ -121,6 +121,31 @@ void addSendToFolder(QMenu *targets, const QStringList &paths, QWidget *parent)
     }
 }
 
+void addFileVerbs(QMenu *menu, const QStringList &paths, QWidget *parent)
+{
+    if (paths.size() != 1)
+        return;
+    const QFileInfo file(paths.first());
+    if (!file.isFile())
+        return;
+    static const QSet<QString> textTypes{QStringLiteral("txt"), QStringLiteral("log"), QStringLiteral("ini"), QStringLiteral("inf"),
+                                         QStringLiteral("bat"), QStringLiteral("cmd")};
+    static const QSet<QString> mediaTypes{QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("wma"), QStringLiteral("avi"),
+                                          QStringLiteral("mpg"), QStringLiteral("mpeg"), QStringLiteral("wmv"), QStringLiteral("asf"),
+                                          QStringLiteral("mid"), QStringLiteral("midi"), QStringLiteral("rmi"), QStringLiteral("m3u"),
+                                          QStringLiteral("au"), QStringLiteral("aif"), QStringLiteral("aiff"), QStringLiteral("snd")};
+    const QString suffix = file.suffix().toLower();
+    if (textTypes.contains(suffix)) {
+        // txtfile's and batfile's edit/print verbs (hivecls.inf): Notepad and its /p, which is lpr here.
+        menu->addAction(QObject::tr("&Edit"), parent, [path = paths.first()] { programs::openNotepad(path); });
+        QAction *print = menu->addAction(QObject::tr("&Print"), parent, [path = paths.first()] { QProcess::startDetached(QStringLiteral("lpr"), {path}); });
+        print->setEnabled(!QStandardPaths::findExecutable(QStringLiteral("lpr")).isEmpty());
+    } else if (mediaTypes.contains(suffix)) {
+        // AVIFile's Play verb.
+        menu->addAction(QObject::tr("&Play"), parent, [path = paths.first()] { programs::openMediaPlayer({path}); });
+    }
+}
+
 void addSendTo(QMenu *menu, const QStringList &paths, QWidget *parent)
 {
     if (!shell32())

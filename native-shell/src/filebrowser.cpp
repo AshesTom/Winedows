@@ -53,6 +53,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QListWidget>
 #include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
@@ -2734,6 +2735,61 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
 
 using namespace shellmenus;
 
+namespace {
+// XP's Open With: the installed programs, then Choose Program... for the full list.
+QList<programs::Program> openWithPrograms()
+{
+    QList<programs::Program> all;
+    QSet<QString> seen;
+    for (const QList<programs::Program> &group : programs::folders())
+        for (const programs::Program &program : group)
+            if (!seen.contains(program.id)) {
+                seen.insert(program.id);
+                all.append(program);
+            }
+    std::sort(all.begin(), all.end(), [](const programs::Program &a, const programs::Program &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return all;
+}
+
+void chooseProgram(const QString &path, QWidget *parent)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("Open With"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *label = new QLabel(QObject::tr("Choose the program you want to use to open this file:"), &dialog);
+    layout->addWidget(label);
+    auto *list = new QListWidget(&dialog);
+    const QList<programs::Program> all = openWithPrograms();
+    for (const programs::Program &program : all) {
+        auto *item = new QListWidgetItem(programs::iconOf(program), program.name, list);
+        item->setData(Qt::UserRole, item->data(Qt::UserRole));
+        item->setToolTip(program.comment);
+    }
+    layout->addWidget(list, 1);
+    auto *row = new QHBoxLayout;
+    row->addStretch(1);
+    auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    ok->setDefault(true);
+    row->addWidget(ok);
+    row->addWidget(cancel);
+    layout->addLayout(row);
+    const auto open = [&] {
+        const int index = list->currentRow();
+        if (index >= 0 && index < all.size())
+            programs::launchWith(all[index], {path});
+    };
+    QObject::connect(ok, &QPushButton::clicked, &dialog, [&] { open(); dialog.accept(); });
+    QObject::connect(list, &QListWidget::itemDoubleClicked, &dialog, [&] { open(); dialog.accept(); });
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    if (list->count())
+        list->setCurrentRow(0);
+    dialog.exec();
+}
+} // namespace
+
 void FileBrowser::fillItemMenu(QMenu *menu, const QStringList &selected)
 {
     const bool folderItem = selected.size() == 1 && QFileInfo(selected.first()).isDir();
@@ -2778,6 +2834,18 @@ void FileBrowser::fillItemMenu(QMenu *menu, const QStringList &selected)
         });
         menu->addAction(tr("Open Command &Prompt Here"), this, [path = selected.first()] { programs::openCommandPrompt(path); });
     }
+    if (!folderItem && selected.size() == 1) {
+        QMenu *with = menu->addMenu(tr("Open &With"));
+        const QList<programs::Program> all = openWithPrograms();
+        const int shown = qMin<int>(12, int(all.size()));
+        for (int i = 0; i < shown; ++i)
+            with->addAction(programs::iconOf(all[i]), all[i].name, this,
+                            [path = selected.first(), program = all[i]] { programs::launchWith(program, {path}); });
+        if (shown)
+            with->addSeparator();
+        with->addAction(tr("&Choose Program..."), this, [path = selected.first(), this] { chooseProgram(path, this); });
+        with->setEnabled(!all.isEmpty());
+    }
     // What the Picture and Fax Viewer adds for pictures, in its words
     if (selectedPictures().size() == selected.size()) {
         menu->addSeparator();
@@ -2788,6 +2856,8 @@ void FileBrowser::fillItemMenu(QMenu *menu, const QStringList &selected)
             menu->addAction(pictures::viewerString(560, "Set as Desktop &Background"), this, [this, path = selected.first()] { setAsBackground(path); });
         }
     }
+    // The file type's verbs (txtfile's Edit/Print, AVIFile's Play) before Send To.
+    addFileVerbs(menu, selected, this);
     if (!shell32())
         return;
     // Send To, what XP's SendTo folder has

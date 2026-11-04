@@ -45,5 +45,7 @@ void makeShortcuts(const QStringList &paths, const QString &folder);
 void compressToZip(const QStringList &paths);
 // Menu 223, its Send To filled with XP's targets for PATHS.
 void addSendTo(QMenu *menu, const QStringList &paths, QWidget *parent);
+// The file type's own verbs before Send To: text files' Edit and Print (Notepad and lpr), media's Play.
+void addFileVerbs(QMenu *menu, const QStringList &paths, QWidget *parent);
 
 } // namespace shellmenus
