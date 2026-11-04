@@ -90,7 +90,8 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 | Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Missing (an approximate FFT bar display stands in) |
 | Audio effect of the equalizer, SRS WOW, crossfading, auto volume levelling | Missing |
 | Full metadata (`WM/Lyrics`, `getItemInfoByType`) | Partial (title, artist, album, duration; album art from the file's tags or its folder's `Folder.jpg` / `AlbumArtSmall.jpg`, as `WMPImage_AlbumArtLarge` / `Small`) |
-| `listbox`/`popup`, `editbox` and `librarytree` elements | Missing (created, not drawn or interactive) |
+| `librarytree` element | Missing (created, not drawn) |
+| `editbox`, `listbox` and `popup`: the members of wmp.dll's `IWMPEditCtrl` and `IWMPListBoxCtrl` | Partial: Qt's line edit (or plain text edit when multi-line) and list in the element's place; a popup (a list box with `popup` set, as `<popup>` compiles) is a menu of its items at the pointer. Their look is Qt's, not checked against WMP's |
 | Full playlist control (columns, dragging, `dropDownList`, its shortcut menu) | Partial (selection, double-click to play, wheel scrolling) |
 | Full-screen mode with `FullScreenTopLayout` and `FullScreenBottomLayout` | Partial: the display fills the screen under both layouts, which hide after 3 s unless `pinFullScreenControls`; `fullScreenRequest`, Alt+Enter, Esc and `view.returnToMediaCenter` enter and leave it. The Customize button's full-screen playlist (`showFullScreenPlaylist`) is not drawn |
 | `theme.openDialog`; additional theme views beyond a plain window | Partial |

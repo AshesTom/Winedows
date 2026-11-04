@@ -188,6 +188,12 @@ private:
     void updateTask(Element *element);
     void host(Element *element, std::optional<wmpskin::Node> document, const QString &folder);
     void layoutHosted();
+    // editbox and listbox: Qt's line edit and list in the element's place; popup: a list box
+    // shown as a menu (show()). Their items and text stay in the element's values.
+    void createControl(Element *element);
+    bool isPopup(const Element *element) const;
+    void syncControl(Element *element);
+    QVariant controlMethod(Element *element, const QString &name, const QVariantList &arguments, bool *handled);
     void scheduleShape();
 
     Model *m_model;

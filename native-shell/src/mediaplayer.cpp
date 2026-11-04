@@ -234,6 +234,10 @@ MediaPlayer::MediaPlayer(const QStringList &files)
     m_wmp = xpfiles::resources(xpfiles::find(QStringLiteral("wmp.dll")));
     if (m_wmp) {
         m_properties = wmpskin::properties(*m_wmp);
+        // WMP_MEMBERS=IWMPListBoxCtrl: an interface's members, for reading wmp.dll's type library
+        if (const QString wanted = qEnvironmentVariable("WMP_MEMBERS"); !wanted.isEmpty())
+            for (const auto members = m_properties.members.value(wanted); const QString &member : members.keys())
+                fprintf(stderr, "%s%s\n", qPrintable(member), members.value(member) ? "()" : "");
         m_predefined = wmpskin::predefinedObjects(*m_wmp);
     }
     if (m_loc)

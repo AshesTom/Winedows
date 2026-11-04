@@ -6,6 +6,9 @@
 #include <QElapsedTimer>
 #include <QFontMetrics>
 #include <QHelpEvent>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QPlainTextEdit>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
@@ -883,13 +886,270 @@ void SkinView::setProperty(Element *element, const QString &name, const QVariant
         m_animation.start();
     if (geometry || name == QLatin1String("left") || name == QLatin1String("top") || name == QLatin1String("visible"))
         layoutHosted();
+    if (element->widget && (element->tag == QLatin1String("editbox") || element->tag == QLatin1String("listbox")))
+        syncControl(element);
     scheduleShape();
     update();
+}
+
+// ---- edit boxes and list boxes ----
+
+namespace {
+QStringList itemsOf(const Element *element)
+{
+    return element->values.value(QStringLiteral("__items")).toStringList();
+}
+} // namespace
+
+bool SkinView::isPopup(const Element *element) const
+{
+    // <popup> is wmp.dll's list box with its popup property set: shown as a menu, not in place
+    return element->tag == QLatin1String("popup") || toBool(property(element, QStringLiteral("popup")), false);
+}
+
+void SkinView::createControl(Element *element)
+{
+    if (element->widget || isPopup(element))
+        return;
+    QWidget *widget = nullptr;
+    if (element->tag == QLatin1String("listbox")) {
+        auto *list = new QListWidget(this);
+        connect(list, &QListWidget::currentRowChanged, this, [this, element](int row) {
+            if (row != toInt(property(element, QStringLiteral("selecteditem")), -1))
+                setProperty(element, QStringLiteral("selecteditem"), row);
+        });
+        widget = list;
+    } else {
+        // editStyle multiline (or word wrap): several lines
+        const bool lines = toBool(property(element, QStringLiteral("wordwrap")), false)
+            || property(element, QStringLiteral("editstyle")).toString().contains(QLatin1String("multiline"), Qt::CaseInsensitive);
+        if (lines) {
+            auto *edit = new QPlainTextEdit(this);
+            connect(edit, &QPlainTextEdit::textChanged, this, [this, element, edit] {
+                if (edit->toPlainText() != property(element, QStringLiteral("value")).toString())
+                    setProperty(element, QStringLiteral("value"), edit->toPlainText());
+            });
+            widget = edit;
+        } else {
+            auto *edit = new QLineEdit(this);
+            connect(edit, &QLineEdit::textEdited, this, [this, element](const QString &text) {
+                setProperty(element, QStringLiteral("value"), text);
+            });
+            connect(edit, &QLineEdit::returnPressed, this, [this, element] { runHandler(keyOf(element), QStringLiteral("onenter")); });
+            widget = edit;
+        }
+    }
+    element->widget = widget;
+    syncControl(element);
+    widget->show();
+}
+
+void SkinView::syncControl(Element *element)
+{
+    QWidget *widget = element->widget;
+    if (!widget)
+        return;
+    // the skin's colours, font and border
+    QPalette palette = widget->palette();
+    const QColor background = toColor(property(element, QStringLiteral("backgroundcolor")));
+    const QColor foreground = toColor(property(element, QStringLiteral("foregroundcolor")));
+    if (background.isValid())
+        palette.setColor(QPalette::Base, background);
+    if (foreground.isValid())
+        palette.setColor(QPalette::Text, foreground);
+    widget->setPalette(palette);
+    QFont font = widget->font();
+    if (const QString face = property(element, QStringLiteral("fontface")).toString(); !face.isEmpty())
+        font.setFamily(face);
+    if (const int size = toInt(property(element, QStringLiteral("fontsize")), 0); size > 0)
+        font.setPointSize(size);
+    const QString style = property(element, QStringLiteral("fontstyle")).toString().toLower();
+    font.setBold(style.contains(QLatin1String("bold")));
+    font.setItalic(style.contains(QLatin1String("italic")));
+    widget->setFont(font);
+    const bool border = toBool(property(element, QStringLiteral("border")), true);
+    const bool readOnly = toBool(property(element, QStringLiteral("readonly")), false);
+    if (element->tag == QLatin1String("editbox"))
+        element->values.insert(QStringLiteral("linecount"), int(property(element, QStringLiteral("value")).toString().count(QLatin1Char('\n'))) + 1);
+    if (auto *edit = qobject_cast<QLineEdit *>(widget)) {
+        edit->setFrame(border);
+        edit->setReadOnly(readOnly);
+        if (const int limit = toInt(property(element, QStringLiteral("textlimit")), 0); limit > 0)
+            edit->setMaxLength(limit);
+        const QString justification = property(element, QStringLiteral("justification")).toString().toLower();
+        edit->setAlignment(justification == QLatin1String("right") ? Qt::AlignRight : justification == QLatin1String("center") ? Qt::AlignHCenter : Qt::AlignLeft);
+        if (const QString value = property(element, QStringLiteral("value")).toString(); edit->text() != value)
+            edit->setText(value);
+    } else if (auto *edit = qobject_cast<QPlainTextEdit *>(widget)) {
+        edit->setFrameShape(border ? QFrame::StyledPanel : QFrame::NoFrame);
+        edit->setReadOnly(readOnly);
+        if (const QString value = property(element, QStringLiteral("value")).toString(); edit->toPlainText() != value)
+            edit->setPlainText(value);
+    } else if (auto *list = qobject_cast<QListWidget *>(widget)) {
+        list->setFrameShape(border ? QFrame::StyledPanel : QFrame::NoFrame);
+        list->setSelectionMode(toBool(property(element, QStringLiteral("multiselect")), false) ? QAbstractItemView::ExtendedSelection
+                                                                                               : QAbstractItemView::SingleSelection);
+        list->setSortingEnabled(toBool(property(element, QStringLiteral("sorted")), false));
+        QStringList shown;
+        for (int i = 0; i < list->count(); ++i)
+            shown.append(list->item(i)->text());
+        if (shown != itemsOf(element)) {
+            const QSignalBlocker block(list);
+            list->clear();
+            list->addItems(itemsOf(element));
+        }
+        const int selected = toInt(property(element, QStringLiteral("selecteditem")), -1);
+        if (list->currentRow() != selected) {
+            const QSignalBlocker block(list);
+            list->setCurrentRow(selected);
+        }
+    }
+}
+
+QVariant SkinView::controlMethod(Element *element, const QString &name, const QVariantList &arguments, bool *handled)
+{
+    *handled = true;
+    const auto integer = [&](int i) { return toInt(arguments.value(i), 0); };
+    QStringList items = itemsOf(element);
+    const auto store = [&] {
+        element->values.insert(QStringLiteral("__items"), items);
+        setProperty(element, QStringLiteral("itemcount"), int(items.size()));
+        if (element->widget)
+            syncControl(element);
+    };
+    // IWMPListBoxCtrl, the list box's and the popup's
+    if (name == QLatin1String("appenditem")) {
+        items.append(arguments.value(0).toString());
+        store();
+        return int(items.size()) - 1;
+    }
+    if (name == QLatin1String("insertitem")) {
+        items.insert(qBound(0, integer(0), int(items.size())), arguments.value(1).toString());
+        store();
+        return {};
+    }
+    if (name == QLatin1String("replaceitem")) {
+        if (integer(0) >= 0 && integer(0) < items.size())
+            items[integer(0)] = arguments.value(1).toString();
+        store();
+        return {};
+    }
+    if (name == QLatin1String("deleteitem")) {
+        if (integer(0) >= 0 && integer(0) < items.size())
+            items.removeAt(integer(0));
+        store();
+        return {};
+    }
+    if (name == QLatin1String("deleteall")) {
+        items.clear();
+        store();
+        setProperty(element, QStringLiteral("selecteditem"), -1);
+        return {};
+    }
+    if (name == QLatin1String("getitem"))
+        return items.value(integer(0));
+    if (name == QLatin1String("finditem")) {
+        for (int i = qMax(0, integer(0)); i < items.size(); ++i)
+            if (items[i].compare(arguments.value(1).toString(), Qt::CaseInsensitive) == 0)
+                return i;
+        return -1;
+    }
+    if (name == QLatin1String("getnextselecteditem")) {
+        const int start = integer(0);
+        if (auto *list = qobject_cast<QListWidget *>(element->widget.data())) {
+            for (int i = start + 1; i < list->count(); ++i)
+                if (list->item(i)->isSelected())
+                    return i;
+            return -1;
+        }
+        const int selected = toInt(property(element, QStringLiteral("selecteditem")), -1);
+        return selected > start ? selected : -1;
+    }
+    if (name == QLatin1String("setselectedstate")) {
+        if (auto *list = qobject_cast<QListWidget *>(element->widget.data()); list && integer(0) >= 0 && integer(0) < list->count())
+            list->item(integer(0))->setSelected(toBool(arguments.value(1), true));
+        else if (toBool(arguments.value(1), true))
+            setProperty(element, QStringLiteral("selecteditem"), integer(0));
+        return {};
+    }
+    if (name == QLatin1String("show") && isPopup(element)) {
+        // the popup list: a menu of the items at the pointer, the selected one checked
+        QMenu menu;
+        const int selected = toInt(property(element, QStringLiteral("selecteditem")), -1);
+        for (int i = 0; i < items.size(); ++i) {
+            QAction *action = menu.addAction(items[i]);
+            action->setCheckable(true);
+            action->setChecked(i == selected);
+            action->setData(i);
+        }
+        QAction *chosen = menu.exec(QCursor::pos());
+        if (debugging())
+            fprintf(stderr, "wmp: popup %d items, chose %s\n", int(items.size()), chosen ? qPrintable(chosen->text()) : "nothing");
+        if (chosen)
+            setProperty(element, QStringLiteral("selecteditem"), chosen->data().toInt());
+        runHandler(keyOf(element), QStringLiteral("ondismiss"));
+        return {};
+    }
+    if (name == QLatin1String("dismiss"))
+        return {};
+    // IWMPEditCtrl
+    auto *line = qobject_cast<QLineEdit *>(element->widget.data());
+    auto *text = qobject_cast<QPlainTextEdit *>(element->widget.data());
+    const QString value = property(element, QStringLiteral("value")).toString();
+    const QStringList lines = value.split(QLatin1Char('\n'));
+    if (name == QLatin1String("getline"))
+        return lines.value(integer(0));
+    if (name == QLatin1String("getlineindex")) {
+        int index = 0;
+        for (int i = 0; i < integer(0) && i < lines.size(); ++i)
+            index += int(lines[i].size()) + 1;
+        return index;
+    }
+    if (name == QLatin1String("getlinefromchar"))
+        return int(value.left(integer(0)).count(QLatin1Char('\n')));
+    if (name == QLatin1String("getselectionstart") || name == QLatin1String("getselectionend")) {
+        int start = 0, end = 0;
+        if (line) {
+            start = line->hasSelectedText() ? line->selectionStart() : line->cursorPosition();
+            end = line->hasSelectedText() ? line->selectionEnd() : start;
+        } else if (text) {
+            start = text->textCursor().selectionStart();
+            end = text->textCursor().selectionEnd();
+        }
+        return name == QLatin1String("getselectionstart") ? start : end;
+    }
+    if (name == QLatin1String("setselection")) {
+        if (line)
+            line->setSelection(integer(0), integer(1) - integer(0));
+        else if (text) {
+            QTextCursor cursor = text->textCursor();
+            cursor.setPosition(integer(0));
+            cursor.setPosition(integer(1), QTextCursor::KeepAnchor);
+            text->setTextCursor(cursor);
+        }
+        return {};
+    }
+    if (name == QLatin1String("replaceselection")) {
+        if (line)
+            line->insert(arguments.value(0).toString());
+        else if (text)
+            text->insertPlainText(arguments.value(0).toString());
+        setProperty(element, QStringLiteral("value"), line ? line->text() : text ? text->toPlainText() : value + arguments.value(0).toString());
+        return {};
+    }
+    *handled = false;
+    return {};
 }
 
 QJSValue SkinView::elementMethod(Element *element, const QString &name, const QVariantList &arguments)
 {
     const QString lower = name.toLower();
+    if (element->tag == QLatin1String("editbox") || element->tag == QLatin1String("listbox") || element->tag == QLatin1String("popup")) {
+        bool handled = false;
+        const QVariant result = controlMethod(element, lower, arguments, &handled);
+        if (handled)
+            return result.isValid() ? m_js.toScriptValue(result) : QJSValue();
+    }
     const auto argument = [&](int i) { return arguments.value(i); };
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (lower == QLatin1String("moveto")) {
@@ -1078,6 +1338,9 @@ void SkinView::start()
             host(element.get(), m_model->plugin(property(element.get(), QStringLiteral("objectid")).toString()), QString());
         else if (element->tag == QLatin1String("text") && toBool(property(element.get(), QStringLiteral("scrolling")), false))
             m_animation.start();
+        else if (element->tag == QLatin1String("editbox") || element->tag == QLatin1String("listbox"))
+            createControl(element.get());
+    layoutHosted();
     scheduleShape();
 }
 
