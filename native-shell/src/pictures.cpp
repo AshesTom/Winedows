@@ -829,7 +829,40 @@ void Viewer::command(int id)
         layoutBox->addItem(QObject::tr("Wallet"), QSize(4, 5));
         layoutBox->addItem(QObject::tr("Contact sheet"), QSize(6, 7));
         layoutLayout->addWidget(layoutBox);
-        layoutLayout->addStretch(1);
+        auto *preview = new QLabel(layoutPage);
+        preview->setAlignment(Qt::AlignCenter);
+        preview->setFrameShape(QFrame::Box);
+        preview->setMinimumSize(220, 160);
+        layoutLayout->addWidget(preview, 1);
+        const auto drawPreview = [preview, layoutBox, image = m_image] {
+            QPixmap page(260, 190);
+            page.fill(Qt::white);
+            QPainter painter(&page);
+            painter.setPen(QPen(QColor(120, 120, 120), 1));
+            painter.drawRect(page.rect().adjusted(6, 6, -7, -7));
+            const QSize cells = layoutBox->currentData().toSize();
+            const QRectF sheet = page.rect().adjusted(14, 14, -14, -14);
+            const qreal gap = 3;
+            const QSizeF cell((sheet.width() - gap * (cells.width() - 1)) / cells.width(),
+                              (sheet.height() - gap * (cells.height() - 1)) / cells.height());
+            for (int row = 0; row < cells.height(); ++row)
+                for (int column = 0; column < cells.width(); ++column) {
+                    const QRectF box(sheet.x() + column * (cell.width() + gap), sheet.y() + row * (cell.height() + gap),
+                                     cell.width(), cell.height());
+                    painter.fillRect(box, QColor(242, 242, 242));
+                    painter.drawRect(box);
+                    if (row == 0 && column == 0 && !image.isNull()) {
+                        QSize fit = image.size();
+                        fit.scale(box.size().toSize(), Qt::KeepAspectRatio);
+                        const QRect target(int(box.center().x() - fit.width() / 2), int(box.center().y() - fit.height() / 2), fit.width(), fit.height());
+                        painter.drawImage(target, image);
+                    }
+                }
+            painter.end();
+            preview->setPixmap(page);
+        };
+        QObject::connect(layoutBox, &QComboBox::currentIndexChanged, layoutPage, [drawPreview] { drawPreview(); });
+        drawPreview();
         wizard.addPage(layoutPage);
 
         if (wizard.exec() != QDialog::Accepted)
