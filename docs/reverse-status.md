@@ -333,8 +333,7 @@ Binaries: `user32.dll` (only a system call, 0x1168), `win32k.sys` (extracted fro
 ## 10. Desktop icons and Customize Desktop
 
 Binary: `shell32.dll`. Port: [`desktopicons.cpp`](../native-shell/src/desktopicons.cpp),
-[`displayproperties.cpp`](../native-shell/src/displayproperties.cpp). **Not committed**: these files are shared
-with the shortcut-menu work of section 3, still in progress in the tree.
+[`displayproperties.cpp`](../native-shell/src/displayproperties.cpp).
 
 | Item | Source | Status |
 |---|---|---|
@@ -348,8 +347,8 @@ with the shortcut-menu work of section 3, still in progress in the tree.
 
 ## 11. File and folder Properties
 
-Binary: `shell32.dll`. Port: [`fileproperties.cpp`](../native-shell/src/fileproperties.cpp). **Not committed** (wired
-through `filebrowser.cpp` and `desktopicons.cpp`, see section 10).
+Binary: `shell32.dll`. Port: [`fileproperties.cpp`](../native-shell/src/fileproperties.cpp), wired through
+`filebrowser.cpp` and `desktopicons.cpp`.
 
 | Item | Source | Status |
 |---|---|---|

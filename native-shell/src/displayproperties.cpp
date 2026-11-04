@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "displayproperties.h"
+#include "desktopicons.h"
 
 #include "fileicons.h"
 #include "frames.h"
@@ -59,6 +60,10 @@ const int SAVER_MONITOR = 1302, SAVER_COMBO = 1300, SAVER_SETTINGS = 1303, SAVER
 const int SETTINGS_MONITOR = 1812, SETTINGS_ARRANGE = 1819, SETTINGS_LAYOUT = 1801, SETTINGS_DISPLAYS = 1800, SETTINGS_NAME = 1811, SETTINGS_SLIDER = 1808, SETTINGS_TEXT = 1814, SETTINGS_QUALITY = 1807, SETTINGS_COLOURS = 1813, SETTINGS_TROUBLESHOOT = 1821, SETTINGS_ADVANCED = 1802;
 // The Desktop page is shell32's dialog (desk.cpl makes it from shell32's CLSID), with its words
 const int DIALOG_DESKTOP = 29952;
+// Customize Desktop: shell32's Desktop Items sheet, its General page (the four icons' check boxes, the list of
+// icons, Change Icon and Restore Default, the cleanup) and its Web page
+const int DIALOG_DESKTOP_ITEMS = 29953, DIALOG_DESKTOP_WEB = 29954, STRING_DESKTOP_ITEMS = 30371;
+const int ITEMS_DOCUMENTS = 30077, ITEMS_COMPUTER = 30078, ITEMS_NETWORK = 30080, ITEMS_INTERNET = 30081, ITEMS_ICONS = 30068;
 const int DESKTOP_LIST = 30048, DESKTOP_BROWSE = 30049, DESKTOP_CUSTOMIZE = 30050, DESKTOP_POSITION = 30051, DESKTOP_PREVIEW = 30053, DESKTOP_COLOUR = 30054, DESKTOP_LIST_LABEL = 30056;
 const int SHELL_CENTER = 30236, SHELL_NONE_WALLPAPER = 30300;
 // desk.cpl's: its name (the sheet's caption) and its pages' names
@@ -559,6 +564,65 @@ void DisplayProperties::fillThemes()
     m_theme->addItem(text(STRING_BROWSE, "Browse..."), QStringLiteral("browse"));
 }
 
+// shell32's Desktop Items, modal to Display Properties. Here its four check boxes choose the desktop's icons
+// (DesktopIcons reads them); the icons' own pictures, the cleanup wizard and the Web page are greyed.
+static void showDesktopItems(QWidget *owner)
+{
+    if (!shell32())
+        return;
+    QDialog dialog(owner);
+    dialog.setWindowTitle(xpfiles::string(*shell32(), STRING_DESKTOP_ITEMS));
+    auto *tabs = new xpdialog::SheetTabs(&dialog);
+    auto *general = new QWidget;
+    const xpdialog::Page page = xpdialog::build(*shell32(), DIALOG_DESKTOP_ITEMS, general);
+    auto *web = new QWidget;
+    const xpdialog::Page webPage = xpdialog::build(*shell32(), DIALOG_DESKTOP_WEB, web);
+    xpdialog::greyControls(page);
+    xpdialog::greyControls(webPage);
+    tabs->addTab(general, page.caption.isEmpty() ? QObject::tr("General") : page.caption);
+    tabs->addTab(web, webPage.caption.isEmpty() ? QObject::tr("Web") : webPage.caption);
+    const QList<QPair<int, DesktopItem>> boxes = {{ITEMS_DOCUMENTS, DesktopItem::Documents}, {ITEMS_COMPUTER, DesktopItem::Computer},
+                                                  {ITEMS_NETWORK, DesktopItem::Network}, {ITEMS_INTERNET, DesktopItem::Internet}};
+    for (const auto &[id, item] : boxes)
+        if (auto *box = qobject_cast<QAbstractButton *>(page.controls.value(id))) {
+            box->setEnabled(true);
+            box->setChecked(desktopItemShown(item));
+        }
+    // The list: the pictures of My Computer, My Documents, My Network Places and the Recycle Bin's two,
+    // in shell32's words
+    if (QWidget *place = page.controls.value(ITEMS_ICONS)) {
+        auto *list = new QListWidget(general);
+        list->setGeometry(place->geometry());
+        place->hide();
+        list->setViewMode(QListView::IconMode);
+        list->setFlow(QListView::LeftToRight);
+        list->setWrapping(false);
+        list->setIconSize(QSize(32, 32));
+        list->setMovement(QListView::Static);
+        ShellTheme *theme = ShellTheme::instance();
+        const QList<QPair<int, int>> icons = {{16, 9216}, {235, 9227}, {18, 9217}, {33, 0}, {32, 0}};
+        const QString bin = xpfiles::string(*shell32(), 8964);
+        for (int i = 0; i < icons.size(); ++i) {
+            QString name = icons[i].second ? xpfiles::string(*shell32(), icons[i].second) : bin;
+            if (!icons[i].second)
+                name += QLatin1String(i == 3 ? " (full)" : " (empty)");
+            list->addItem(new QListWidgetItem(QIcon(QPixmap::fromImage(theme->shellIcon(icons[i].first, 32))), name));
+        }
+        list->setCurrentRow(0);
+    }
+    auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    ok->setDefault(true);
+    xpdialog::arrangeSheet(&dialog, tabs, {ok, cancel});
+    QObject::connect(ok, &QPushButton::clicked, &dialog, &QDialog::accept);
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    for (const auto &[id, item] : boxes)
+        if (auto *box = qobject_cast<QAbstractButton *>(page.controls.value(id)))
+            setDesktopItemShown(item, box->isChecked());
+}
+
 QWidget *DisplayProperties::desktopPage()
 {
     auto *page = new QWidget;
@@ -613,7 +677,7 @@ QWidget *DisplayProperties::desktopPage()
         customize = new QPushButton(tr("Customize &Desktop..."), page);
         customize->setGeometry(11, 325, 135, 23);
     }
-    customize->setEnabled(false);
+    connect(customize, &QPushButton::clicked, this, [this] { showDesktopItems(this); });
 
     const QString noneText = shell32() ? xpfiles::string(*shell32(), SHELL_NONE_WALLPAPER) : QString();
     auto *none = new QListWidgetItem(QIcon(QPixmap::fromImage(ShellTheme::instance()->shellIcon(200, 16))), noneText.isEmpty() ? text(STRING_NONE, "(None)") : noneText);

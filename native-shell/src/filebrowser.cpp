@@ -12,6 +12,9 @@
 #include "taskpane.h"
 #include "theme.h"
 #include "xpfiles.h"
+#include "xpprogram.h"
+#include "shellmenus.h"
+#include "fileproperties.h"
 
 #include <array>
 #include <cmath>
@@ -979,6 +982,11 @@ void showItemProperties(const QStringList &paths, QWidget *parent)
 {
     if (paths.isEmpty())
         return;
+    // Files and folders have shell32's sheet; a drive keeps this page
+    if (!(paths.size() == 1 && QFileInfo(paths.first()).isRoot())) {
+        fileproperties::show(paths, parent);
+        return;
+    }
     auto *dialog = new QDialog(parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     const QFileInfo first(paths.first());
@@ -2366,6 +2374,11 @@ void FileBrowser::openPath(const QString &path)
             return;
         }
     }
+    // pictures open in Windows Picture and Fax Viewer, its Preview being their default verb on XP
+    if (pictures::isPicture(path)) {
+        pictures::Viewer::open(path);
+        return;
+    }
     programs::open(path);
 }
 
@@ -2705,50 +2718,9 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
         menu->addSeparator();
         menu->addAction(tr("&Delete"), this, [this] { deleteSelected(true); });
     } else if (onItem && !folder.isEmpty()) {
-        const QStringList selected = selectedPaths();
-        QAction *open = menu->addAction(tr("&Open"), this, [this] {
-            const QStringList paths = selectedPaths();
-            if (!paths.isEmpty())
-                openPath(paths.first());
-        });
-        QFont bold = open->font();
-        bold.setBold(true);
-        open->setFont(bold);
-        if (selected.size() == 1 && QFileInfo(selected.first()).isDir())
-            menu->addAction(tr("Open in New &Window"), this, [path = selected.first()] { auto *window = new FileBrowser(path); window->show(); });
-        if (selected.size() == 1 && QFileInfo(selected.first()).isDir())
-            menu->addAction(tr("Open Command &Prompt Here"), this, [path = selected.first()] { programs::openCommandPrompt(path); });
-        // What the Picture and Fax Viewer adds for pictures, in its words
-        if (selectedPictures().size() == selected.size()) {
-            menu->addSeparator();
-            menu->addAction(pictures::viewerString(557, "Rotate Cloc&kwise"), this, [this] { rotateSelected(true); });
-            menu->addAction(pictures::viewerString(558, "Rotate Cou&nter Clockwise"), this, [this] { rotateSelected(false); });
-            if (selected.size() == 1) {
-                menu->addSeparator();
-                menu->addAction(pictures::viewerString(560, "Set as Desktop &Background"), this, [this, path = selected.first()] { setAsBackground(path); });
-            }
-        }
-        menu->addSeparator();
-        menu->addAction(m_cutAction);
-        menu->addAction(m_copyAction);
-        menu->addSeparator();
-        menu->addAction(tr("&Delete"), this, [this] { deleteSelected(false); });
-        menu->addAction(m_renameAction);
-        menu->addSeparator();
-        menu->addAction(m_propertiesAction);
+        fillItemMenu(menu, selectedPaths());
     } else if (!folder.isEmpty() && m_location != places::RecycleBin) {
-        menu->addMenu(m_viewsMenu)->setText(tr("&View"));
-        menu->addAction(tr("R&efresh"), this, [this] { navigate(m_location, false); });
-        menu->addSeparator();
-        menu->addAction(m_pasteAction);
-        menu->addSeparator();
-        menu->addAction(tr("Open Command &Prompt Here"), this, [folder] { programs::openCommandPrompt(folder); });
-        menu->addSeparator();
-        QMenu *create = menu->addMenu(tr("Ne&w"));
-        create->addAction(fileicons::shell(fileicons::Folder), tr("&Folder"), this, &FileBrowser::newFolder);
-        create->addAction(fileicons::shell(fileicons::Document), tr("&Text Document"), this, &FileBrowser::newTextDocument);
-        menu->addSeparator();
-        menu->addAction(m_propertiesAction);
+        fillBackgroundMenu(menu, folder);
     } else {
         menu->addMenu(m_viewsMenu)->setText(tr("&View"));
         menu->addAction(tr("R&efresh"), this, [this] { navigate(m_location, false); });
@@ -2758,6 +2730,155 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
         }
     }
     menu->popup(global);
+}
+
+using namespace shellmenus;
+
+void FileBrowser::fillItemMenu(QMenu *menu, const QStringList &selected)
+{
+    const bool folderItem = selected.size() == 1 && QFileInfo(selected.first()).isDir();
+    // The verbs first, the default one in bold: a picture's is shimgvw.dll's Preview, Open the desktop's program
+    const bool picturesOnly = !selected.isEmpty() && selectedPictures().size() == selected.size();
+    if (picturesOnly) {
+        QAction *preview = menu->addAction(pictures::viewerString(550, "Pre&view"), this, [this] {
+            const QStringList paths = selectedPaths();
+            if (!paths.isEmpty())
+                pictures::Viewer::open(paths.first());
+        });
+        QFont bold = preview->font();
+        bold.setBold(true);
+        preview->setFont(bold);
+        menu->setDefaultAction(preview);
+    }
+    QAction *open = menu->addAction(xpfiles::shellString(STRING_OPEN, "&Open"), this, [this, picturesOnly] {
+        const QStringList paths = selectedPaths();
+        if (paths.isEmpty())
+            return;
+        if (picturesOnly)
+            programs::open(paths.first());
+        else
+            openPath(paths.first());
+    });
+    if (!picturesOnly)
+        menu->setDefaultAction(open);
+    if (!picturesOnly) {
+        QFont bold = open->font();
+        bold.setBold(true);
+        open->setFont(bold);
+    }
+    if (folderItem) {
+        menu->addAction(xpfiles::shellString(STRING_EXPLORE, "E&xplore"), this, [path = selected.first()] {
+            auto *window = new FileBrowser(path);
+            window->setFoldersShown(true);
+            window->show();
+        });
+        menu->addAction(xpfiles::shellString(STRING_SEARCH, "S&earch..."), this, [this, path = selected.first()] {
+            navigate(path);
+            showSearchBar(true);
+        });
+        menu->addAction(tr("Open Command &Prompt Here"), this, [path = selected.first()] { programs::openCommandPrompt(path); });
+    }
+    // What the Picture and Fax Viewer adds for pictures, in its words
+    if (selectedPictures().size() == selected.size()) {
+        menu->addSeparator();
+        menu->addAction(pictures::viewerString(557, "Rotate Cloc&kwise"), this, [this] { rotateSelected(true); });
+        menu->addAction(pictures::viewerString(558, "Rotate Cou&nter Clockwise"), this, [this] { rotateSelected(false); });
+        if (selected.size() == 1) {
+            menu->addSeparator();
+            menu->addAction(pictures::viewerString(560, "Set as Desktop &Background"), this, [this, path = selected.first()] { setAsBackground(path); });
+        }
+    }
+    if (!shell32())
+        return;
+    // Send To, what XP's SendTo folder has
+    menu->addSeparator();
+    addSendTo(menu, selected, this);
+    // Cut, Copy, Paste (into a folder), Create Shortcut, Delete, Rename
+    menu->addSeparator();
+    QHash<int, QAction *> edit = xpprogram::fillMenu(menu, *shell32(), MENU_ITEM);
+    const auto on = [&edit](int command, auto slot) {
+        if (QAction *action = edit.value(command))
+            QObject::connect(action, &QAction::triggered, slot);
+    };
+    on(CMD_CUT, [this] { fileops::copyToClipboard(selectedPaths(), true); });
+    on(CMD_COPY, [this] { fileops::copyToClipboard(selectedPaths(), false); });
+    if (QAction *paste = edit.value(CMD_PASTE)) {
+        // only into a folder, as shell32 keeps it
+        if (!folderItem)
+            menu->removeAction(paste);
+        paste->setEnabled(fileops::clipboardHasFiles());
+        connect(paste, &QAction::triggered, this, [this, selected] { fileops::pasteInto(selected.first(), this); });
+    }
+    on(CMD_SHORTCUT, [this, selected] { makeShortcuts(selected, QFileInfo(selected.first()).absolutePath()); });
+    on(CMD_DELETE, [this] { deleteSelected(false); });
+    on(CMD_RENAME, [this] { renameSelected(); });
+    if (QAction *rename = edit.value(CMD_RENAME))
+        rename->setEnabled(selected.size() == 1);
+    menu->addSeparator();
+    QHash<int, QAction *> properties = xpprogram::fillMenu(menu, *shell32(), MENU_PROPERTIES);
+    if (QAction *action = properties.value(CMD_PROPERTIES))
+        connect(action, &QAction::triggered, this, &FileBrowser::showProperties);
+}
+
+void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
+{
+    if (!shell32())
+        return;
+    QHash<int, QAction *> items = xpprogram::fillMenu(menu, *shell32(), MENU_BACKGROUND);
+    // View: this window's views, Filmstrip in picture folders only
+    const QHash<int, View> views{{CMD_FILMSTRIP, Filmstrip}, {CMD_THUMBNAILS, Thumbnails}, {CMD_TILES, Tiles}, {CMD_ICONS, Icons}, {CMD_LIST, List},
+                                 {CMD_DETAILS, Details}};
+    auto *group = new QActionGroup(menu);
+    for (auto it = views.begin(); it != views.end(); ++it)
+        if (QAction *action = items.value(it.key())) {
+            action->setCheckable(true);
+            action->setChecked(m_view == it.value());
+            action->setVisible(it.value() != Filmstrip || m_pictureFolder);
+            group->addAction(action);
+            connect(action, &QAction::triggered, this, [this, view = it.value()] { setView(view); });
+        }
+    // Arrange Icons By: the columns of a file folder before shell32's own items
+    if (QAction *arrange = items.value(CMD_ARRANGE); arrange && arrange->menu()) {
+        QMenu *orders = arrange->menu();
+        QAction *first = orders->actions().value(0);
+        for (const Order &column : shellmenus::orders()) {
+            auto *action = new QAction(xpfiles::shellString(column.string, column.fallback), orders);
+            connect(action, &QAction::triggered, this, [this, column = column.column] { m_details->sortByColumn(column, Qt::AscendingOrder); });
+            orders->insertAction(first, action);
+        }
+    }
+    // What this window does not have yet
+    for (int command : {CMD_GROUPS, CMD_AUTO_ARRANGE, CMD_ALIGN, CMD_CUSTOMIZE, CMD_UNDO})
+        if (QAction *action = items.value(command))
+            action->setEnabled(false);
+    if (QAction *refresh = items.value(CMD_REFRESH))
+        connect(refresh, &QAction::triggered, this, [this] { navigate(m_location, false); });
+    const bool files = fileops::clipboardHasFiles();
+    if (QAction *paste = items.value(CMD_PASTE_HERE)) {
+        paste->setEnabled(files);
+        connect(paste, &QAction::triggered, this, [this, folder] { fileops::pasteInto(folder, this); });
+    }
+    if (QAction *shortcut = items.value(CMD_PASTE_SHORTCUT)) {
+        shortcut->setEnabled(files);
+        connect(shortcut, &QAction::triggered, this, [folder] {
+            const QList<QUrl> urls = QGuiApplication::clipboard()->mimeData()->urls();
+            QStringList paths;
+            for (const QUrl &url : urls)
+                if (url.isLocalFile())
+                    paths.append(url.toLocalFile());
+            makeShortcuts(paths, folder);
+        });
+    }
+    menu->addSeparator();
+    menu->addAction(tr("Open Command &Prompt Here"), this, [folder] { programs::openCommandPrompt(folder); });
+    menu->addSeparator();
+    QMenu *create = menu->addMenu(tr("Ne&w"));
+    create->addAction(fileicons::shell(fileicons::Folder), tr("&Folder"), this, &FileBrowser::newFolder);
+    create->addAction(fileicons::shell(fileicons::Document), tr("&Text Document"), this, &FileBrowser::newTextDocument);
+    menu->addSeparator();
+    QHash<int, QAction *> properties = xpprogram::fillMenu(menu, *shell32(), MENU_PROPERTIES);
+    if (QAction *action = properties.value(CMD_PROPERTIES))
+        connect(action, &QAction::triggered, this, &FileBrowser::showProperties);
 }
 
 void FileBrowser::newFolder()

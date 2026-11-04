@@ -14,6 +14,12 @@
 class QPainter;
 class QWidget;
 
+// XP's Desktop Items: the icons of its own the desktop may show (shell32's Customize Desktop), kept in
+// native-explorer.conf's [desktop]. None by default, as on a new XP SP2 account.
+enum class DesktopItem { Documents, Computer, Network, Internet };
+bool desktopItemShown(DesktopItem item);
+void setDesktopItemShown(DesktopItem item, bool shown);
+
 class DesktopIcons : public QObject
 {
     Q_OBJECT
@@ -34,6 +40,7 @@ private:
         QImage icon;
         QPoint place;       // the cell's top-left, on the desktop
         bool trash = false;
+        bool shell = false;   // one of XP's Desktop Items: no file to rename or delete
     };
 
     QSize cell() const;
@@ -47,6 +54,7 @@ private:
     void rename(int index);
     void trash(int index);
     void arrange();
+    void arrangeBy(int column);
     void savePlace(const Item &item);
     void showMenu(int index, QPoint global);
     QImage iconFor(const QString &path) const;

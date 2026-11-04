@@ -97,6 +97,8 @@ private:
     void activate(const QModelIndex &index);
     void openPath(const QString &path);
     void showContextMenu(QPoint global, bool onItem);
+    void fillItemMenu(QMenu *menu, const QStringList &selected);
+    void fillBackgroundMenu(QMenu *menu, const QString &folder);
     void showViewContextMenu(QAbstractItemView *view, QPoint at);
     void addHistoryMenu(QToolButton *button, bool back);
     QAbstractItemView *currentView() const;
