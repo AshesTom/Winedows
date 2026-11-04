@@ -170,6 +170,9 @@ private:
     QComboBox *m_address = nullptr;
     QToolButton *m_backButton = nullptr, *m_forwardButton = nullptr;
     QAction *m_upAction = nullptr, *m_foldersAction = nullptr, *m_searchAction = nullptr, *m_deleteAction = nullptr, *m_moveAction = nullptr, *m_copyToAction = nullptr;
+    QAction *m_undoAction = nullptr;
+    std::function<void()> m_undo;
+    bool m_undoing = false;
     QAction *m_cutAction = nullptr, *m_copyAction = nullptr, *m_pasteAction = nullptr, *m_renameAction = nullptr, *m_propertiesAction = nullptr, *m_newFolderAction = nullptr;
     QAction *m_statusAction = nullptr, *m_newTextAction = nullptr;
     QActionGroup *m_viewGroup = nullptr;
