@@ -13,7 +13,8 @@ namespace x11 {
 
 xcb_connection_t *connection()
 {
-    return qApp->nativeInterface<QNativeInterface::QX11Application>()->connection();
+    const auto *x11 = qApp->nativeInterface<QNativeInterface::QX11Application>();
+    return x11 ? x11->connection() : nullptr;
 }
 
 xcb_window_t root()

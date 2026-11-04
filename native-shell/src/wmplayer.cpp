@@ -2,6 +2,7 @@
 // wmplayer: Windows Media Player as a program of its own, as XP has it apart from explorer.exe
 // (Program Files\Windows Media Player\wmplayer.exe). The shell starts it; so do music and videos.
 #include "mediaplayer.h"
+#include "menushadow.h"
 #include "xpfiles.h"
 
 #include <QApplication>
@@ -13,6 +14,7 @@
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    menushadow::install();
     app.setApplicationName(QStringLiteral("wmplayer"));
     app.setQuitOnLastWindowClosed(true);
 

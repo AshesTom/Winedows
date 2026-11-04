@@ -4,7 +4,7 @@ This document tracks the parts of the native shell that were reverse-engineered 
 binaries and ported: Windows Media Player 9, Taskbar and Start Menu Properties, shell32's shortcut
 menus (folder windows and the desktop), Windows Picture and Fax Viewer, the frame manager's handling
 of undecorated windows, the taskband and its menus, the Start panel's keys, the notification area and
-the folder windows' bands, the caption animation (`win32k.sys`), desktop icons, file Properties and the Windows key's hotkeys. Section 13
+the folder windows' bands, the caption animation (`win32k.sys`), desktop icons, file Properties, the menus' drop shadows and the Windows key's hotkeys. Section 13
 lists what explorer.exe does that is not ported yet. For each component it records:
 
 - what was recovered from XP's files, and from where (function, address, resource or string ID);
@@ -120,7 +120,8 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Keep the taskbar on top: off, the bar is in the windows' order and comes up when clicked | XP's behaviour (ABS_ALWAYSONTOP) | Done: `_NET_WM_STATE_BELOW`, which bridge-wm honours; saved as `Taskbar/AlwaysOnTop` |
 | The Toolbars submenu: browseui's band site menu 268 (Desktop 3, Quick Launch 4, New Toolbar 1) | `browselc.dll` | Done for Quick Launch; the others are greyed |
 | Quick Launch's Show Text: one width for every button, the widest name's, the name 4 after the icon and 4 before the end, in TaskBar::Toolbar's white; Show Title: the folder's name at the band's start in TaskBar::Rebar's text colour (123 182 232) | XP's taskbar in Wine | Done: identical pixels |
-| The band's menu (unlocked, on its gripper or title): View (Large Icons, Small Icons), Open Folder, Show Text, Show Title, Close Toolbar, then the taskbar's | `browselc.dll` menus 258, 256 and 257; XP's taskbar in Wine | Done; Large Icons is greyed |
+| The band's menu (unlocked, on its gripper or title): View (Large Icons, Small Icons), Open Folder, Show Text, Show Title, Close Toolbar, then the taskbar's | `browselc.dll` menus 258, 256 and 257; XP's taskbar in Wine | Done |
+| Quick Launch's Large Icons: ToolBar's 24-pixel pictures with an alpha channel, in 44-wide buttons (the icon 24 plus 20), the icon at (10, 3); Small Icons back to 16-pixel pictures in 23-wide buttons | `browseui`'s `itbar.cpp` (`TB_BMP_CX_ALPHABITMAP`, `CSFToolbar::v_CalcWidth`), `luna.msstyles` | Done; saved as `Taskbar/QuickLaunchLargeIcons` |
 | Hide inactive icons: TrayNotify's defaults, IconDemoteTimerTick 300000 ms (set at `0x101811d`), TrayIconResidentInterval 3600000 ms (`0x10180d2`), EnableAutoTray on | `explorer.exe` (`FUN_0101809f`) | Done |
 | The chevron: `TrayNotifyHoriz::Button` (and `TrayNotifyHorizOpen` once open), centred on the area's visible edge, the icons 13 after that edge; tooltips 543 "Show hidden icons" and 542 "Hide" | `luna.msstyles`; `explorer.exe`'s preview 180 and strings | Done |
 | Customize Notifications: dialog 7, its list (Name 1000, Behavior 1001; Current Items 1403, Past Items 1404) and the three behaviours (1002 to 1004), with Restore Defaults | `explorer.exe` | Done; items are known by their program (the tray host's `tray-names.tsv`), not their tooltip |
@@ -134,7 +135,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Original feature | Status |
 |---|---|
 | Moving and resizing the unlocked taskbar (other screen edges, more rows) | Missing: unlocked, it shows its sizing bar and grippers but stays one row at the bottom |
-| Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: Large Icons, the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
+| Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
 | Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog lists names without icons, and the open chevron does not close by itself |
 | Classic Start menu | Done (section 14) |
@@ -211,7 +212,7 @@ Binary: `shimgvw.dll`. Port: `pictures::Viewer` in [`pictures.cpp`](../native-sh
 | Print (Photo Printing Wizard) | Partial: printed through Qt's print dialog, the picture fitted to the page; the wizard itself is not ported |
 | Help (`ImgPrev.chm`) | Missing (greyed) |
 | Annotations (409–415, 402, 422, 419) | Missing |
-| Margins and remembered window size | Partial (not checked against XP) |
+| Margins and remembered window size | Done: the toolbar sits NEWTOOLBAR_BOTTOMMARGIN (8) above the client's bottom and the picture NEWTOOLBAR_TOPMARGIN (8) above the toolbar (`prevwnd.cpp`'s `OnSize`); the normal rectangle and whether it was maximized are saved as `Viewer/Bounds` and `Viewer/Maximize` in `native-explorer.conf` when the window closes (`CreateViewerWindow`, `REGSTR_BOUNDS`, `REGSTR_MAXIMIZED`) |
 | Animated images (GIF) | Done (played at their own frame delays) |
 | Comparison with the real viewer running in Wine | Missing |
 
@@ -237,14 +238,15 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 
 | Item | Source | Status |
 |---|---|---|
-| Grouping settings: `TaskbarGlomming` (on unless 0, or SHRestricted `NoTaskGrouping` 0x40000056) at taskband `+0x34`, `TaskbarGroupSize` at `+0x38` | `sub_1015ddf` | Done for the default (`TaskbarGroupSize` 0) |
+| Grouping settings: `TaskbarGlomming` (on unless 0, or SHRestricted `NoTaskGrouping` 0x40000056) at taskband `+0x34`, `TaskbarGroupSize` at `+0x38`, read with SHRegGetUSValueW and defaulting to 0 | `sub_1015ddf` | Done (0, 1 and 2 or more) |
 | Button width: the band over the visible buttons (less `cxButtonSpacing` with more than one), at most SM_CXMINIMIZED; `TB_SETBUTTONWIDTH` | `sub_1004e4c`, `sub_1004fe2`; globals filled by `sub_101a001` (SM_CYSIZE `+0xbc`, SM_CXEDGE `+0xc0`, SM_CXMINIMIZED `+0xc4`) | Done |
 | Least width: `_ftol((SM_CYSIZE + 2 SM_CXEDGE) x 1.8)` (constant at `0x1004c88`) plus `8 x tmAveCharWidth` of the toolbar's font while grouping is on (`+0x70`, `0x1009f61`) | `sub_10049a7`, `sub_1004f6b` | Done (92 px with Luna) |
-| Which program groups: the one with two windows or more whose most recent window was chosen least recently (`sub_102eae3`: the maximum of the items' `+0xc`); ungrouping when two more buttons fit, the most recent group with fewer windows than that | `sub_10050ec`, branch `0x1023dc8` | Done; modes 1 (most windows) and 2+ (at least N windows) are not ported |
+| Which program groups: with `TaskbarGroupSize` 0, the one with two windows or more whose most recent window was chosen least recently (`sub_102eae3`: the maximum of the items' `+0xc`); ungrouping when two more buttons fit, the most recent group with fewer windows than that. Mode 1 groups the program with the most windows first and takes apart the group with the fewest; mode 2 or more groups every program with at least that many windows and leaves them grouped | `sub_10050ec`, branches `0x1023dc8`, `0x1023def`, `0x1023e0f` | Done |
 | "Chosen": an item's `+0xc` is set at creation and before `SwitchToThisWindow` only, not on every activation | `sub_1005cf7`, `sub_102e07c` | Done |
 | Metrics: `cxButtonSpacing` 0 and `cxPad` 20 with a style, 3 and 8 without (`TB_SETMETRICS`) | `sub_10163ba` | Done |
 | Group button: the count centred in a gap as wide as the count with a "0" more, in `TaskBand.GroupCount` (Tahoma 8 bold, 255 204 109), `DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX`; the text moved by `iListGap` | `sub_102ee02`, custom draw at `0x1023a91` and `0x1023b4a` | Done |
-| Group list in `TaskBandGroupMenu` (menu band) | `sub_102eee0`; `luna.msstyles` | Partial: rows from the style's margins, not measured |
+| Group list in `TaskBandGroupMenu` (menu band) | `sub_102eee0`; `luna.msstyles` (toolbar content margins 9, 0, 0, 0; button 9, 0, 3, 3) | Done: the row is the icon and the button's top and bottom margins (22 px with Luna), the toolbar's and button's left margins in |
+| The taskband's scrollbar: when the buttons do not fit at their least width, the taskband takes a vertical scrollbar at its right (SM_CXVSCROLL) and the toolbar's rows become pages; the arrows scroll a page and the toolbar is shifted by one row | `explorer.exe` `shell/explorer/taskband.cpp`: `_CheckSize`, `_GetNumberOfRowsCols`, `_CheckNeedScrollbars`; `luna.msstyles` `TaskBand::Scrollbar.ArrowBtn` (17 x 17, 16 states) | Partial: the scrollbar, its arrows, paging, the wheel and the keyboard's scroll-into-view are ported; the taskband's extra rows (a resized bar), the thumb and the tracks are not |
 | Menu 210 (Cascade, Tile Horizontally, Tile Vertically, Minimize Group, Close Group) | `explorer.exe` MENUEX resource | Done |
 | Menu 205 prepared as `sub_10331c8` does: Adjust Date/Time and Customize Notifications only on the notification area, "&Undo %s" (534 with 535 Cascade / 536 Tile), Show Open Windows (850), Cascade and Tile greyed without windows | `sub_10331c8` | Done |
 | Cascade and Tile: user32's `CascadeWindows` (`sub_30054e2e`, position `sub_3002fae3`) and `TileWindows` (`sub_30055060`) | `user32.dll` | Done |
@@ -259,8 +261,7 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 
 | Original feature | Status |
 |---|---|
-| `TaskbarGroupSize` 1 and 2+ | Missing |
-| The taskband's extra rows and scroll arrows when buttons do not fit even grouped | Missing (extra buttons are not shown) |
+| The taskband's extra rows when buttons do not fit even grouped, and its scrollbar's thumb and tracks | Partial: the scrollbar's arrows and paging are done; a taller taskbar (more rows) is not |
 | Group visuals checked against XP | Not possible in Wine: XP's explorer never groups there (no exe path for a window) |
 | The drop-down arrow of a group button | Partial: drawn as a 5 x 3 triangle, not measured |
 
@@ -340,7 +341,7 @@ Binary: `shell32.dll`. Port: [`desktopicons.cpp`](../native-shell/src/desktopico
 | Desktop Items: My Documents (9227, icon 235), My Computer (9216, 16), My Network Places (9217, 18), Internet Explorer (9222; the default browser here), hidden by default | `shell32.dll` | Done, saved in `native-explorer.conf` `[desktop]` |
 | Customize Desktop: the Desktop Items sheet (string 30371), General (dialog 29953) and Web (29954); its check boxes are `BS_3STATE` | `shell32.dll` | Partial: the four check boxes work; the icon list is shown; Change Icon, Restore Default, the cleanup wizard and the Web page are greyed |
 | Icon spacing | comctl32 v6 uses SM_CXICONSPACING / SM_CYICONSPACING (`sub_30006d74`, `sub_3004487f`); the prefix says 75 x 75 | Partial: 75 px kept; XP in Wine showed 82 vertically, not explained |
-| Recycle Bin's corner place | XP in Wine (10 px left, 7 px higher than the native) | Missing |
+| Recycle Bin's corner place | XP in Wine (10 px left, 7 px higher than the native) | Done: the default place is the last cell's left less 10 and its top less 7, until the bin is moved |
 | Labels' drop shadow: the desktop's listview draws each label with comctl32's `DrawShadowText` (call at `0x7741a8de`: white text, black shadow, offset 2, 2). DrawShadowText (`0x77446973`) draws the text into a 32-bit DIB 10 larger, every lit pixel to 255, blurs it (`sub_774466d1`: the mean of the 4 pixels to the right, then the sum of 5 rows over 4, clamped, premultiplied with the shadow colour + 1) and AlphaBlends it at (-4, -8) plus the offset, then draws the text | `comctl32.dll` 6.0.2600.5512 | Done (`ShellTheme::drawShadowedText`, which already followed it, now used for the desktop's labels instead of a hard black copy 1 pixel off); the comparison with XP was limited by the icons' different places on the wallpaper |
 
 ---
@@ -356,8 +357,8 @@ Binary: `shell32.dll`. Port: [`fileproperties.cpp`](../native-shell/src/fileprop
 | Opens with (the default application), Size on disk (allocated blocks), dates as GetDateFormat's long date and the time | XP in Wine | Done |
 | Read-only (write permissions) and renaming, applied by OK and Apply; Hidden (a leading dot) and Archive greyed, Advanced hidden | — | Done |
 | Version page: dialog 1043, `VS_VERSIONINFO` read from the file, the item names 8752–8765 sorted, Language as VerLanguageName | `shell32.dll` | Done |
-| Etched separators (`SS_ETCHEDHORZ`) | dialog 1041 | Missing: not drawn by the dialog builder |
-| The sheet's size and caption | XP in Wine: 58 px taller; no caption icon | Missing |
+| Etched separators (`SS_ETCHEDHORZ`, `SS_ETCHEDVERT`, `SS_ETCHEDFRAME`) | dialog 1041 | Done: the dialog builder makes a sunken `QFrame` (HLine, VLine, Box) for the Static control's 0x10, 0x11 and 0x12 kinds |
+| The sheet's size and caption | XP in Wine: 58 px taller; no caption icon | Partial: the caption has no icon; the 58 pixels are not added |
 | Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Missing (drives keep the earlier hand-made page) |
 
 ---
@@ -402,7 +403,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx (the native button keeps the flash colour while the window wants attention) | `sub_1002819`; user32 not reversed |
 | Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604 |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
-| Taskbar | The taskband's extra rows and scroll arrows; TaskbarGroupSize 1 and 2+ | Section 6 |
+| Taskbar | The taskband's extra rows (a resized bar), and the scrollbar's thumb and tracks | Section 6 |
 | Taskbar | Desktop, Links and New Toolbar bands; deskbands | Section 2 |
 | Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings |
 | Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7 |
@@ -414,7 +415,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 | Start menu | Help and Support (`helpctr.exe -FromStartHelp`, 732) | String 732 |
 | Start menu | The infotip's own drawing | Section 7 |
 | Session | Safe mode notice (538, 539); "could not load or run" for the Run key's programs (515) | Strings |
-| Menus | Drop shadows under menus, tooltips and the Start menu: win32k's xxxAddShadow (`sub_bf854347`) puts a layered SysShadow window (WS_EX_LAYERED, TRANSPARENT, TOOLWINDOW; TOPMOST with a topmost owner) behind a CS_DROPSHADOW window when SPI_GETDROPSHADOW is on; its picture (`sub_bf8544b3`) is the window's size plus 5 each way | `win32k.sys` | Missing: the shadow's alpha (`sub_bf850d1b`) is not read yet |
+| Menus | Drop shadows under menus, tooltips and the Start menu: win32k's xxxAddShadow (`sub_bf854347`) puts a layered SysShadow window (WS_EX_LAYERED, TRANSPARENT, TOOLWINDOW; TOPMOST with a topmost owner) behind a CS_DROPSHADOW window when SPI_GETDROPSHADOW is on; its picture (`sub_bf8544b3`) is the window's size plus 5 each way | `win32k.sys`; the profile measured on XP (wine/patches/0033-winex11-external-drop-shadow.patch: 0.442, 0.328, 0.168, 0.055, 0.012 across, fading 0.113 to 1.0 along, corners 0.882 to 0.018) | Done (`menushadow.cpp`: an override-redirect shadow window masked to the right and bottom strips, the screen beneath it darkened; `Effects/DropShadow` and `WIN4WINE_NO_MENU_SHADOW` turn it off; the Start panel has none). `sub_bf850d1b` itself is not decompiled; the profile is the measured one |
 
 ---
 
@@ -435,4 +436,4 @@ Binary: `explorer.exe` (menu 204, banners 158–167), `shell32.dll` (icons), mea
 | The Start Menu page: Start menu or Classic Start menu (controls 1132, 1133), preview 170 or 171 | dialog 205; `sub_1038a95` | Done; saved as `StartMenu/Classic` |
 | The Start Menu folder's own items | XP: Set Program Access and Defaults, Windows Catalog, Windows Update | Partial: Set Program Access and Defaults only |
 | Customize Classic Start Menu (dialog 1135) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | dialog 1135 | Missing (greyed) |
-| The desktop's icons in classic mode (XP keeps HideDesktopIcons per mode: ClassicStartMenu shows them) | XP in Wine (icons shown) | Missing |
+| The desktop's icons in classic mode (XP keeps HideDesktopIcons per mode: ClassicStartMenu shows them) | XP in Wine (icons shown) | Done: `desktop/hideIcons` for the Start panel and `desktop/hideIconsClassic` for the classic menu, chosen by `StartMenu/Classic` |

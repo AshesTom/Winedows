@@ -35,6 +35,7 @@ add_executable(explorer
     src/desktopicons.cpp src/desktopicons.h
     src/displayproperties.cpp src/displayproperties.h
     src/frames.cpp src/frames.h
+    src/menushadow.cpp src/menushadow.h
     src/captionanimation.cpp src/captionanimation.h
     src/ipcfile.h
     src/startmenu.cpp src/startmenu.h
@@ -85,6 +86,8 @@ find_package(Qt6 QUIET COMPONENTS Multimedia Qml)
 if(Qt6Multimedia_FOUND AND Qt6Qml_FOUND)
     add_executable(wmplayer
         src/wmplayer.cpp
+        src/menushadow.cpp src/menushadow.h
+        src/x11.cpp src/x11.h
         src/mediaplayer.cpp src/mediaplayer.h
         src/wmpengine.cpp src/wmpengine.h
         src/wmpskin.cpp src/wmpskin.h
@@ -95,7 +98,7 @@ if(Qt6Multimedia_FOUND AND Qt6Qml_FOUND)
         ../qt-style/src/msstyles.cpp ../qt-style/src/msstyles.h
         ../qt-style/src/session.cpp ../qt-style/src/session.h)
     target_include_directories(wmplayer PRIVATE ../qt-style/src)
-    target_link_libraries(wmplayer PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::Qml)
+    target_link_libraries(wmplayer PRIVATE Qt6::Widgets Qt6::Multimedia Qt6::Qml PkgConfig::XCB)
     target_compile_options(wmplayer PRIVATE -Wall -Wextra)
     target_compile_definitions(explorer PRIVATE XP_MEDIA_PLAYER)
     install(TARGETS wmplayer RUNTIME DESTINATION bin)

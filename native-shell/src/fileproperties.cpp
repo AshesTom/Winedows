@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -316,6 +317,8 @@ void show(const QStringList &paths, QWidget *parent)
     const QFileInfo first(paths.first());
     const bool one = paths.size() == 1, folder = one && first.isDir();
     auto *dialog = new QDialog(parent);
+    // XP's sheets have no caption icon.
+    dialog->setWindowIcon(QIcon());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     auto *tabs = new xpdialog::SheetTabs(dialog);
     auto *general = new QWidget;

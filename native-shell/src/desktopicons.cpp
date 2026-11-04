@@ -77,6 +77,26 @@ void setDesktopSetting(const QString &name, const QVariant &value)
     QSettings(explorerSettingsPath(), QSettings::IniFormat).setValue(QStringLiteral("desktop/") + name, value);
 }
 
+// XP keeps HideDesktopIcons per Start menu mode: Explorer\Advanced\HideDesktopIcons\NewStartPanel or
+// \ClassicStartMenu, so Show Desktop Icons changed with the classic menu leaves the Start panel's icons
+// as they were.
+QString hideIconsSetting()
+{
+    const bool classic = QSettings(explorerSettingsPath(), QSettings::IniFormat)
+                             .value(QStringLiteral("StartMenu/Classic"), false).toBool();
+    return classic ? QStringLiteral("hideIconsClassic") : QStringLiteral("hideIcons");
+}
+
+bool desktopIconsHidden()
+{
+    return desktopSetting(hideIconsSetting(), false);
+}
+
+void setDesktopIconsHidden(bool hidden)
+{
+    setDesktopSetting(hideIconsSetting(), hidden);
+}
+
 QString desktopFolder()
 {
     return QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
@@ -189,7 +209,10 @@ void DesktopIcons::reload()
     const bool full = !QDir(trashFiles()).isEmpty();
     bin.icon = theme->shellIcon(full ? ICON_TRASH_FULL : ICON_TRASH_EMPTY, theme->scaled(ICON_SIZE));
     const QRect area = workArea();
-    bin.place = places.value(placeKey(bin.path), QPoint(area.right() + 1 - cell().width(), area.bottom() + 1 - cell().height())).toPoint();
+    // XP's corner: its Recycle Bin sits 10 pixels left of the last cell's left and 7 higher than the
+    // native one (measured on XP in Wine, which also lays the cells 82 pixels apart vertically).
+    const QPoint binCorner(area.right() + 1 - cell().width() - theme->scaled(10), area.bottom() + 1 - cell().height() - theme->scaled(7));
+    bin.place = places.value(placeKey(bin.path), binCorner).toPoint();
     items.append(bin);
 
     // XP's Desktop Items, first down the left column as XP puts them
@@ -305,7 +328,7 @@ QRect DesktopIcons::textRect(const Item &item, const QStringList &lines) const
 void DesktopIcons::paint(QPainter &painter, const QRect &clip) const
 {
     // Show Desktop Icons unchecked
-    if (desktopSetting(QStringLiteral("hideIcons"), false))
+    if (desktopIconsHidden())
         return;
     ShellTheme *theme = ShellTheme::instance();
     const QFont font = theme->systemFont(QStringLiteral("icontitlefont"));
@@ -353,7 +376,7 @@ void DesktopIcons::paint(QPainter &painter, const QRect &clip) const
 
 int DesktopIcons::itemAt(QPoint at) const
 {
-    if (desktopSetting(QStringLiteral("hideIcons"), false))
+    if (desktopIconsHidden())
         return -1;
     for (int i = int(m_items.size()) - 1; i >= 0; --i) {
         const Item &item = m_items[i];
@@ -642,9 +665,9 @@ void DesktopIcons::showMenu(int index, QPoint global)
         const QHash<int, QAction *> desktop = xpprogram::fillMenu(orders, *shell32(), MENU_DESKTOP);
         if (QAction *show = desktop.value(CMD_SHOW_ICONS)) {
             show->setCheckable(true);
-            show->setChecked(!desktopSetting(QStringLiteral("hideIcons"), false));
+            show->setChecked(!desktopIconsHidden());
             connect(show, &QAction::toggled, this, [this](bool on) {
-                setDesktopSetting(QStringLiteral("hideIcons"), !on);
+                setDesktopIconsHidden(!on);
                 m_desktop->update();
             });
         }

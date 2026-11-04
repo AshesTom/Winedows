@@ -10,6 +10,7 @@
 #include <QAbstractButton>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFrame>
 #include <QGroupBox>
 #include <QLabel>
 #include <QDialog>
@@ -176,17 +177,26 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
             else
                 widget = new QPushButton(text, parent);
         } else if (ordinal == 0x82 || className.compare(QLatin1String("Static"), Qt::CaseInsensitive) == 0) {
-            auto *label = new QLabel(text, parent);
-            label->setWordWrap(true);
-            label->setAlignment(controlStyle & 1 ? Qt::AlignHCenter | Qt::AlignTop : Qt::AlignLeft | Qt::AlignTop);
-            // A picture of the file, by its number: SS_BITMAP or SS_ICON
+            // The Static control's etched rules (SS_ETCHEDHORZ, SS_ETCHEDVERT, SS_ETCHEDFRAME) are
+            // DrawEdge's sunken side, as the file Properties sheet's separators are.
             const int kind = controlStyle & 0x1f;
-            if (titleOrdinal && (kind == 0x0e || kind == 0x03)) {
-                QImage image = kind == 0x0e ? xpfiles::bitmap(pe, titleOrdinal) : xpfiles::icon(pe, titleOrdinal, 32);
-                if (!image.isNull())
-                    label->setPixmap(QPixmap::fromImage(image));
+            if (kind == 0x10 || kind == 0x11 || kind == 0x12) {
+                auto *frame = new QFrame(parent);
+                frame->setFrameShape(kind == 0x10 ? QFrame::HLine : kind == 0x11 ? QFrame::VLine : QFrame::Box);
+                frame->setFrameShadow(QFrame::Sunken);
+                widget = frame;
+            } else {
+                auto *label = new QLabel(text, parent);
+                label->setWordWrap(true);
+                label->setAlignment(controlStyle & 1 ? Qt::AlignHCenter | Qt::AlignTop : Qt::AlignLeft | Qt::AlignTop);
+                // A picture of the file, by its number: SS_BITMAP or SS_ICON
+                if (titleOrdinal && (kind == 0x0e || kind == 0x03)) {
+                    QImage image = kind == 0x0e ? xpfiles::bitmap(pe, titleOrdinal) : xpfiles::icon(pe, titleOrdinal, 32);
+                    if (!image.isNull())
+                        label->setPixmap(QPixmap::fromImage(image));
+                }
+                widget = label;
             }
-            widget = label;
         } else if (ordinal == 0x85 || className.compare(QLatin1String("ComboBox"), Qt::CaseInsensitive) == 0) {
             auto *combo = new QComboBox(parent);
             // CBS_DROPDOWN has an edit; CBS_DROPDOWNLIST does not.

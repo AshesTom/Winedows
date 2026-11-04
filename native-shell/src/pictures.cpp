@@ -22,7 +22,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QCloseEvent>
 #include <QImageReader>
+#include <QSettings>
 #include <QImageWriter>
 #include <QKeyEvent>
 #include <QMessageBox>
@@ -459,6 +461,16 @@ const int ACCELERATORS = 50, STRING_TITLE = 200, STRING_COPY_TO = 222;
 
 } // namespace
 
+namespace {
+// prevwnd.h: the toolbar sits NEWTOOLBAR_BOTTOMMARGIN above the client's bottom, the picture
+// NEWTOOLBAR_TOPMARGIN above the toolbar.
+const int NEWTOOLBAR_TOPMARGIN = 8, NEWTOOLBAR_BOTTOMMARGIN = 8;
+QString viewerSettingsPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf");
+}
+} // namespace
+
 void Viewer::open(const QString &path)
 {
     auto *viewer = new Viewer(path);
@@ -530,6 +542,14 @@ Viewer::Viewer(const QString &path)
     m_toolbar->adjustSize();
     const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
     resize(qMin(800, screen.width() * 2 / 3), qMin(600, screen.height() * 2 / 3));
+    // ShellImageView's Bounds and Maximize, read before the window is shown (prevwnd.cpp's
+    // CreateViewerWindow; the registry's fMaximize defaults to TRUE).
+    const QSettings settings(viewerSettingsPath(), QSettings::IniFormat);
+    const QRect bounds = settings.value(QStringLiteral("Viewer/Bounds")).toRect();
+    if (bounds.isValid() && screen.intersects(bounds))
+        setGeometry(bounds);
+    if (settings.value(QStringLiteral("Viewer/Maximize"), true).toBool())
+        setWindowState(Qt::WindowMaximized);
     show(m_index);
 }
 
@@ -774,13 +794,23 @@ void Viewer::paintEvent(QPaintEvent *)
         return;
     painter.setRenderHint(QPainter::SmoothPixmapTransform, m_scale < 1);
     // the picture keeps above the toolbar's band
-    painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - 4));
+    const int margin = ShellTheme::instance()->scaled(NEWTOOLBAR_BOTTOMMARGIN);
+    painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - margin - ShellTheme::instance()->scaled(NEWTOOLBAR_TOPMARGIN)));
     painter.drawImage(imageRect(), m_image);
+}
+
+void Viewer::closeEvent(QCloseEvent *event)
+{
+    // prevwnd.cpp's WM_CLOSE: the normal rectangle and whether it was maximized.
+    QSettings settings(viewerSettingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("Viewer/Bounds"), isMaximized() ? normalGeometry() : geometry());
+    settings.setValue(QStringLiteral("Viewer/Maximize"), isMaximized());
+    QWidget::closeEvent(event);
 }
 
 void Viewer::resizeEvent(QResizeEvent *)
 {
-    m_toolbar->move((width() - m_toolbar->width()) / 2, height() - m_toolbar->height() - 2);
+    m_toolbar->move((width() - m_toolbar->width()) / 2, height() - m_toolbar->height() - ShellTheme::instance()->scaled(NEWTOOLBAR_BOTTOMMARGIN));
     if (m_bestFit)
         m_scale = fitScale();
 }

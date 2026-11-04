@@ -22,12 +22,14 @@ class SheetTabs;
 struct TaskbarSettings
 {
     bool group = true;
+    int groupSize = 0;   // TaskbarGroupSize: 0 groups when the buttons no longer fit; 1 the most windows first; 2+ every program with that many
     bool clock = true;
     bool autoHide = false;   // StuckRects2's ABS_AUTOHIDE
     bool quickLaunch = false;
     bool locked = true;
     bool onTop = true;
     bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
+    bool quickLaunchLargeIcons = false;   // its View menu's Large Icons (24-pixel pictures)
     bool classicStartMenu = false;
     // explorer.exe's StartButtonBalloonTip: 0 until the Start button is first used, 2 once it has been
     int startButtonBalloonTip = 0;   // the Start menu page's Classic Start menu (SHELLSTATE's fStartPanelOn off)

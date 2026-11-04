@@ -20,6 +20,7 @@
 #include "fileops.h"
 #include "xpprogram.h"
 
+#include <QActionGroup>
 #include <QApplication>
 #include <QUrl>
 #include <QDropEvent>
@@ -43,6 +44,7 @@
 #include <QScreen>
 #include <QStandardPaths>
 #include <QToolTip>
+#include <QWheelEvent>
 
 #include <functional>
 #include <iterator>
@@ -128,6 +130,9 @@ const Part TASK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("ta
 // the hot frame from 104, the task band 4 after the last button.
 const Part QUICK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskbar")};
 const int QUICK_WIDTH = 23, QUICK_ICON_X = 3, QUICK_ICON_Y = 7, QUICK_BAND_END = 4;
+// ITBar's large toolbar pictures with an alpha channel: 24 x 24, the button 24 + 20 wide (itbar.cpp
+// TB_BMP_CX_ALPHABITMAP and CSFToolbar::v_CalcWidth).
+const int QUICK_LARGE_ICON = 24, QUICK_LARGE_WIDTH = 44, QUICK_LARGE_ICON_X = 10, QUICK_LARGE_ICON_Y = 3;
 // Show Text: the name 4 after the icon and 4 before the button's end (XP's at 134 for "Windows Media
 // Player"); Show Title: the name at the band's start, then 4 before the buttons
 const int QUICK_TEXT_GAP = 4, QUICK_TEXT_END = 4, QUICK_TITLE_GAP = 4;
@@ -154,6 +159,10 @@ const Part CLOCK{QStringLiteral("clock"), {}, {}, 0, QStringLiteral("traynotify"
 const Part GROUP_COUNT{QStringLiteral("taskband"), QStringLiteral("groupcount"), {}, 0, {}};
 const Part GROUP_LIST{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("taskbandgroupmenu")};
 const Part GROUP_LIST_ITEM{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 2, QStringLiteral("taskbandgroupmenu")};
+// explorer.exe's _CheckNeedScrollbars: a vertical scrollbar at the band's right when the buttons do
+// not fit at their least width; its parts are the style's TaskBand::Scrollbar (SBP_ARROWBTN's 16
+// states: up 1-4, down 5-8, left 9-12, right 13-16).
+const int SCROLL_WIDTH = 17, CLASSIC_SCROLL_WIDTH = 16;
 
 // Quick Launch's folder, the one XP keeps under Application Data\Microsoft\Internet Explorer
 QString quickLaunchFolder()
@@ -186,7 +195,7 @@ public:
         QString title;
         QImage icon;
     };
-    static constexpr int ROW = 22, INSET = 9, ICON_X = 9, TEXT_GAP = 7, END = 9;
+    static constexpr int TEXT_GAP = 7, END = 9;
 
     GroupList(const QList<Item> &items, int minWidth, std::function<void(xcb_window_t)> chosen,
               std::function<void(xcb_window_t, QPoint)> context)
@@ -200,12 +209,18 @@ public:
         w4w::Renderer *renderer = theme()->renderer();
         const QString spec = renderer ? renderer->property(GROUP_LIST, QStringLiteral("font")).value_or(QStringLiteral("Tahoma, 8")) : QStringLiteral("Tahoma, 8");
         setFont(theme()->font(spec));
+        // The menu band's toolbar's content margins (Luna: 9, 0, 0, 0) and its buttons' (9, 0, 3, 3),
+        // as the style gives them: the row is the icon and those margins around it.
+        m_toolbarMargins = renderer ? renderer->contentMargins(GROUP_LIST) : QMargins(0, 0, 0, 0);
+        m_buttonMargins = renderer ? renderer->contentMargins(GROUP_LIST_ITEM) : QMargins(3, 3, 0, 3);
+        m_row = qMax(theme()->scaled(ICON_SIZE), fontMetrics().height()) + m_buttonMargins.top() + m_buttonMargins.bottom();
         int widest = 0;
         for (const Item &item : m_items)
             widest = qMax(widest, fontMetrics().horizontalAdvance(item.title));
         const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
-        const int width = theme()->scaled(INSET + ICON_X + ICON_SIZE + TEXT_GAP + END) + widest + frameWidth() * 2;
-        resize(qBound(minWidth, width, screen.width() / 2), theme()->scaled(ROW) * int(m_items.size()) + frameWidth() * 2);
+        const int width = m_toolbarMargins.left() + m_toolbarMargins.right() + m_buttonMargins.left() + theme()->scaled(ICON_SIZE + TEXT_GAP)
+            + m_buttonMargins.right() + theme()->scaled(END) + widest + frameWidth() * 2;
+        resize(qBound(minWidth, width, screen.width() / 2), m_row * int(m_items.size()) + frameWidth() * 2);
     }
 
     void popUp(const QRect &button)
@@ -224,8 +239,8 @@ protected:
     QRect rowRect(int row) const
     {
         const int f = frameWidth();
-        return QRect(f + theme()->scaled(theme()->renderer() ? INSET : 0), f + row * theme()->scaled(ROW),
-                     width() - 2 * f - theme()->scaled(theme()->renderer() ? INSET : 0), theme()->scaled(ROW));
+        return QRect(f + m_toolbarMargins.left(), f + row * m_row,
+                     width() - 2 * f - m_toolbarMargins.left() - m_toolbarMargins.right(), m_row);
     }
 
     int rowAt(QPoint at) const
@@ -262,10 +277,10 @@ protected:
                 }
             }
             const int icon = theme()->scaled(ICON_SIZE);
-            const int iconX = row.x() + theme()->scaled(renderer ? ICON_X : 3);
+            const int iconX = row.x() + m_buttonMargins.left();
             painter.drawImage(QRect(iconX, row.y() + (row.height() - icon) / 2, icon, icon), m_items[i].icon);
             const int textX = iconX + icon + theme()->scaled(TEXT_GAP);
-            const QRect words(textX, row.y(), row.right() - theme()->scaled(END) - textX, row.height());
+            const QRect words(textX, row.y(), row.right() - m_buttonMargins.right() - theme()->scaled(END) - textX, row.height());
             painter.setPen(colour);
             painter.drawText(words, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                              fontMetrics().elidedText(m_items[i].title, Qt::ElideRight, words.width()));
@@ -321,6 +336,8 @@ private:
     QList<Item> m_items;
     std::function<void(xcb_window_t)> m_chosen;
     std::function<void(xcb_window_t, QPoint)> m_context;
+    QMargins m_toolbarMargins, m_buttonMargins;
+    int m_row = 22;
     int m_hover = -1;
 };
 
@@ -385,6 +402,16 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         m_dragTimer.start(DRAG_AGAIN_MS);
     });
     connect(theme(), &ShellTheme::changed, this, &Taskbar::themeChanged);
+    // A scrollbar's arrow repeats while it is held.
+    m_scrollRepeat.setInterval(100);
+    connect(&m_scrollRepeat, &QTimer::timeout, this, [this] {
+        if (m_pressed.kind == Hit::ScrollUp)
+            scrollStep(-1);
+        else if (m_pressed.kind == Hit::ScrollDown)
+            scrollStep(1);
+        else
+            m_scrollRepeat.stop();
+    });
 
     m_autoHideTimer.setInterval(500);
     connect(&m_autoHideTimer, &QTimer::timeout, this, &Taskbar::checkAutoHide);
@@ -409,16 +436,21 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     tickClock();
     const auto reloadSettings = [this] {
         const TaskbarSettings settings = TaskbarSettings::load();
-        if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
+        if (settings.group == m_settings.group && settings.groupSize == m_settings.groupSize
+            && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
             && settings.quickLaunch == m_settings.quickLaunch && settings.locked == m_settings.locked
             && settings.onTop == m_settings.onTop
             && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle
+            && settings.quickLaunchLargeIcons == m_settings.quickLaunchLargeIcons
             && settings.hideInactive == m_settings.hideInactive) {
             updateTrayHiding();   // the behaviours chosen in Customize Notifications
             return;
         }
         const bool autoHide = settings.autoHide != m_settings.autoHide || settings.locked != m_settings.locked;
+        const bool icons = settings.quickLaunchLargeIcons != m_settings.quickLaunchLargeIcons;
         m_settings = settings;
+        if (icons)
+            loadQuickLaunch();
         setOnTop();
         updateTrayHiding();
         if (autoHide) {
@@ -629,12 +661,15 @@ void Taskbar::relayout()
             m_quickTitle = QRect(x, 0, title, barHeight());
             x += title + theme()->scaled(QUICK_TITLE_GAP);
         }
-        int buttonWidth = theme()->scaled(QUICK_WIDTH);
+        const bool large = m_settings.quickLaunchLargeIcons;
+        const int icon = large ? QUICK_LARGE_ICON : ICON_SIZE;
+        const int iconX = large ? QUICK_LARGE_ICON_X : QUICK_ICON_X;
+        int buttonWidth = theme()->scaled(large ? QUICK_LARGE_WIDTH : QUICK_WIDTH);
         if (m_settings.quickLaunchText) {
             int widest = 0;
             for (const QuickItem &item : std::as_const(m_quickItems))
                 widest = qMax(widest, metrics.horizontalAdvance(item.name));
-            buttonWidth = theme()->scaled(QUICK_ICON_X + ICON_SIZE + QUICK_TEXT_GAP + QUICK_TEXT_END) + widest;
+            buttonWidth = theme()->scaled(iconX + icon + QUICK_TEXT_GAP + QUICK_TEXT_END) + widest;
         }
         for (int i = 0; i < m_quickItems.size(); ++i)
             m_quickItems[i].rect = QRect(x + i * buttonWidth, renderer ? 0 : (barHeight() - theme()->scaled(22)) / 2, buttonWidth,
@@ -727,11 +762,20 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
             programs.append(tasks[i].app);
         windowsOf[tasks[i].app].append(i);
     }
-    for (auto it = m_grouped.begin(); it != m_grouped.end();)
-        it = windowsOf.value(*it).size() < 2 ? m_grouped.erase(it) : std::next(it);
     // Group similar taskbar buttons (TaskbarGlomming) unchecked: every window its own button
     if (!m_settings.group)
         m_grouped.clear();
+    // TaskbarGroupSize (SHRegGetUSValueW in sub_1015ddf, default 0): 0 groups only when the buttons no
+    // longer fit, 1 groups the program with the most windows first, 2 or more groups every program with
+    // at least that many windows before the width is considered (sub_10050ec, sub_1023b85).
+    const int groupSize = m_settings.groupSize;
+    const int threshold = m_settings.group && groupSize >= 2 ? groupSize : 2;
+    for (auto it = m_grouped.begin(); it != m_grouped.end();)
+        it = windowsOf.value(*it).size() < threshold ? m_grouped.erase(it) : std::next(it);
+    if (m_settings.group && groupSize >= 2)
+        for (const QString &program : std::as_const(programs))
+            if (windowsOf.value(program).size() >= groupSize)
+                m_grouped.insert(program);
     const auto chosen = [&](const QString &program) {
         qint64 latest = 0;
         for (int i : windowsOf.value(program))
@@ -754,27 +798,49 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
         const int count = shown();
         width = ideal(count);
         if (width <= groupWidth) {
-            QString oldest;
+            // No program can be grouped any further with TaskbarGroupSize 2 or more: they already are.
+            if (groupSize >= 2) {
+                width = qMax(width, minWidth);
+                break;
+            }
+            QString candidate;
             for (const QString &program : std::as_const(programs))
-                if (m_settings.group && !m_grouped.contains(program) && windowsOf.value(program).size() > 1
-                    && (oldest.isEmpty() || chosen(program) < chosen(oldest)))
-                    oldest = program;
-            if (!oldest.isEmpty()) {
-                m_grouped.insert(oldest);
+                if (m_settings.group && !m_grouped.contains(program) && windowsOf.value(program).size() > 1) {
+                    if (candidate.isEmpty())
+                        candidate = program;
+                    else if (groupSize == 1 ? windowsOf.value(program).size() > windowsOf.value(candidate).size()
+                                            : chosen(program) < chosen(candidate))
+                        candidate = program;
+                    else if (groupSize == 1 && windowsOf.value(program).size() == windowsOf.value(candidate).size()
+                             && chosen(program) < chosen(candidate))
+                        candidate = program;
+                }
+            if (!candidate.isEmpty()) {
+                m_grouped.insert(candidate);
                 continue;
             }
             width = qMax(width, minWidth);
             break;
         }
+        if (groupSize >= 2)
+            break;
         const int room = (band - count * groupWidth) / groupWidth;
-        QString newest;
+        QString candidate;
         if (room >= 2)
             for (const QString &program : std::as_const(m_grouped))
-                if (windowsOf.value(program).size() < room && (newest.isEmpty() || chosen(program) > chosen(newest)))
-                    newest = program;
-        if (newest.isEmpty())
+                if (windowsOf.value(program).size() < room) {
+                    if (candidate.isEmpty())
+                        candidate = program;
+                    else if (groupSize == 1 ? windowsOf.value(program).size() < windowsOf.value(candidate).size()
+                                            : chosen(program) > chosen(candidate))
+                        candidate = program;
+                    else if (groupSize == 1 && windowsOf.value(program).size() == windowsOf.value(candidate).size()
+                             && chosen(program) > chosen(candidate))
+                        candidate = program;
+                }
+        if (candidate.isEmpty())
             break;
-        m_grouped.remove(newest);
+        m_grouped.remove(candidate);
     }
 
     m_buttons.clear();
@@ -786,12 +852,44 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
             for (int i : windows)
                 m_buttons.append({{i}, false, {}});
     }
-    // Those that do not fit are not shown (XP gives the band more rows and arrows to scroll them).
-    for (int i = 0; i < m_buttons.size(); ++i) {
-        QRect rect(bandStart + i * (width + spacing), 0, width, barHeight());
-        if (!renderer)
-            rect = QRect(rect.x(), theme()->scaled(4), width, barHeight() - theme()->scaled(6));
-        m_buttons[i].rect = rect.right() < bandEnd + theme()->scaled(BAND_END) ? rect : QRect();
+    // The taskband's scrollbar, as _CheckNeedScrollbars computes it: when the buttons do not fit at
+    // their least width, reserve SM_CXVSCROLL at the band's right and show one toolbar row (a page) at
+    // a time; the scrollbar's arrows move to the next page.
+    const int step = width + spacing;
+    const int count = int(m_buttons.size());
+    const int total = count > 0 ? count * step - spacing : 0;
+    const auto place = [&](int columns, int page) {
+        for (int i = 0; i < count; ++i) {
+            if (i / columns != page) {
+                m_buttons[i].rect = QRect();
+                continue;
+            }
+            QRect rect(bandStart + (i % columns) * step, 0, width, barHeight());
+            if (!renderer)
+                rect = QRect(rect.x(), theme()->scaled(4), width, barHeight() - theme()->scaled(6));
+            m_buttons[i].rect = rect;
+        }
+    };
+    m_scrollRect = m_scrollUp = m_scrollDown = QRect();
+    m_scrollPages = 1;
+    if (total > band && count > 0) {
+        const int scrollbar = theme()->scaled(renderer ? SCROLL_WIDTH : CLASSIC_SCROLL_WIDTH);
+        const int view = qMax(0, band - scrollbar);
+        int columns = qMax(1, view / step);
+        while (columns > 1 && columns * step - spacing > view)
+            --columns;
+        m_scrollColumns = columns;
+        m_scrollPages = (count + columns - 1) / columns;
+        m_scrollPage = qBound(0, m_scrollPage, m_scrollPages - 1);
+        m_scrollRect = QRect(bandStart + view, 0, scrollbar, barHeight());
+        const int arrow = qMin(scrollbar, qMax(1, barHeight() / 2));
+        m_scrollUp = QRect(m_scrollRect.x(), 0, scrollbar, arrow);
+        m_scrollDown = QRect(m_scrollRect.x(), barHeight() - arrow, scrollbar, arrow);
+        place(columns, m_scrollPage);
+    } else {
+        m_scrollPage = 0;
+        m_scrollColumns = qMax(1, count);
+        place(m_scrollColumns, 0);
     }
 }
 
@@ -926,6 +1024,59 @@ void Taskbar::drawButton(QPainter &painter, int index)
     painter.drawText(QRect(textX, rect.y() + textRaise, textWidth, rect.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
 }
 
+void Taskbar::scrollStep(int delta)
+{
+    if (m_scrollRect.isNull())
+        return;
+    const int page = qBound(0, m_scrollPage + delta, m_scrollPages - 1);
+    if (page == m_scrollPage)
+        return;
+    m_scrollPage = page;
+    relayout();
+    update();
+}
+
+void Taskbar::drawScrollbar(QPainter &painter)
+{
+    if (m_scrollRect.isNull())
+        return;
+    w4w::Renderer *renderer = theme()->renderer();
+    const auto arrow = [&](const QRect &rect, bool down, bool enabled) {
+        const Hit hit{down ? Hit::ScrollDown : Hit::ScrollUp, -1};
+        // ABS_UPNORMAL to ABS_UPDISABLED are 1 to 4; ABS_DOWNNORMAL to ABS_DOWNDISABLED 5 to 8.
+        int state = enabled ? (m_pressed == hit ? 3 : m_hover == hit ? 2 : 1) : 4;
+        if (renderer) {
+            const Part part{QStringLiteral("scrollbar"), QStringLiteral("arrowbtn"), {}, (down ? 5 : 1) + state - 1, QStringLiteral("taskband")};
+            if (renderer->draw(&painter, rect, part))
+                return;
+        }
+        theme()->raised(painter, rect, state == 3);
+        const QColor colour = theme()->system(state == 4 ? QStringLiteral("graytext") : QStringLiteral("btntext"), Qt::black);
+        // a 7 x 4 triangle, the standard scrollbar's
+        for (int row = 0; row < 4; ++row) {
+            const int width = 7 - 2 * row;
+            const int x = rect.center().x() - width / 2;
+            const int y = down ? rect.center().y() - 1 + row : rect.center().y() + 2 - row;
+            painter.fillRect(x, y, width, 1, colour);
+        }
+    };
+    arrow(m_scrollUp, false, m_scrollPage > 0);
+    arrow(m_scrollDown, true, m_scrollPage < m_scrollPages - 1);
+}
+
+void Taskbar::wheelEvent(QWheelEvent *event)
+{
+    if (!m_scrollRect.isNull() && m_bandRect.contains(event->position().toPoint() - QPoint(0, m_top))) {
+        const int delta = event->angleDelta().y() != 0 ? event->angleDelta().y() : -event->angleDelta().x();
+        if (delta != 0) {
+            scrollStep(delta < 0 ? 1 : -1);
+            event->accept();
+            return;
+        }
+    }
+    QWidget::wheelEvent(event);
+}
+
 void Taskbar::drawTray(QPainter &painter)
 {
     w4w::Renderer *renderer = theme()->renderer();
@@ -1025,16 +1176,23 @@ void Taskbar::paintEvent(QPaintEvent *)
                 : theme()->system(QStringLiteral("btntext"), Qt::black);
             painter.setPen(text);
             painter.setFont(m_taskFont);
-            const int left = theme()->scaled(QUICK_ICON_X + ICON_SIZE + QUICK_TEXT_GAP);
+            const bool large = m_settings.quickLaunchLargeIcons;
+            const int icon = large ? QUICK_LARGE_ICON : ICON_SIZE;
+            const int iconX = large ? QUICK_LARGE_ICON_X : QUICK_ICON_X;
+            const int left = theme()->scaled(iconX + icon + QUICK_TEXT_GAP);
             painter.drawText(item.rect.adjusted(left + shift, shift - theme()->scaled(TEXT_RAISE), 0, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                              item.name);
         }
-        const QPoint at = theme()->renderer() ? item.rect.topLeft() + QPoint(theme()->scaled(QUICK_ICON_X), theme()->scaled(QUICK_ICON_Y))
-                                              : item.rect.topLeft() + QPoint((item.rect.width() - 16) / 2, (item.rect.height() - 16) / 2);
-        painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
+        const bool large = m_settings.quickLaunchLargeIcons;
+        const int icon = theme()->scaled(large ? QUICK_LARGE_ICON : ICON_SIZE);
+        const QPoint at = theme()->renderer()
+            ? item.rect.topLeft() + QPoint(theme()->scaled(large ? QUICK_LARGE_ICON_X : QUICK_ICON_X), theme()->scaled(large ? QUICK_LARGE_ICON_Y : QUICK_ICON_Y))
+            : item.rect.topLeft() + QPoint((item.rect.width() - icon) / 2, (item.rect.height() - icon) / 2);
+        painter.drawImage(QRect(at + QPoint(shift, shift), QSize(icon, icon)), item.icon);
     }
     for (int i = 0; i < m_buttons.size(); ++i)
         drawButton(painter, i);
+    drawScrollbar(painter);
     drawTray(painter);
 }
 
@@ -1062,6 +1220,14 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
             hit.index = i;
             return hit;
         }
+    if (m_scrollUp.contains(at)) {
+        hit.kind = Hit::ScrollUp;
+        return hit;
+    }
+    if (m_scrollDown.contains(at)) {
+        hit.kind = Hit::ScrollDown;
+        return hit;
+    }
     if (m_chevronRect.contains(at)) {
         hit.kind = Hit::Chevron;
         return hit;
@@ -1117,9 +1283,14 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
             showStartMenu(false);
         return;
     }
-    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Chevron)) {
+    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Chevron
+                                               || hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown)) {
         m_pressed = hit;
         update();
+        if (hit.kind == Hit::ScrollUp || hit.kind == Hit::ScrollDown) {
+            scrollStep(hit.kind == Hit::ScrollUp ? -1 : 1);
+            m_scrollRepeat.start();
+        }
     }
 }
 
@@ -1135,6 +1306,7 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
     const QPoint inBar = at - QPoint(0, m_top);
     const Hit pressed = m_pressed;
     m_pressed = Hit();
+    m_scrollRepeat.stop();
     update();
     if (hit.kind == Hit::Quick && hit.index < m_quickItems.size()) {
         if (event->button() == Qt::LeftButton && pressed == hit)
@@ -1525,7 +1697,7 @@ void Taskbar::loadQuickLaunch()
         m_quickWatcher.addPath(folder);
 
     m_quickItems.clear();
-    const int size = theme()->scaled(ICON_SIZE);
+    const int size = theme()->scaled(m_settings.quickLaunchLargeIcons ? QUICK_LARGE_ICON : ICON_SIZE);
     const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
     QFileInfoList files = QDir(folder).entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
     // the folder's order: by name, as a new Quick Launch band lists it
@@ -1577,14 +1749,30 @@ void Taskbar::addBandItems(QMenu *menu, const w4w::PeResources &browselc)
         items.append(showTitle);
     if (QAction *closeToolbar = close.value(CMD_CLOSE_TOOLBAR))
         items.append(closeToolbar);
-    // View: Logos is the Links band's; Large Icons is not ported here
+    // View: Logos is the Links band's; Large Icons is the band's 24-pixel pictures (itbar.cpp).
     if (QAction *logos = isf.value(CMD_VIEW_LOGOS); logos && logos->parentWidget())
         logos->parentWidget()->removeAction(logos);
-    if (QAction *large = isf.value(CMD_VIEW_LARGE))
-        large->setEnabled(false);
+    auto *sizes = new QActionGroup(menu);
+    sizes->setExclusive(true);
+    if (QAction *large = isf.value(CMD_VIEW_LARGE)) {
+        large->setCheckable(true);
+        large->setChecked(m_settings.quickLaunchLargeIcons);
+        sizes->addAction(large);
+        connect(large, &QAction::triggered, this, [] {
+            TaskbarSettings settings = TaskbarSettings::load();
+            settings.quickLaunchLargeIcons = true;
+            settings.save();
+        });
+    }
     if (QAction *small = isf.value(CMD_VIEW_SMALL)) {
         small->setCheckable(true);
-        small->setChecked(true);
+        small->setChecked(!m_settings.quickLaunchLargeIcons);
+        sizes->addAction(small);
+        connect(small, &QAction::triggered, this, [] {
+            TaskbarSettings settings = TaskbarSettings::load();
+            settings.quickLaunchLargeIcons = false;
+            settings.save();
+        });
     }
     const auto toggle = [this](QAction *action, bool TaskbarSettings::*setting) {
         if (!action)
@@ -1901,6 +2089,14 @@ void Taskbar::keyboardStep(Hit::Kind kind, int step)
         next = items.size() > 1 ? (qMax<qsizetype>(at, 0) + step + items.size()) % items.size() : 0;
     } else {
         next = at < 0 ? (step > 0 ? 0 : items.size() - 1) : (at + step + items.size()) % items.size();
+    }
+    // _ScrollIntoView: a button on another page brings its page in first.
+    if (kind == Hit::Task && !m_scrollRect.isNull() && m_scrollColumns > 0) {
+        const int page = items[next] / m_scrollColumns;
+        if (page != m_scrollPage) {
+            m_scrollPage = page;
+            relayout();
+        }
     }
     if (!m_keyboard) {
         if (m_hidden || m_slideTimer.isActive())

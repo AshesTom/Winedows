@@ -44,6 +44,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     bool event(QEvent *event) override;
@@ -52,7 +53,7 @@ private:
     struct Hit
     {
         // Task: a button, a window's or a group's
-        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Chevron } kind = None;
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Chevron, ScrollUp, ScrollDown } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
     };
@@ -78,10 +79,12 @@ private:
     void themeChanged();
     void relayout();
     void layoutButtons(int bandStart, int bandEnd);
+    void scrollStep(int delta);
     Hit hitAt(QPoint at) const;
     void setHover(Hit hit);
     void drawStart(QPainter &painter);
     void drawButton(QPainter &painter, int index);
+    void drawScrollbar(QPainter &painter);
     void drawTray(QPainter &painter);
     void drawShadowedText(QPainter &painter, const QRect &rect, const QString &text);
     void showTaskMenu(int task, QPoint at);
@@ -137,6 +140,11 @@ private:
     QFont m_startFont, m_taskFont, m_activeTaskFont, m_clockFont, m_groupCountFont;
 
     QRect m_startRect, m_trayRect, m_clockRect, m_bandRect;
+    // The taskband's scrollbar when the buttons do not fit at their least width (explorer.exe's
+    // _CheckNeedScrollbars: a vertical scrollbar at the band's right, one toolbar row a page)
+    QRect m_scrollRect, m_scrollUp, m_scrollDown;
+    int m_scrollPage = 0, m_scrollPages = 1, m_scrollColumns = 1;
+    QTimer m_scrollRepeat;
     QList<Button> m_buttons;
     TaskbarSettings m_settings = TaskbarSettings::load();
     QFileSystemWatcher m_settingsWatcher;

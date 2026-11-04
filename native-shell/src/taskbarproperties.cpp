@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "taskbarproperties.h"
+#include "theme.h"
 
 #include "xpdialog.h"
 #include "xpfiles.h"
@@ -49,9 +50,28 @@ QString text(int id, const char *fallback)
     return found.isEmpty() ? QString::fromLatin1(fallback) : found;
 }
 
+// LoadImage with LR_LOADMAP3DCOLORS, as explorer.exe loads them (sub_1037f98): in a bitmap's colour table the greys
+// 128, 192 and 223 become the 3D shadow, face and light colours, so that Windows Classic's schemes tint them
 QPixmap picture(int id)
 {
-    return explorer() ? QPixmap::fromImage(xpfiles::bitmap(*explorer(), id)) : QPixmap();
+    if (!explorer())
+        return QPixmap();
+    QImage image = xpfiles::bitmap(*explorer(), id);
+    QList<QRgb> table = image.colorTable();
+    if (!table.isEmpty()) {
+        ShellTheme *theme = ShellTheme::instance();
+        for (QRgb &entry : table) {
+            const QRgb grey = entry & 0xffffff;
+            if (grey == 0x808080)
+                entry = theme->system(QStringLiteral("btnshadow"), QColor(128, 128, 128)).rgb();
+            else if (grey == 0xc0c0c0)
+                entry = theme->system(QStringLiteral("btnface"), QColor(192, 192, 192)).rgb();
+            else if (grey == 0xdfdfdf)
+                entry = theme->system(QStringLiteral("light3d"), QColor(223, 223, 223)).rgb();
+        }
+        image.setColorTable(table);
+    }
+    return QPixmap::fromImage(image);
 }
 
 } // namespace
@@ -61,6 +81,7 @@ TaskbarSettings TaskbarSettings::load()
     const QSettings settings(settingsPath(), QSettings::IniFormat);
     TaskbarSettings loaded;
     loaded.group = settings.value(QStringLiteral("Taskbar/TaskbarGlomming"), true).toBool();
+    loaded.groupSize = settings.value(QStringLiteral("Taskbar/TaskbarGroupSize"), 0).toInt();
     loaded.clock = !settings.value(QStringLiteral("Taskbar/HideClock"), false).toBool();
     loaded.autoHide = settings.value(QStringLiteral("Taskbar/AutoHide"), false).toBool();
     loaded.quickLaunch = settings.value(QStringLiteral("Taskbar/QuickLaunch"), false).toBool();
@@ -68,6 +89,7 @@ TaskbarSettings TaskbarSettings::load()
     loaded.onTop = settings.value(QStringLiteral("Taskbar/AlwaysOnTop"), true).toBool();
     loaded.quickLaunchText = settings.value(QStringLiteral("Taskbar/QuickLaunchText"), false).toBool();
     loaded.quickLaunchTitle = settings.value(QStringLiteral("Taskbar/QuickLaunchTitle"), false).toBool();
+    loaded.quickLaunchLargeIcons = settings.value(QStringLiteral("Taskbar/QuickLaunchLargeIcons"), false).toBool();
     loaded.hideInactive = settings.value(QStringLiteral("TrayNotify/EnableAutoTray"), true).toBool();
     loaded.classicStartMenu = settings.value(QStringLiteral("StartMenu/Classic"), false).toBool();
     loaded.startButtonBalloonTip = settings.value(QStringLiteral("StartMenu/StartButtonBalloonTip"), 0).toInt();
@@ -78,6 +100,7 @@ void TaskbarSettings::save() const
 {
     QSettings settings(settingsPath(), QSettings::IniFormat);
     settings.setValue(QStringLiteral("Taskbar/TaskbarGlomming"), group);
+    settings.setValue(QStringLiteral("Taskbar/TaskbarGroupSize"), groupSize);
     settings.setValue(QStringLiteral("Taskbar/HideClock"), !clock);
     settings.setValue(QStringLiteral("Taskbar/AutoHide"), autoHide);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunch"), quickLaunch);
@@ -85,6 +108,7 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/AlwaysOnTop"), onTop);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchText"), quickLaunchText);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchTitle"), quickLaunchTitle);
+    settings.setValue(QStringLiteral("Taskbar/QuickLaunchLargeIcons"), quickLaunchLargeIcons);
     settings.setValue(QStringLiteral("TrayNotify/EnableAutoTray"), hideInactive);
     settings.setValue(QStringLiteral("StartMenu/Classic"), classicStartMenu);
     settings.setValue(QStringLiteral("StartMenu/StartButtonBalloonTip"), startButtonBalloonTip);

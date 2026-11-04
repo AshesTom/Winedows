@@ -59,12 +59,14 @@ const char *buttonName(FrameButton button, bool maximized)
     }
 }
 
-// Marlett's glyphs of Windows Classic's caption buttons
+// Marlett's glyphs of Windows Classic's caption buttons, as user32's DrawFrameControl picks them (sub_7e46d69e):
+// Close r, Minimize 0, Maximize 1, Restore 2, Help s
 QChar marlett(FrameButton button, bool maximized)
 {
     switch (button) {
     case FrameButton::Minimize: return QLatin1Char('0');
     case FrameButton::Maximize: return QLatin1Char(maximized ? '2' : '1');
+    case FrameButton::Help: return QLatin1Char('s');
     default: return QLatin1Char('r');
     }
 }
@@ -81,9 +83,11 @@ QRect frameButtonRect(FrameButton button, const QRect &rect, const FrameStyle &s
         return place;
     }
     if (!style.renderer) {
+        // SM_CXSIZE - 2 by SM_CYSIZE - 4, Close 2 inside the caption's right and top, Maximize 2 left of it and
+        // Minimize against Maximize
         const int width = 16 * style.top / 23, height = 14 * style.top / 23;
         const int step = button == FrameButton::Close ? 2 : button == FrameButton::Maximize ? 2 + width + 2 : 2 + 2 * width + 2;
-        return QRect(rect.right() + 1 - style.border - step - width + 2, rect.y() + style.border + 1, width, height);
+        return QRect(rect.right() + 1 - style.border - step - width, rect.y() + style.border + 2, width, height);
     }
     // SM_CYSIZE - 4: the caption bar's buttons, the same with either frame
     const int side = style.top - style.border - 5;
@@ -168,33 +172,51 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
     painter.drawText(QRect(bar.x() + classicTitleX, bar.y(), titleEnd - bar.x() - classicTitleX, bar.height()),
                      Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                      QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleEnd - bar.x() - classicTitleX));
-    QFont glyphs(QStringLiteral("Marlett"));
-    glyphs.setPixelSize(bar.height() - 7);
-    w4w::unsmoothedFont(glyphs, glyphs.pixelSize());
     for (FrameButton button : buttons) {
         if (!shown(button, look))
             continue;
         const QRect r = frameButtonRect(button, rect, style, look.maximized);
         const bool down = look.pressed == button;
+        // DrawFrameControl(DFC_CAPTION) (sub_7e43e7c4, sub_7e432712): DrawEdge with BF_SOFT | BF_ADJUST, EDGE_RAISED
+        // (white and the light colour on the top left, the dark shadow and the shadow on the bottom right) or
+        // EDGE_SUNKEN pressed, the face inside
+        const QRect outer = r.adjusted(0, 0, -1, -1), inner = outer.adjusted(1, 1, -1, -1);
+        const auto edge = [&](const QRect &e, const QColor &topLeft, const QColor &bottomRight) {
+            painter.setPen(topLeft);
+            painter.drawLine(e.topLeft(), e.topRight() - QPoint(1, 0));
+            painter.drawLine(e.topLeft(), e.bottomLeft() - QPoint(0, 1));
+            painter.setPen(bottomRight);
+            painter.drawLine(e.bottomLeft(), e.bottomRight());
+            painter.drawLine(e.topRight(), e.bottomRight());
+        };
         painter.fillRect(r, style.face);
-        painter.setPen(down ? style.darkShadow : style.light);
-        painter.drawLine(r.topLeft(), r.topRight());
-        painter.drawLine(r.topLeft(), r.bottomLeft());
-        painter.setPen(down ? style.light : style.darkShadow);
-        painter.drawLine(r.bottomLeft(), r.bottomRight());
-        painter.drawLine(r.topRight(), r.bottomRight());
+        if (down) {
+            edge(outer, style.darkShadow, style.light);
+            edge(inner, style.shadow, style.face);
+        } else {
+            edge(outer, style.light, style.darkShadow);
+            edge(inner, style.face, style.shadow);
+        }
+        // Marlett as high as the inside's smaller side, in a square centred in it (sub_7e437327)
+        const QRect inside = r.adjusted(2, 2, -2, -2);
+        const int side = qMin(inside.width(), inside.height());
+        QFont glyphs(QStringLiteral("Marlett"));
+        glyphs.setPixelSize(side);
+        w4w::unsmoothedFont(glyphs, side);
         painter.setFont(glyphs);
+        const QRect cell(inside.x() + (inside.width() - side) / 2, inside.y() + (inside.height() - side) / 2, side, side);
         const QString glyph(marlett(button, look.maximized));
+        const int flags = Qt::AlignLeft | Qt::AlignTop;
         if (!enabled(button, look)) {
-            // Greyed as DrawFrameControl's DFCS_INACTIVE: the glyph embossed in the light and shadow colours
+            // DFCS_INACTIVE: the glyph in the highlight colour a pixel down and right, then in the shadow colour
             painter.setPen(style.light);
-            painter.drawText(r.translated(1, 1), Qt::AlignCenter, glyph);
+            painter.drawText(cell.translated(1, 1), flags, glyph);
             painter.setPen(style.shadow);
-            painter.drawText(r, Qt::AlignCenter, glyph);
+            painter.drawText(cell, flags, glyph);
             continue;
         }
         painter.setPen(Qt::black);
-        painter.drawText(r.translated(down ? 1 : 0, down ? 1 : 0), Qt::AlignCenter, glyph);
+        painter.drawText(cell.translated(down ? 1 : 0, down ? 1 : 0), flags, glyph);
     }
 }
 
