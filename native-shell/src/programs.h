@@ -39,6 +39,8 @@ std::optional<Program> chooseProgram(const QString &path, QWidget *parent);
 void setDefaultFor(const QString &path, const Program &program);
 // Forget the Start menu's launch counts (Customize Start Menu's Clear List).
 void clearUses();
+// Remove one program from the most-used list.
+void removeUse(const QString &id);
 // Programs by their uses, most used first.
 QList<Program> mostUsed(int count);
 // The user's default programs, through xdg-settings and xdg-mime.

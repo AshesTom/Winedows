@@ -296,6 +296,12 @@ void setDefaultFor(const QString &path, const Program &program)
         QProcess::startDetached(QStringLiteral("xdg-mime"), {QStringLiteral("default"), program.id, mime});
 }
 
+void removeUse(const QString &id)
+{
+    QSettings uses(usePath(), QSettings::IniFormat);
+    uses.remove(id);
+}
+
 void clearUses()
 {
     QSettings uses(usePath(), QSettings::IniFormat);

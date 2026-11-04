@@ -981,6 +981,7 @@ void StartPanel::build(QPoint bottomLeft)
             break;
         addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
         m_items.last().tip = program.comment;
+        m_items.last().programId = program.id;
     }
     Item moreLine;
     moreLine.separator = true;
@@ -1499,6 +1500,20 @@ void StartPanel::mousePressEvent(QMouseEvent *event)
 void StartPanel::mouseReleaseEvent(QMouseEvent *event)
 {
     const QPoint global = event->globalPosition().toPoint();
+    if (event->button() == Qt::RightButton) {
+        const QPoint at = event->position().toPoint();
+        for (const Item &item : std::as_const(m_items))
+            if (!item.separator && !item.programId.isEmpty() && item.rect.contains(at)) {
+                QMenu menu;
+                QAction *remove = menu.addAction(explorerString(8225, "Remove from This List"));
+                if (menu.exec(global) == remove) {
+                    programs::removeUse(item.programId);
+                    close();
+                }
+                return;
+            }
+        return;
+    }
     if (event->button() != Qt::LeftButton)
         return;
     for (int level = int(m_cascades.size()) - 1; level >= 0; --level) {

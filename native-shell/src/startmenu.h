@@ -115,6 +115,7 @@ private:
         QString text, subtitle;
         QImage icon;
         QString tip;      // its infotip
+        QString programId; // a most-used program's desktop-entry id, for Remove from This List
         bool bold = false, separator = false, enabled = true, arrow = false;
         std::function<void()> action;
         std::function<QList<MenuEntry>()> children;
