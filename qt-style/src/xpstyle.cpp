@@ -361,6 +361,9 @@ void XpStyle::drawPrimitive(PrimitiveElement element, const QStyleOption *option
         QProxyStyle::drawPrimitive(element, option, painter, widget);
         return;
     }
+    // The header's label draws XP's sort arrow itself.
+    if (element == PE_IndicatorHeaderArrow)
+        return;
     switch (element) {
     case PE_PanelButtonCommand:
     case PE_PanelButtonBevel: {
@@ -640,6 +643,49 @@ void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QP
             return;
         break;
     }
+    case CE_Header:
+        // The section, then its words and arrow measured from the section itself, not from Qt's inset
+        // label rectangle
+        if (qstyleoption_cast<const QStyleOptionHeader *>(option)) {
+            drawControl(CE_HeaderSection, option, painter, widget);
+            drawControl(CE_HeaderLabel, option, painter, widget);
+            return;
+        }
+        break;
+    case CE_HeaderLabel:
+        if (const auto *header = qstyleoption_cast<const QStyleOptionHeader *>(option)) {
+            // comctl32 v6's Details header, measured on XP's explorer (Tahoma 8, a 20-pixel header): the words
+            // 12 in from the section's left, or 7 from its right for a
+            // right-aligned column, a pixel above the middle; the sort
+            // arrow a triangle 9 wide and 5 tall in COLOR_BTNSHADOW, 9 after the words and 7 down, pointing
+            // up for an ascending sort (Qt's SortDown).
+            const QRect r = header->rect;
+            const bool right = header->textAlignment & Qt::AlignRight;
+            const QFontMetrics metrics = painter->fontMetrics();
+            const bool arrow = header->sortIndicator != QStyleOptionHeader::None;
+            const int arrowSpace = arrow ? 9 + 9 : 0;
+            QRect words = r.adjusted(12, -1, -6, -1);
+            if (!right)
+                words.setRight(words.right() - arrowSpace);
+            const QString text = metrics.elidedText(header->text, Qt::ElideRight, qMax(0, words.width()));
+            painter->save();
+            painter->setPen(header->palette.color(QPalette::ButtonText));
+            painter->drawText(words, (right ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter | Qt::TextSingleLine, text);
+            if (arrow) {
+                const int textEnd = right ? words.right() : words.x() + metrics.horizontalAdvance(text);
+                const int x = right ? words.x() - 9 - 9 : textEnd + 9;
+                const int y = r.y() + 7;
+                const bool up = header->sortIndicator == QStyleOptionHeader::SortDown;
+                const QColor shadow = system(QStringLiteral("btnshadow"), QColor(172, 168, 153));
+                for (int row = 0; row < 5; ++row) {
+                    const int half = up ? row : 4 - row;
+                    painter->fillRect(x + 4 - half, y + row, 2 * half + 1, 1, shadow);
+                }
+            }
+            painter->restore();
+            return;
+        }
+        break;
     case CE_HeaderEmptyArea:
         if (draw(painter, option->rect, QStringLiteral("header"), QStringLiteral("headeritem"), QStringLiteral("normal"), 1))
             return;

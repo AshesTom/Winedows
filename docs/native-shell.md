@@ -278,7 +278,10 @@ configuration directory. It captures actual widgets and draws their outer
 frame with the shell's own `drawFrame` function.
 
 At 96 DPI with Tahoma 8, List and Details rows are 17 pixels and the report
-header is 17 pixels. List columns grow to fit names. Selection paints the name
+header is 20, as comctl32 v6 makes it (its art is 18): the words 12 in from a
+column's left, or ending 7 before its right for Size; the sort arrow a 9 x 5
+triangle in COLOR_BTNSHADOW, 9 after the words and 7 down, pointing up for an
+ascending sort (qt-style draws the header so for every Qt program). List columns grow to fit names. Selection paints the name
 instead of the whole report row; losing keyboard focus uses the inactive
 selection colours. Blank icon-cell margins and blank label space are not item
 hits. The native selection marquee uses XP's alpha 70 and highlight outline.
