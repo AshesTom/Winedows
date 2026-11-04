@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
@@ -442,6 +443,24 @@ void show(const QStringList &paths, QWidget *parent)
             tabs->addTab(versionWidget, caption.isEmpty() ? QObject::tr("Version") : caption);
         }
 
+    if (one && !folder) {
+        // XP's Summary page is a document page; here its fields are the file's, with the document
+        // properties left empty where Linux has no equivalent.
+        auto *summary = new QWidget;
+        auto *form = new QFormLayout(summary);
+        form->setContentsMargins(6, 6, 6, 6);
+        const auto row = [&](const QString &name, const QString &value) { form->addRow(name, new QLabel(value)); };
+        row(QObject::tr("Title"), first.completeBaseName());
+        row(QObject::tr("Subject"), QString());
+        row(QObject::tr("Author"), first.owner());
+        row(QObject::tr("Keywords"), QString());
+        row(QObject::tr("Comments"), QString());
+        row(QObject::tr("Size"), sizeLine(first.size()));
+        row(QObject::tr("Created"), dateLine(first.birthTime().isValid() ? first.birthTime() : first.metadataChangeTime()));
+        row(QObject::tr("Modified"), dateLine(first.lastModified()));
+        row(QObject::tr("Location"), first.absolutePath());
+        tabs->addTab(summary, QObject::tr("Summary"));
+    }
     dialog->setWindowTitle(QObject::tr("%1 Properties").arg(one ? first.fileName() : QStringLiteral("%1, ...").arg(first.fileName())));
     auto *ok = new QPushButton(QObject::tr("OK"), dialog);
     auto *cancel = new QPushButton(QObject::tr("Cancel"), dialog);

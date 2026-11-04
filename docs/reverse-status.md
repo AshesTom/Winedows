@@ -359,7 +359,7 @@ Binary: `shell32.dll`. Port: [`fileproperties.cpp`](../native-shell/src/fileprop
 | Version page: dialog 1043, `VS_VERSIONINFO` read from the file, the item names 8752–8765 sorted, Language as VerLanguageName | `shell32.dll` | Done |
 | Etched separators (`SS_ETCHEDHORZ`, `SS_ETCHEDVERT`, `SS_ETCHEDFRAME`) | dialog 1041 | Done: the dialog builder makes a sunken `QFrame` (HLine, VLine, Box) for the Static control's 0x10, 0x11 and 0x12 kinds |
 | The sheet's size and caption | XP in Wine: 58 px taller; no caption icon | Done: the tab area is 58 pixels taller (scaled), and the caption has no icon |
-| Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Partial: Change... opens the Open With list and makes the chosen program the MIME type's default (xdg-mime), updating Opens with; Advanced... opens shell32's dialogs 1054/1055 with the archive/index/compress/encrypt boxes greyed (no Linux equivalent); Summary and the drives' shell32 page remain (drives keep the earlier hand-made page) |
+| Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Partial: Change... opens the Open With list and makes the chosen program the MIME type's default (xdg-mime), updating Opens with; Advanced... opens shell32's dialogs 1054/1055 with the archive/index/compress/encrypt boxes greyed (no Linux equivalent); Summary is a simple file page (Title/Author/Size/dates/Location; document fields empty); the drives' shell32 page remains (drives keep the earlier hand-made page) |
 
 ---
 
