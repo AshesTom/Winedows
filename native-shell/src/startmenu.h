@@ -116,6 +116,7 @@ private:
         QImage icon;
         QString tip;      // its infotip
         QString programId; // a most-used program's desktop-entry id, for Remove from This List
+        QString path;      // a Start Menu folder entry, for dragging it to another place
         bool bold = false, separator = false, enabled = true, arrow = false;
         std::function<void()> action;
         std::function<QList<MenuEntry>()> children;
@@ -148,6 +149,8 @@ private:
     QImage m_picture, m_logOffIcon, m_turnOffIcon;
     QString m_userName, m_logOffText, m_turnOffText, m_moreText;
     int m_hot = -1;
+    int m_dragFrom = -1, m_dragTo = -1;
+    bool m_dragMoved = false;
     enum { Nothing, MoreHot, LogOffHot, TurnOffHot } m_hotPart = Nothing;
     QList<Cascade *> m_cascades;
     QTimer m_openTimer;

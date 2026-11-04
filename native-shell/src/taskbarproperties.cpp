@@ -261,10 +261,10 @@ static void showClassicCustomize(QWidget *parent)
         item->setCheckState(0, option.second ? Qt::Checked : Qt::Unchecked);
         item->setData(0, Qt::UserRole, int(option.first));
     }
-    // Add/Remove/Advanced/Sort/Clear change the Start Menu folder; their files are not read here.
-    for (int id : {1128, 1124})
-        if (QWidget *control = page.controls.value(id))
-            control->setEnabled(false);
+    // Advanced edits the Start Menu folder's subfolders, which this port does not read; Sort clears
+    // the order a drag leaves, so that the folder's names order the menu again.
+    if (QWidget *advanced = page.controls.value(1124))
+        advanced->setEnabled(false);
     const QString startFolder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
     if (auto *add = qobject_cast<QPushButton *>(page.controls.value(1126)))
         QObject::connect(add, &QPushButton::clicked, &dialog, [&, startFolder] {
@@ -285,6 +285,11 @@ static void showClassicCustomize(QWidget *parent)
             const QString chosen = QInputDialog::getItem(&dialog, QObject::tr("Remove"), QObject::tr("Item to remove:"), entries, 0, false, &ok);
             if (ok && !chosen.isEmpty())
                 QFile::remove(QDir(startFolder).filePath(chosen));
+        });
+    if (auto *sort = qobject_cast<QPushButton *>(page.controls.value(1128)))
+        QObject::connect(sort, &QPushButton::clicked, &dialog, [] {
+            QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+            settings.remove(QStringLiteral("StartMenu/ClassicOrder"));
         });
     if (auto *clear = qobject_cast<QPushButton *>(page.controls.value(1125)))
         QObject::connect(clear, &QPushButton::clicked, &dialog, [] {

@@ -618,6 +618,14 @@ QString startMenuFolder()
     return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
 }
 
+// The classic start menu's order of the Start Menu folder's entries, by file name; an empty list is
+// XP's Sort by Name: the folder's names.
+QStringList classicMenuOrder()
+{
+    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+    return settings.value(QStringLiteral("StartMenu/ClassicOrder")).toStringList();
+}
+
 QList<MenuEntry> favoritesEntries()
 {
     QList<MenuEntry> out;
@@ -685,6 +693,7 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
         QIcon icon;
         std::function<void()> action;
         std::function<QList<MenuEntry>()> children;
+        QString path;   // a Start Menu folder entry, for dragging it
     };
     // The Start Menu folder's own items above the line: XP's setup puts Set Program Access and Defaults there
     QList<Row> top;
@@ -693,17 +702,38 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
         spad = QIcon(QPixmap::fromImage(xpfiles::icon(*moricons, MORICONS_SPAD, theme->scaled(32))));
     const QString startFolder = startMenuFolder();
     QDir().mkpath(startFolder);
-    const QFileInfoList startEntries = QDir(startFolder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+    QFileInfoList startEntries = QDir(startFolder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
+    const QStringList order = classicMenuOrder();
+    if (!order.isEmpty())
+        std::stable_sort(startEntries.begin(), startEntries.end(), [&order](const QFileInfo &a, const QFileInfo &b) {
+            int left = order.indexOf(a.fileName()), right = order.indexOf(b.fileName());
+            if (left < 0) left = order.size();
+            if (right < 0) right = order.size();
+            return left != right ? left < right : a.fileName().compare(b.fileName(), Qt::CaseInsensitive) < 0;
+        });
     for (const QFileInfo &entry : startEntries) {
         const QString path = entry.filePath();
+        Row row;
         if (entry.suffix() == QLatin1String("desktop")) {
-            if (const auto program = programs::fromFile(path))
-                top.append({program->name, programs::iconOf(*program), [program] { programs::launch(*program); }, {}});
+            if (const auto program = programs::fromFile(path)) {
+                row.text = program->name;
+                row.icon = programs::iconOf(*program);
+                row.action = [program] { programs::launch(*program); };
+                row.path = entry.fileName();
+            }
         } else if (entry.isDir()) {
-            top.append({entry.fileName(), fileicons::forFile(entry), [path] { FileBrowser::open(path); }, {}});
+            row.text = entry.fileName();
+            row.icon = fileicons::forFile(entry);
+            row.action = [path] { FileBrowser::open(path); };
+            row.path = entry.fileName();
         } else {
-            top.append({entry.fileName(), fileicons::forFile(entry), [path] { programs::open(path); }, {}});
+            row.text = entry.fileName();
+            row.icon = fileicons::forFile(entry);
+            row.action = [path] { programs::open(path); };
+            row.path = entry.fileName();
         }
+        if (!row.text.isEmpty())
+            top.append(row);
     }
     top.append({tr("Set Program Access and Defaults"), spad, [] { applets::open(QStringLiteral("programs")); }, {}});
     QList<Row> middle;
@@ -762,6 +792,7 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
             item.icon = row.icon.pixmap(theme->scaled(iconSize), theme->scaled(iconSize)).toImage();
             item.action = row.action;
             item.children = row.children;
+            item.path = row.path;
             item.arrow = bool(row.children);
             item.enabled = true;
             m_items.append(item);
@@ -1488,6 +1519,19 @@ void StartPanel::switchCascade()
 
 void StartPanel::mouseMoveEvent(QMouseEvent *event)
 {
+    const QPoint at = event->position().toPoint();
+    if (m_dragFrom >= 0 && (event->buttons() & Qt::LeftButton) && m_classicMenu) {
+        for (int i = 0; i < m_items.size(); ++i)
+            if (!m_items[i].path.isEmpty() && m_items[i].rect.contains(at)) {
+                m_dragTo = i;
+                if (i != m_dragFrom) {
+                    m_dragMoved = true;
+                    m_hot = i;
+                    update();
+                }
+                break;
+            }
+    }
     track(event->globalPosition().toPoint());
 }
 
@@ -1504,8 +1548,21 @@ void StartPanel::mousePressEvent(QMouseEvent *event)
     for (Cascade *cascade : std::as_const(m_cascades))
         if (cascade->entryAt(global) != -2)
             return;
-    if (!rect().contains(event->position().toPoint()))
+    if (!rect().contains(event->position().toPoint())) {
         close();
+        return;
+    }
+    // A press on one of the Start Menu folder's rows starts a drag that reorders them.
+    m_dragFrom = m_dragTo = -1;
+    m_dragMoved = false;
+    if (m_classicMenu && event->button() == Qt::LeftButton) {
+        const QPoint at = event->position().toPoint();
+        for (int i = 0; i < m_items.size(); ++i)
+            if (!m_items[i].path.isEmpty() && m_items[i].rect.contains(at)) {
+                m_dragFrom = m_dragTo = i;
+                break;
+            }
+    }
 }
 
 void StartPanel::mouseReleaseEvent(QMouseEvent *event)
@@ -1539,6 +1596,30 @@ void StartPanel::mouseReleaseEvent(QMouseEvent *event)
     }
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_dragFrom >= 0) {
+        const int from = m_dragFrom, to = m_dragTo;
+        const bool moved = m_dragMoved;
+        m_dragFrom = m_dragTo = -1;
+        m_dragMoved = false;
+        if (moved && to >= 0 && to != from) {
+            QList<QRect> rects;
+            for (const Item &item : std::as_const(m_items))
+                rects.append(item.rect);
+            const Item taken = m_items.takeAt(from);
+            m_items.insert(to, taken);
+            for (int i = 0; i < m_items.size() && i < rects.size(); ++i)
+                m_items[i].rect = rects[i];
+            QStringList order;
+            for (const Item &item : std::as_const(m_items))
+                if (!item.path.isEmpty())
+                    order.append(item.path);
+            QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+            settings.setValue(QStringLiteral("StartMenu/ClassicOrder"), order);
+            m_hot = to;
+            update();
+            return;
+        }
+    }
     for (int level = int(m_cascades.size()) - 1; level >= 0; --level) {
         const int entry = m_cascades[level]->entryAt(global);
         if (entry == -2)
