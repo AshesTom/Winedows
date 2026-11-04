@@ -9,6 +9,7 @@ them with Shell_NotifyIcon and writes the user's clicks back as *.tray
 files. Wakes only for D-Bus, X and directory events.
 
 Files (all atomically renamed in the IPC directory):
+- tray-names.tsv: "ID TAB name" per shown item, what it stays known by (its Id, or its window's class)
 - tray.tsv: "ID TAB status TAB tooltip" per shown item, status A (active)
   or N (needs attention); passive items are left out.
   XEmbed icons share the IDs; their menus are the applications' own.
@@ -148,6 +149,10 @@ class Item:
     def status(self):
         status = self.props.get('Status', 'Active')
         return {'Passive': '', 'NeedsAttention': 'N'}.get(status, 'A')
+
+    def ident(self):
+        """What the item stays known by, whatever its tooltip says (Customize Notifications)."""
+        return self.props.get('Id', '') or self.props.get('Title', '') or self.name
 
     def tooltip(self):
         tip = self.props.get('ToolTip')
@@ -395,6 +400,13 @@ class Embedded:
 
     def tooltip(self):
         return self.title
+
+    def ident(self):
+        try:
+            wm_class = self.window.get_wm_class()
+        except error.XError:
+            wm_class = None
+        return wm_class[1] if wm_class else self.title
 
     def icon_bytes(self, size):
         return pixbuf_bytes(self.image, size) if self.image else None
@@ -779,7 +791,7 @@ class Host:
 
     def publish(self):
         size = self.icon_size()
-        lines = []
+        lines, names = [], []
         for item in self.shown():
             status = item.status()
             if not status:
@@ -789,6 +801,11 @@ class Host:
                 write_atomic(self.ipc / f'tray-{item.id}.argb', icon)
             item.icon = icon
             lines.append(f'{item.id}\t{status}\t{item.tooltip()}')
+            names.append(f'{item.id}\t{" ".join(item.ident().split())}')
+        named = ('\n'.join(names) + '\n' if names else '').encode()
+        if named != getattr(self, 'names_tsv', None):
+            write_atomic(self.ipc / 'tray-names.tsv', named)
+            self.names_tsv = named
         text = ('\n'.join(lines) + '\n' if lines else '').encode()
         if text != self.tsv:
             write_atomic(self.ipc / 'tray.tsv', text)
@@ -836,10 +853,11 @@ class Host:
         self.loop.run()
         if self.xembed:
             self.xembed.close()
-        try:
-            (self.ipc / 'tray.tsv').unlink()
-        except FileNotFoundError:
-            pass
+        for name in ('tray.tsv', 'tray-names.tsv'):
+            try:
+                (self.ipc / name).unlink()
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == '__main__':

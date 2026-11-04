@@ -20,6 +20,7 @@ struct TrayIcon
     quint32 id = 0;
     QString tooltip;
     QImage image;
+    QString name;   // what it stays known by (tray-names.tsv), whatever its tooltip says
 };
 
 class Tray : public QObject

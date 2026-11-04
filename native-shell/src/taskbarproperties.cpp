@@ -10,6 +10,8 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
+#include <QComboBox>
+#include <QTreeWidget>
 #include <QStandardPaths>
 
 namespace {
@@ -66,6 +68,7 @@ TaskbarSettings TaskbarSettings::load()
     loaded.onTop = settings.value(QStringLiteral("Taskbar/AlwaysOnTop"), true).toBool();
     loaded.quickLaunchText = settings.value(QStringLiteral("Taskbar/QuickLaunchText"), false).toBool();
     loaded.quickLaunchTitle = settings.value(QStringLiteral("Taskbar/QuickLaunchTitle"), false).toBool();
+    loaded.hideInactive = settings.value(QStringLiteral("TrayNotify/EnableAutoTray"), true).toBool();
     return loaded;
 }
 
@@ -80,6 +83,7 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/AlwaysOnTop"), onTop);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchText"), quickLaunchText);
     settings.setValue(QStringLiteral("Taskbar/QuickLaunchTitle"), quickLaunchTitle);
+    settings.setValue(QStringLiteral("TrayNotify/EnableAutoTray"), hideInactive);
 }
 
 TaskbarSettingsNotifier *TaskbarSettingsNotifier::instance()
@@ -133,24 +137,31 @@ QWidget *TaskbarProperties::taskbarPage()
     m_taskbarPreview = qobject_cast<QLabel *>(dialog.controls.value(ID_TASKBAR_PREVIEW));
     m_notificationPreview = qobject_cast<QLabel *>(dialog.controls.value(ID_NOTIFICATION_PREVIEW));
     const TaskbarSettings settings = TaskbarSettings::load();
-    // What this taskbar cannot change: no inactive icons hidden
     const QHash<int, bool> states{
         {ID_LOCK, settings.locked}, {ID_AUTO_HIDE, settings.autoHide}, {ID_ON_TOP, settings.onTop}, {ID_GROUP, settings.group}, {ID_QUICK_LAUNCH, settings.quickLaunch},
-        {ID_CLOCK, settings.clock}, {ID_HIDE_INACTIVE, false},
+        {ID_CLOCK, settings.clock}, {ID_HIDE_INACTIVE, settings.hideInactive},
     };
     for (auto it = states.begin(); it != states.end(); ++it)
         if (QCheckBox *check = m_checks.value(it.key())) {
             check->setChecked(it.value());
             check->setEnabled(it.key() == ID_GROUP || it.key() == ID_CLOCK || it.key() == ID_AUTO_HIDE
                               || it.key() == ID_QUICK_LAUNCH || it.key() == ID_LOCK
-                              || it.key() == ID_ON_TOP);
+                              || it.key() == ID_ON_TOP || it.key() == ID_HIDE_INACTIVE);
             connect(check, &QCheckBox::toggled, this, [this] {
                 updatePreviews();
                 m_apply->setEnabled(true);
             });
         }
-    if (QWidget *customize = dialog.controls.value(ID_CUSTOMIZE_NOTIFICATIONS))
-        customize->setEnabled(false);
+    if (auto *customize = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_CUSTOMIZE_NOTIFICATIONS))) {
+        // Customize goes with Hide inactive icons, as on XP
+        const auto follow = [this, customize] {
+            customize->setEnabled(m_checks.value(ID_HIDE_INACTIVE) && m_checks.value(ID_HIDE_INACTIVE)->isChecked());
+        };
+        follow();
+        if (QCheckBox *hide = m_checks.value(ID_HIDE_INACTIVE))
+            connect(hide, &QCheckBox::toggled, this, follow);
+        connect(customize, &QAbstractButton::clicked, this, [this] { traynotify::customize(this); });
+    }
     return page;
 }
 
@@ -193,7 +204,125 @@ void TaskbarProperties::apply()
     settings.quickLaunch = m_checks.value(ID_QUICK_LAUNCH) && m_checks.value(ID_QUICK_LAUNCH)->isChecked();
     settings.locked = m_checks.value(ID_LOCK) && m_checks.value(ID_LOCK)->isChecked();
     settings.onTop = m_checks.value(ID_ON_TOP) && m_checks.value(ID_ON_TOP)->isChecked();
+    settings.hideInactive = m_checks.value(ID_HIDE_INACTIVE) && m_checks.value(ID_HIDE_INACTIVE)->isChecked();
     settings.save();
     m_apply->setEnabled(false);
     emit TaskbarSettingsNotifier::instance()->changed();
 }
+
+namespace traynotify {
+
+namespace {
+const int DIALOG_CUSTOMIZE = 7;
+enum { ID_ITEMS = 1005, ID_BEHAVIOR = 1006, ID_RESTORE = 1402, ID_OK = 1, ID_CANCEL = 2 };
+enum { STRING_NAME = 1000, STRING_BEHAVIOR = 1001, STRING_HIDE_WHEN_INACTIVE = 1002, STRING_CURRENT = 1403, STRING_PAST = 1404 };
+
+QVariantMap behaviors()
+{
+    return QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("TrayNotify/Behaviors")).toMap();
+}
+} // namespace
+
+Behavior behavior(const QString &name)
+{
+    return Behavior(behaviors().value(name, int(HideWhenInactive)).toInt());
+}
+
+void setCurrent(const QStringList &names)
+{
+    // Past Items: what was here before and is not now, as explorer.exe's PastIconsStream keeps them
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    const QStringList current = settings.value(QStringLiteral("TrayNotify/Current")).toStringList();
+    if (current == names)
+        return;
+    QStringList past = settings.value(QStringLiteral("TrayNotify/Past")).toStringList();
+    for (const QString &name : current)
+        if (!names.contains(name) && !past.contains(name))
+            past.prepend(name);
+    for (const QString &name : names)
+        past.removeAll(name);
+    settings.setValue(QStringLiteral("TrayNotify/Current"), names);
+    settings.setValue(QStringLiteral("TrayNotify/Past"), past);
+}
+
+void customize(QWidget *parent)
+{
+    if (!explorer())
+        return;
+    auto *dialog = new QDialog(parent);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    const xpdialog::Page page = xpdialog::build(*explorer(), DIALOG_CUSTOMIZE, dialog);
+    dialog->setWindowTitle(page.caption);
+    // The list view: Name and Behavior, the items under Current Items and Past Items; a click on
+    // an item's behaviour gives it the choice of three, as XP's in-place combo box (control 1006)
+    QWidget *placeholder = page.controls.value(ID_ITEMS);
+    if (!placeholder)
+        return;
+    auto *list = new QTreeWidget(dialog);
+    list->setGeometry(placeholder->geometry());
+    placeholder->hide();
+    list->setRootIsDecorated(false);
+    list->setHeaderLabels({text(STRING_NAME, "Name"), text(STRING_BEHAVIOR, "Behavior")});
+    list->setColumnWidth(0, list->width() * 6 / 10);
+    if (QWidget *combo = page.controls.value(ID_BEHAVIOR))
+        combo->hide();
+    const QStringList choices{text(STRING_HIDE_WHEN_INACTIVE, "Hide when inactive"), text(STRING_HIDE_WHEN_INACTIVE + 1, "Always hide"),
+                              text(STRING_HIDE_WHEN_INACTIVE + 2, "Always show")};
+    const QVariantMap chosen = behaviors();
+    const QSettings settings(settingsPath(), QSettings::IniFormat);
+    const auto fill = [&](int heading, const QStringList &names) {
+        if (names.isEmpty())
+            return;
+        auto *group = new QTreeWidgetItem(list, {text(heading, heading == STRING_CURRENT ? "Current Items" : "Past Items")});
+        QFont bold = group->font(0);
+        bold.setBold(true);
+        group->setFont(0, bold);
+        group->setFlags(Qt::ItemIsEnabled);
+        for (const QString &name : names) {
+            auto *item = new QTreeWidgetItem(list, {name, choices.value(chosen.value(name, 0).toInt())});
+            item->setData(0, Qt::UserRole, name);
+        }
+    };
+    fill(STRING_CURRENT, settings.value(QStringLiteral("TrayNotify/Current")).toStringList());
+    fill(STRING_PAST, settings.value(QStringLiteral("TrayNotify/Past")).toStringList());
+    QObject::connect(list, &QTreeWidget::itemClicked, dialog, [list, choices](QTreeWidgetItem *item, int) {
+        const QString name = item->data(0, Qt::UserRole).toString();
+        if (name.isEmpty() || list->itemWidget(item, 1))
+            return;
+        auto *combo = new QComboBox(list);
+        combo->addItems(choices);
+        combo->setCurrentIndex(choices.indexOf(item->text(1)));
+        list->setItemWidget(item, 1, combo);
+        QObject::connect(combo, &QComboBox::activated, list, [list, item, choices](int index) {
+            item->setText(1, choices.value(index));
+            list->removeItemWidget(item, 1);
+        });
+    });
+    if (auto *restore = qobject_cast<QAbstractButton *>(page.controls.value(ID_RESTORE)))
+        QObject::connect(restore, &QAbstractButton::clicked, list, [list, choices] {
+            for (int i = 0; i < list->topLevelItemCount(); ++i)
+                if (!list->topLevelItem(i)->data(0, Qt::UserRole).toString().isEmpty())
+                    list->topLevelItem(i)->setText(1, choices.value(0));
+        });
+    if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(ID_OK))) {
+        ok->setDefault(true);
+        QObject::connect(ok, &QPushButton::clicked, dialog, [dialog, list, choices] {
+            QVariantMap values;
+            for (int i = 0; i < list->topLevelItemCount(); ++i) {
+                const QTreeWidgetItem *item = list->topLevelItem(i);
+                const QString name = item->data(0, Qt::UserRole).toString();
+                if (!name.isEmpty() && choices.indexOf(item->text(1)) > 0)
+                    values.insert(name, choices.indexOf(item->text(1)));
+            }
+            QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("TrayNotify/Behaviors"), values);
+            emit TaskbarSettingsNotifier::instance()->changed();
+            dialog->accept();
+        });
+    }
+    if (auto *cancel = qobject_cast<QPushButton *>(page.controls.value(ID_CANCEL)))
+        QObject::connect(cancel, &QPushButton::clicked, dialog, &QDialog::reject);
+    dialog->setModal(true);
+    dialog->show();
+}
+
+} // namespace traynotify

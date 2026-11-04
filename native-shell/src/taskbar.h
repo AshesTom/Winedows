@@ -51,7 +51,7 @@ private:
     struct Hit
     {
         // Task: a button, a window's or a group's
-        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand } kind = None;
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand, Chevron } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
     };
@@ -125,6 +125,18 @@ private:
     QList<QuickItem> m_quickItems;
     QList<QRect> m_grippers;
     QRect m_quickBand, m_quickTitle;
+    // Hide inactive icons: when each icon last changed or was clicked, the ones hidden, the chevron
+    // (TrayNotifyHoriz::Button) and whether it has them all shown
+    QHash<quint32, qint64> m_trayActive;
+    QHash<quint32, QPair<QString, qint64>> m_traySeen;   // tooltip and image key, to see a change
+    QSet<quint32> m_trayHidden;
+    QRect m_chevronRect;
+    bool m_trayOpen = false;
+    QTimer m_demoteTimer;
+    void trayChanged();
+    void updateTrayHiding();
+    QString chevronTip() const;
+    static QString trayName(const TrayIcon &icon);
     int m_top = 0;   // the sizing bar's rows above the bar, unlocked
     QFileSystemWatcher m_quickWatcher;
     arrange::Undo m_undo;

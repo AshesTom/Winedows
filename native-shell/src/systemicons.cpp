@@ -148,6 +148,8 @@ QList<TrayIcon> SystemIcons::icons() const
         icon.image = iconOf("netshell.dll", m_online ? ICON_CONNECTED : ICON_DISCONNECTED, m_size);
         icon.tooltip = !m_online ? tr("Network cable unplugged or no network")
             : tr("%1 (%2)\nStatus: Connected").arg(m_wireless ? tr("Wireless Network Connection") : tr("Local Area Connection"), m_connection);
+        // as Customize Notifications lists them, whatever the state
+        icon.name = m_wireless ? tr("Wireless Network Connection") : tr("Local Area Connection");
         if (!icon.image.isNull())
             out.append(icon);
     }
@@ -156,6 +158,7 @@ QList<TrayIcon> SystemIcons::icons() const
         icon.id = ICON_SOUND;
         icon.image = iconOf("sndvol32.exe", m_muted ? ICON_MUTED : ICON_VOLUME, m_size);
         icon.tooltip = m_muted ? tr("Volume: muted") : tr("Volume: %1%").arg(m_volume);
+        icon.name = tr("Volume");
         if (!icon.image.isNull())
             out.append(icon);
     }

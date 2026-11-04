@@ -59,6 +59,10 @@ void Tray::directoryChanged()
 void Tray::read()
 {
     const QByteArray list = readFile(m_ipc.filePath(QStringLiteral("tray.tsv")));
+    QHash<quint32, QString> names;
+    for (const QByteArray &line : readFile(m_ipc.filePath(QStringLiteral("tray-names.tsv"))).split('\n'))
+        if (const int tab = line.indexOf('\t'); tab > 0)
+            names.insert(line.left(tab).toUInt(), QString::fromUtf8(line.mid(tab + 1)));
     QList<TrayIcon> icons;
     for (const QByteArray &line : list.split('\n')) {
         const QList<QByteArray> fields = line.split('\t');
@@ -67,6 +71,7 @@ void Tray::read()
         TrayIcon icon;
         icon.id = fields[0].toUInt();
         icon.tooltip = QString::fromUtf8(fields.value(2));
+        icon.name = names.value(icon.id);
         icon.image = ipcfile::readIcon(m_ipc.filePath(QStringLiteral("tray-%1.argb").arg(icon.id)));
         if (!icon.image.isNull())
             icons.append(icon);
@@ -74,7 +79,7 @@ void Tray::read()
     // Compare what the icons look like: this runs for every file of the directory.
     bool same = icons.size() == m_icons.size();
     for (int i = 0; same && i < icons.size(); ++i)
-        same = icons[i].id == m_icons[i].id && icons[i].tooltip == m_icons[i].tooltip && icons[i].image == m_icons[i].image;
+        same = icons[i].id == m_icons[i].id && icons[i].tooltip == m_icons[i].tooltip && icons[i].name == m_icons[i].name && icons[i].image == m_icons[i].image;
     if (same)
         return;
     m_icons = icons;

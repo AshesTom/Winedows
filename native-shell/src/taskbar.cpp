@@ -87,6 +87,16 @@ const int TURN_OFF_DELAY_MS = 200;
 // the time in it (measured with 4 and 5 icons: the area at 868 and 850, the time's middle at 987).
 // Without a visual style, 6 at each end and 7 before the clock.
 const int TRAY_BUTTON = 18, TRAY_ICON_INSET = 1, CLASSIC_TRAY_END = 6, CLASSIC_CLOCK_GAP = 7;
+// Hide inactive icons (explorer.exe's TrayNotify defaults: IconDemoteTimerTick 300000, set at
+// 0x101811d; TrayIconResidentInterval 3600000, at 0x10180d2). With icons hidden the chevron stands
+// on the area's left edge, centred on it, and the icons start 13 after the edge instead of 20
+// (explorer.exe's notification preview 180).
+const int TRAY_DEMOTE_TICK_MS = 300000;
+const qint64 TRAY_RESIDENT_MS = 3600000;
+const int TRAY_CHEVRON_ICONS = 13, TRAY_ART_EDGE = 10;   // the area's art starts with 10 transparent columns
+const int STRING_CHEVRON_HIDE = 542, STRING_CHEVRON_SHOW = 543;
+const Part TRAY_CHEVRON{QStringLiteral("button"), {}, {}, 1, QStringLiteral("traynotifyhoriz")};
+const Part TRAY_CHEVRON_OPEN{QStringLiteral("button"), {}, {}, 1, QStringLiteral("traynotifyhorizopen")};
 const int ICON_SIZE = 16;
 
 // Toolbar part states and their frames in the style's strips
@@ -323,10 +333,12 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         relayout();
         update();
     });
-    connect(m_tray, &Tray::changed, this, [this] {
-        relayout();
-        update();
-    });
+    connect(m_tray, &Tray::changed, this, &Taskbar::trayChanged);
+    // explorer.exe's IconDemoteTimerTick: every 5 minutes, icons idle for TrayIconResidentInterval
+    // (an hour) go behind the chevron
+    m_demoteTimer.setInterval(TRAY_DEMOTE_TICK_MS);
+    connect(&m_demoteTimer, &QTimer::timeout, this, &Taskbar::updateTrayHiding);
+    m_demoteTimer.start();
     m_tray->balloons()->setLocator([this](quint32 id) {
         const QList<TrayIcon> &icons = m_tray->icons();
         for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
@@ -372,11 +384,15 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
             && settings.quickLaunch == m_settings.quickLaunch && settings.locked == m_settings.locked
             && settings.onTop == m_settings.onTop
-            && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle)
+            && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle
+            && settings.hideInactive == m_settings.hideInactive) {
+            updateTrayHiding();   // the behaviours chosen in Customize Notifications
             return;
+        }
         const bool autoHide = settings.autoHide != m_settings.autoHide || settings.locked != m_settings.locked;
         m_settings = settings;
         setOnTop();
+        updateTrayHiding();
         if (autoHide) {
             setHidden(false, false);
             placeOnScreen();
@@ -595,22 +611,44 @@ void Taskbar::relayout()
     if (!m_settings.clock)
         clockWidth = 0;
     const QMargins margins = renderer ? renderer->contentMargins(TRAY_BACKGROUND) : QMargins(CLASSIC_TRAY_END, 0, CLASSIC_TRAY_END, 0);
-    const int first = theme()->scaled(margins.left());
+    // with icons hidden (or shown again by the chevron), the chevron's room at the left
+    const bool chevron = m_settings.hideInactive && !m_trayHidden.isEmpty();
+    const QList<TrayIcon> &trayIcons = m_tray->icons();
+    int shown = 0;
+    for (const TrayIcon &icon : trayIcons)
+        shown += m_trayOpen || !chevron || !m_trayHidden.contains(icon.id);
+    const int first = chevron && renderer ? theme()->scaled(TRAY_ART_EDGE + TRAY_CHEVRON_ICONS - TRAY_ICON_INSET) : theme()->scaled(margins.left());
     const int end = theme()->scaled(margins.right());
     const int gap = renderer || !m_settings.clock ? 0 : theme()->scaled(CLASSIC_CLOCK_GAP);
     const int step = theme()->scaled(TRAY_BUTTON);
-    const int trayWidth = first + icons * step + gap + clockWidth + end;
+    const QSize chevronSize = renderer && renderer->trueSize(TRAY_CHEVRON).isValid() && !renderer->trueSize(TRAY_CHEVRON).isEmpty()
+        ? renderer->trueSize(TRAY_CHEVRON) : QSize(theme()->scaled(16), theme()->scaled(16));
+    const int classicChevron = chevron && !renderer ? chevronSize.width() + theme()->scaled(2) : 0;
+    const int trayWidth = first + classicChevron + shown * step + gap + clockWidth + end;
     if (renderer)
         m_trayRect = QRect(width() - trayWidth, 0, trayWidth, barHeight());
     else
         m_trayRect = QRect(width() - trayWidth - theme()->scaled(2), theme()->scaled(4), trayWidth, barHeight() - theme()->scaled(6));
     m_trayIconRects.clear();
-    for (int i = 0; i < icons; ++i)
-        m_trayIconRects.append(QRect(m_trayRect.x() + first + i * step + theme()->scaled(TRAY_ICON_INSET),
+    int slot = 0;
+    for (int i = 0; i < icons; ++i) {
+        if (!(m_trayOpen || !chevron || !m_trayHidden.contains(trayIcons[i].id))) {
+            m_trayIconRects.append(QRect());
+            continue;
+        }
+        m_trayIconRects.append(QRect(m_trayRect.x() + first + classicChevron + slot * step + theme()->scaled(TRAY_ICON_INSET),
                                      m_trayRect.y() + (m_trayRect.height() - theme()->scaled(ICON_SIZE)) / 2, theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE)));
-    m_clockRect = QRect(m_trayRect.x() + first + icons * step + gap, m_trayRect.y(), clockWidth, m_trayRect.height());
+        ++slot;
+    }
+    m_clockRect = QRect(m_trayRect.x() + first + classicChevron + shown * step + gap, m_trayRect.y(), clockWidth, m_trayRect.height());
+    m_chevronRect = QRect();
+    if (chevron)
+        m_chevronRect = renderer
+            ? QRect(QPoint(m_trayRect.x() + theme()->scaled(TRAY_ART_EDGE) - chevronSize.width() / 2, (barHeight() - chevronSize.height()) / 2),
+                    chevronSize)
+            : QRect(QPoint(m_trayRect.x() + first, (barHeight() - chevronSize.height()) / 2), chevronSize);
 
-    layoutButtons(bandStart, m_trayRect.x() - theme()->scaled(BAND_END));
+    layoutButtons(bandStart, (m_chevronRect.isNull() || !renderer ? m_trayRect.x() : m_chevronRect.x()) - theme()->scaled(BAND_END));
     m_tray->balloons()->iconsChanged();
 }
 
@@ -849,7 +887,17 @@ void Taskbar::drawTray(QPainter &painter)
         theme()->sunken(painter, m_trayRect);
     const QList<TrayIcon> &icons = m_tray->icons();
     for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
-        painter.drawImage(m_trayIconRects[i], icons[i].image);
+        if (!m_trayIconRects[i].isNull())
+            painter.drawImage(m_trayIconRects[i], icons[i].image);
+    if (!m_chevronRect.isNull()) {
+        const Hit hit{Hit::Chevron, -1};
+        const int state = m_pressed == hit && m_hover == hit ? Pressed : m_hover == hit ? Hot : Normal;
+        if (!renderer || !renderer->draw(&painter, m_chevronRect, withState(m_trayOpen ? TRAY_CHEVRON_OPEN : TRAY_CHEVRON, state))) {
+            theme()->raised(painter, m_chevronRect, state == Pressed);
+            painter.setPen(theme()->system(QStringLiteral("btntext"), Qt::black));
+            painter.drawText(m_chevronRect, Qt::AlignCenter, m_trayOpen ? QStringLiteral("\u00bb") : QStringLiteral("\u00ab"));
+        }
+    }
     painter.setFont(m_clockFont);
     painter.setPen(renderer ? renderer->colour(CLOCK, QStringLiteral("textcolor")).value_or(Qt::white) : QColor(Qt::black));
     if (m_settings.clock)
@@ -954,6 +1002,10 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
             hit.index = i;
             return hit;
         }
+    if (m_chevronRect.contains(at)) {
+        hit.kind = Hit::Chevron;
+        return hit;
+    }
     for (int i = 0; i < m_trayIconRects.size(); ++i)
         if (m_trayIconRects[i].contains(at)) {
             hit.kind = Hit::TrayIcon;
@@ -1004,7 +1056,7 @@ void Taskbar::mousePressEvent(QMouseEvent *event)
             showStartMenu(false);
         return;
     }
-    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick)) {
+    if (event->button() == Qt::LeftButton && (hit.kind == Hit::Task || hit.kind == Hit::Quick || hit.kind == Hit::Chevron)) {
         m_pressed = hit;
         update();
     }
@@ -1028,6 +1080,16 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
             runQuickItem(hit.index);
         else if (event->button() == Qt::RightButton)
             showQuickItemMenu(hit.index, event->globalPosition().toPoint());
+        return;
+    }
+    if (hit.kind == Hit::Chevron) {
+        if (event->button() == Qt::LeftButton && pressed == hit) {
+            m_trayOpen = !m_trayOpen;
+            relayout();
+            update();
+        } else if (event->button() == Qt::RightButton) {
+            showTaskbarMenu(event->globalPosition().toPoint(), true);
+        }
         return;
     }
     if (hit.kind == Hit::QuickBand && event->button() == Qt::RightButton) {
@@ -1062,6 +1124,7 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
         showTaskbarMenu(event->globalPosition().toPoint(), hit.kind != Hit::Band);
     } else if (hit.kind == Hit::TrayIcon && hit.index < m_tray->icons().size()) {
         const quint32 id = m_tray->icons()[hit.index].id;
+        m_trayActive.insert(id, QDateTime::currentMSecsSinceEpoch());   // a click keeps it shown
         const QPoint global = event->globalPosition().toPoint();
         if (event->button() == Qt::LeftButton)
             m_tray->click(id, "activate", global);
@@ -1085,6 +1148,8 @@ bool Taskbar::event(QEvent *event)
         }
         else if (hit.kind == Hit::TrayIcon && hit.index < m_tray->icons().size())
             text = m_tray->icons()[hit.index].tooltip;
+        else if (hit.kind == Hit::Chevron)
+            text = chevronTip();
         else if (hit.kind == Hit::Quick && hit.index < m_quickItems.size())
             text = m_quickItems[hit.index].name;
         else if (hit.kind == Hit::Clock)
@@ -1206,7 +1271,8 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
         if (!all.isEmpty() && all.first()->isSeparator())
             menu->removeAction(all.first());
     } else if (QAction *customize = actions.value(CMD_CUSTOMIZE_NOTIFICATIONS)) {
-        customize->setEnabled(false);   // no icon can be hidden here
+        customize->setEnabled(m_settings.hideInactive);
+        connect(customize, &QAction::triggered, this, [this] { traynotify::customize(this); });
     }
     if (m_undo.isEmpty() || !m_undoString) {
         remove(CMD_UNDO);
@@ -1542,6 +1608,60 @@ void Taskbar::dropEvent(QDropEvent *event)
             QFile::link(file.absoluteFilePath(), target);
     }
     event->acceptProposedAction();
+}
+
+void Taskbar::trayChanged()
+{
+    // an icon that appears or changes (its picture or its tooltip) is active now
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QStringList names;
+    QSet<quint32> present;
+    for (const TrayIcon &icon : m_tray->icons()) {
+        present.insert(icon.id);
+        const QPair<QString, qint64> seen{icon.tooltip, icon.image.cacheKey()};
+        if (m_traySeen.value(icon.id) != seen) {
+            m_traySeen.insert(icon.id, seen);
+            m_trayActive.insert(icon.id, now);
+        }
+        if (const QString name = trayName(icon); !name.isEmpty() && !names.contains(name))
+            names.append(name);
+    }
+    for (auto it = m_traySeen.begin(); it != m_traySeen.end();)
+        it = present.contains(it.key()) ? std::next(it) : m_traySeen.erase(it);
+    traynotify::setCurrent(names);
+    updateTrayHiding();
+}
+
+QString Taskbar::trayName(const TrayIcon &icon)
+{
+    // the program's name when the tray host gives one, else the tooltip's first line
+    return icon.name.isEmpty() ? icon.tooltip.section(QLatin1Char('\n'), 0, 0).trimmed() : icon.name;
+}
+
+void Taskbar::updateTrayHiding()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QSet<quint32> hidden;
+    if (m_settings.hideInactive)
+        for (const TrayIcon &icon : m_tray->icons()) {
+            const traynotify::Behavior behavior = traynotify::behavior(trayName(icon));
+            if (behavior == traynotify::AlwaysHide
+                || (behavior == traynotify::HideWhenInactive && now - m_trayActive.value(icon.id, now) >= TRAY_RESIDENT_MS))
+                hidden.insert(icon.id);
+        }
+    if (hidden.isEmpty())
+        m_trayOpen = false;
+    m_trayHidden = hidden;
+    relayout();
+    update();
+}
+
+QString Taskbar::chevronTip() const
+{
+    // explorer.exe's 543 while icons are hidden, 542 once they show
+    const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
+    const QString tip = explorer ? xpfiles::string(*explorer, m_trayOpen ? STRING_CHEVRON_HIDE : STRING_CHEVRON_SHOW) : QString();
+    return tip.isEmpty() ? QString::fromLatin1(m_trayOpen ? "Hide" : "Show hidden icons") : tip;
 }
 
 void Taskbar::toggleDesktop()

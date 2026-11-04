@@ -26,10 +26,21 @@ struct TaskbarSettings
     bool quickLaunch = false;
     bool locked = true;
     bool onTop = true;
-    bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title    // Keep the taskbar on top of other windows (ABS_ALWAYSONTOP)   // Lock the Taskbar (explorer.exe's TaskbarSizeMove, inverted)   // the Quick Launch band in the taskbar's rebar
+    bool quickLaunchText = false, quickLaunchTitle = false;   // the band's Show Text and Show Title
+    bool hideInactive = true;   // Hide inactive icons (EnableAutoTray), on as XP sets it up    // Keep the taskbar on top of other windows (ABS_ALWAYSONTOP)   // Lock the Taskbar (explorer.exe's TaskbarSizeMove, inverted)   // the Quick Launch band in the taskbar's rebar
     static TaskbarSettings load();
     void save() const;
 };
+
+// The notification area's items as Customize Notifications lists them: those shown now (Current
+// Items) and those seen before (Past Items), by their tooltips, and each one's behaviour.
+namespace traynotify {
+enum Behavior { HideWhenInactive = 0, AlwaysHide = 1, AlwaysShow = 2 };
+Behavior behavior(const QString &name);
+void setCurrent(const QStringList &names);
+// explorer.exe's dialog 7, over PARENT
+void customize(QWidget *parent);
+} // namespace traynotify
 
 // Tells the taskbar the sheet has applied its settings.
 class TaskbarSettingsNotifier : public QObject

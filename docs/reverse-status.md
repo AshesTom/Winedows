@@ -118,6 +118,9 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | The Toolbars submenu: browseui's band site menu 268 (Desktop 3, Quick Launch 4, New Toolbar 1) | `browselc.dll` | Done for Quick Launch; the others are greyed |
 | Quick Launch's Show Text: one width for every button, the widest name's, the name 4 after the icon and 4 before the end, in TaskBar::Toolbar's white; Show Title: the folder's name at the band's start in TaskBar::Rebar's text colour (123 182 232) | XP's taskbar in Wine | Done: identical pixels |
 | The band's menu (unlocked, on its gripper or title): View (Large Icons, Small Icons), Open Folder, Show Text, Show Title, Close Toolbar, then the taskbar's | `browselc.dll` menus 258, 256 and 257; XP's taskbar in Wine | Done; Large Icons is greyed |
+| Hide inactive icons: TrayNotify's defaults, IconDemoteTimerTick 300000 ms (set at `0x101811d`), TrayIconResidentInterval 3600000 ms (`0x10180d2`), EnableAutoTray on | `explorer.exe` (`FUN_0101809f`) | Done |
+| The chevron: `TrayNotifyHoriz::Button` (and `TrayNotifyHorizOpen` once open), centred on the area's visible edge, the icons 13 after that edge; tooltips 543 "Show hidden icons" and 542 "Hide" | `luna.msstyles`; `explorer.exe`'s preview 180 and strings | Done |
+| Customize Notifications: dialog 7, its list (Name 1000, Behavior 1001; Current Items 1403, Past Items 1404) and the three behaviours (1002 to 1004), with Restore Defaults | `explorer.exe` | Done; items are known by their program (the tray host's `tray-names.tsv`), not their tooltip |
 | Show Desktop: `Show Desktop.scf` with `[Taskbar] Command=ToggleDesktop`, explorer.exe's icon index 3 | XP's setup (`shell.inf`) | Done |
 | Auto-hide: flags at tray `+0x44` (1 on, 2 hidden); a 500 ms check (timer 2) hides the bar when the pointer is off it; a move on the hidden bar wider than SM_CXDOUBLECLK x SM_CYDOUBLECLK arms timer 3 (50 ms), which shows it | `FUN_01030c59`, `FUN_01021ff7`, `FUN_0101f7be`, `FUN_01032b15` | Done |
 | The hidden rectangle: the bar's top at the monitor's bottom less SM_CYFRAME / 2 (2 rows) | `FUN_0100a3cb`, `FUN_01030b04`; metrics stored at `0x101a0ae` | Done |
@@ -130,7 +133,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | Moving and resizing the unlocked taskbar (other screen edges, more rows) | Missing: unlocked, it shows its sizing bar and grippers but stays one row at the bottom |
 | Show Quick Launch, and the Quick Launch toolbar itself | Partial: the band shows its folder's shortcuts (`.desktop`, `.scf`, links), saved as `Taskbar/QuickLaunch`, with Show Text, Show Title, its band menu, each item's menu (Open, Cut, Copy, Delete) and drops onto it (untested by script). Missing: Large Icons, the overflow chevron, reordering by dragging, and XP's rebar keeping the bands' earlier widths when Show Text or Show Title change (XP's shrank the band behind a chevron, or moved the task band to 764) |
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Missing (greyed in the Toolbars submenu) |
-| Hide inactive icons and Customize Notifications (dialog 7) | Missing |
+| Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog lists names without icons, and the open chevron does not close by itself |
 | Classic Start menu and both Customize dialogs (dialogs 9, 1036, 1135) | Missing |
 | The "?" button and context help | Missing |
 
