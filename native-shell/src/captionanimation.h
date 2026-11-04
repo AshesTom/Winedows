@@ -13,5 +13,8 @@ namespace captionanimation {
 // taskbar button). Returns at once; the strip goes away by itself. Nothing when XP's "Animate windows
 // when minimizing and maximizing" would be off (WIN4WINE_NO_ANIMATION).
 void run(const QRect &from, const QRect &to, const QString &title, const QImage &icon);
+// None for MS milliseconds: explorer.exe turns SPI_SETANIMATION off while it minimizes all the windows
+// (Win+M, Show Desktop) and while it puts them back.
+void pause(int ms);
 
 } // namespace captionanimation

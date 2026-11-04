@@ -293,7 +293,7 @@ static void shell_key_events(BOOL start)
     WCHAR path[MAX_PATH + 32];
     char kind[16] = "";
     unsigned number = 0, vk, count = 0;
-    INPUT inputs[2 + 2 * 16 + 2];
+    INPUT inputs[2 + 3 * 16 + 4];
     FILE *file;
     swprintf(path, MAX_PATH + 32, L"%ls\\shellkeys.tsv", directory);
     if (!(file = _wfopen(path, L"rb"))) return;
@@ -321,12 +321,25 @@ static void shell_key_events(BOOL start)
     }
     else if (!strcmp(kind, "windows"))
     {
+        /* VK_SHIFT and VK_CONTROL before a key are held with it (Win+Shift+M). */
+        WORD held[2];
+        unsigned holding = 0, i;
         key_input(&inputs[count++], VK_LWIN, FALSE);
-        while (count < ARRAYSIZE(inputs) - 3 && fscanf(file, "%x", &vk) == 1 && vk && vk < 0xff)
+        while (count < ARRAYSIZE(inputs) - 7 && fscanf(file, "%x", &vk) == 1 && vk && vk < 0xff)
         {
             key_input(&inputs[count++], (WORD)vk, FALSE);
+            if ((vk == VK_SHIFT || vk == VK_CONTROL) && holding < ARRAYSIZE(held))
+            {
+                held[holding++] = (WORD)vk;
+                continue;
+            }
             key_input(&inputs[count++], (WORD)vk, TRUE);
+            for (i = holding; i > 0; i--)
+                key_input(&inputs[count++], held[i - 1], TRUE);
+            holding = 0;
         }
+        for (i = holding; i > 0; i--)
+            key_input(&inputs[count++], held[i - 1], TRUE);
         key_input(&inputs[count++], VK_LWIN, TRUE);
     }
     fclose(file);

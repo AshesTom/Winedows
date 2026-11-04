@@ -24,6 +24,10 @@ QRect workArea();
 Undo cascade(const QList<xcb_window_t> &windows);
 // HORIZONTAL: MDITILE_HORIZONTAL, the windows one above the other.
 Undo tile(const QList<xcb_window_t> &windows, bool horizontal);
+// Minimize All (explorer.exe's sub_102f245): where each window is, then each minimized, without the
+// caption animation. WINDOWS are listed from the top of the stack down.
+Undo minimizeAll(const QList<xcb_window_t> &windows);
+// SetWindowPlacement for each (sub_10334d1): back in its place, and shown again if it was minimized since.
 void undo(const Undo &placements);
 
 } // namespace arrange

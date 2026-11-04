@@ -45,6 +45,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     bool event(QEvent *event) override;
 
 private:
@@ -94,6 +95,14 @@ private:
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void tickClock();
+    // XP's hotkeys with the Windows key (explorer.exe's IDs 500 to 511), by virtual key and RegisterHotKey's modifiers
+    void hotkey(int key, int modifiers);
+    void minimizeAll();
+    // Win+Tab and Win+B: the keyboard on the task buttons or on the notification area's icons, the item
+    // that has it hot as on XP's toolbars; arrows move it, Enter chooses, the menu key opens its menu.
+    void keyboardStep(Hit::Kind kind, int step);
+    void leaveKeyboard();
+    void chooseItem(Hit hit, bool context);
     // Auto-hide, as explorer.exe's tray does it: a 500 ms check hides the bar once the pointer is off it
     // (timer 2), leaving SM_CYFRAME / 2 rows on the screen; a move on those rows wider than the
     // double-click rectangle brings it back 50 ms later (timer 3). It slides for 400 ms going and
@@ -142,6 +151,12 @@ private:
     arrange::Undo m_undo;
     int m_undoString = 0;      // explorer.exe's name for what Undo puts back
     Hit m_hover, m_pressed;
+    bool m_keyboard = false;
+    // HSHELL_FLASH (sub_1004730): a window that starts flashing while another has the foreground brings the
+    // auto-hidden bar back (flag 0x10, sub_101f7be), and the bar stays while it flashes (message 0x439)
+    void attentionChanged();
+    QSet<xcb_window_t> m_attention, m_unhidFor;
+    xcb_window_t m_activeAtKeyboard = 0;
     QPointer<StartPanel> m_startPanel;
     QElapsedTimer m_startClosed;
     QTimer m_autoHideTimer, m_unhideTimer, m_slideTimer;

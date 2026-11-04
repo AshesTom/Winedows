@@ -71,9 +71,22 @@ private:
 
 } // namespace
 
+namespace {
+QElapsedTimer paused;
+int pausedFor = 0;
+}
+
+void pause(int ms)
+{
+    paused.start();
+    pausedFor = ms;
+}
+
 void run(const QRect &from, const QRect &to, const QString &title, const QImage &icon)
 {
     if (qEnvironmentVariableIsSet("WIN4WINE_NO_ANIMATION") || from.isEmpty() || to.isEmpty())
+        return;
+    if (paused.isValid() && paused.elapsed() < pausedFor)
         return;
     ShellTheme *theme = ShellTheme::instance();
     const FrameStyle &style = theme->frame();

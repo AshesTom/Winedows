@@ -473,6 +473,11 @@ class Manager:
             if vk is None and XK.XK_F1 <= keysym <= XK.XK_F24:
                 vk = 0x70 + keysym - XK.XK_F1
             if vk is not None:
+                # Shift and Ctrl held with it (Win+Shift+M, Win+Ctrl+F) come first, as VK_SHIFT and VK_CONTROL.
+                if e.state & X.ControlMask:
+                    self.shell_combo.append(0x11)
+                if e.state & X.ShiftMask:
+                    self.shell_combo.append(0x10)
                 self.shell_combo.append(vk)
         elif e.type == X.KeyRelease and e.detail in self.super_codes:
             if not self.shell_combo_used:
@@ -1206,7 +1211,13 @@ class Manager:
         return 2
 
     def event(self, e):
-        if e.type == X.MapRequest:
+        if e.type == X.MappingNotify:
+            # Another keyboard layout (Xwayland starts with the host's, then the session sets its own):
+            # the key codes of the Windows key's combinations and of the shortcuts are read again.
+            self.d.refresh_keyboard_mapping(e)
+            if e.request == X.MappingKeyboard:
+                self.hotkeys.load()
+        elif e.type == X.MapRequest:
             self.manage(e.window)
         elif e.type == X.MapNotify:
             if e.override and self.overlay_window(e.window):

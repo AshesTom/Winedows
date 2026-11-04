@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "arrange.h"
 
+#include "captionanimation.h"
 #include "theme.h"
 #include "windowlist.h"
 #include "x11.h"
@@ -15,6 +16,9 @@ namespace {
 
 // SM_CXSIZE: the visual styles leave the caption buttons' width to the scheme, whose is 18.
 const int CAPTION_WIDTH = 18;
+// How long the frames go without their caption animation once explorer.exe has turned it off: the
+// window manager answers the requests a little later than XP's synchronous SC_MINIMIZE.
+const int MINIMIZE_ALL_MS = 1000;
 
 bool maximized(xcb_window_t window)
 {
@@ -97,6 +101,21 @@ Undo tile(const QList<xcb_window_t> &windows, bool horizontal)
     return place(places);
 }
 
+Undo minimizeAll(const QList<xcb_window_t> &windows)
+{
+    Undo undo;
+    for (xcb_window_t window : windows) {
+        const QRect frame = x11::frameGeometry(window);
+        if (!frame.isNull())
+            undo.append({window, frame, maximized(window)});
+    }
+    captionanimation::pause(MINIMIZE_ALL_MS);
+    // the taskband's items from its last button to its first
+    for (auto it = windows.crbegin(); it != windows.crend(); ++it)
+        WindowList::minimize(*it);
+    return undo;
+}
+
 void undo(const Undo &placements)
 {
     for (const Placement &p : placements) {
@@ -104,6 +123,11 @@ void undo(const Undo &placements)
         if (p.maximized)
             WindowList::maximize(p.window, true);
     }
+    // the list from its end, the bottom window first: the top one is shown last, over the others
+    captionanimation::pause(MINIMIZE_ALL_MS);
+    for (auto it = placements.crbegin(); it != placements.crend(); ++it)
+        if (x11::property32(it->window, atom("_NET_WM_STATE")).contains(atom("_NET_WM_STATE_HIDDEN")))
+            WindowList::activate(it->window);
 }
 
 } // namespace arrange

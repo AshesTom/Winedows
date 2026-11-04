@@ -4,7 +4,8 @@ This document tracks the parts of the native shell that were reverse-engineered 
 binaries and ported: Windows Media Player 9, Taskbar and Start Menu Properties, shell32's shortcut
 menus (folder windows and the desktop), Windows Picture and Fax Viewer, the frame manager's handling
 of undecorated windows, the taskband and its menus, the Start panel's keys, the notification area and
-the folder windows' bands, the caption animation (`win32k.sys`), desktop icons and file Properties. For each component it records:
+the folder windows' bands, the caption animation (`win32k.sys`), desktop icons, file Properties and the Windows key's hotkeys. Section 13
+lists what explorer.exe does that is not ported yet. For each component it records:
 
 - what was recovered from XP's files, and from where (function, address, resource or string ID);
 - what the port implements;
@@ -248,6 +249,8 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 | Cascade and Tile: user32's `CascadeWindows` (`sub_30054e2e`, position `sub_3002fae3`) and `TileWindows` (`sub_30055060`) | `user32.dll` | Done |
 | Band end 3 px before the notification area | XP's taskbar in Wine (5, 7, 11, 12 buttons) | Done |
 | Group names: the program file's `FileDescription` | `sub_1005cf7` (each `rundll32.exe` window on its own) | Done, by WM_CLASS here |
+| The shell hook (`SHELLHOOK` messages, `sub_1002819`): HSHELL_FLASH (0x8006) sets the item's flash bit (`sub_1004730`); HSHELL_REDRAW marks it and redraws on timer 4 after 100 ms; HSHELL_ENDTASK calls EndTask; HSHELL_WINDOWACTIVATED arms timer 5 (1000 ms) | `sub_1002819`, `sub_1004730` | Read; the flash bit follows `_NET_WM_STATE_DEMANDS_ATTENTION` here |
+| A window that starts flashing while another has the foreground (`sub_102d585`) gets flag 0x10 and brings the auto-hidden bar back (`sub_101f7be`); `sub_1002ab8` passes the flags to group buttons; the 500 ms check (`0x1025a26`) keeps the bar shown while the taskband answers message 0x439 | `sub_1004730`, `sub_1002ab8` | Done (`Taskbar::attentionChanged`) |
 
 ### Missing
 
@@ -353,3 +356,57 @@ through `filebrowser.cpp` and `desktopicons.cpp`, see section 10).
 | Etched separators (`SS_ETCHEDHORZ`) | dialog 1041 | Missing: not drawn by the dialog builder |
 | The sheet's size and caption | XP in Wine: 58 px taller; no caption icon | Missing |
 | Change… (Open With), Advanced attributes, Summary page, drives' page from shell32 | Missing (drives keep the earlier hand-made page) |
+
+---
+
+## 12. The Windows key's hotkeys
+
+Binary: `explorer.exe`. Port: [`taskbar.cpp`](../native-shell/src/taskbar.cpp) (`Taskbar::hotkey`, `keyboardStep`),
+[`arrange.cpp`](../native-shell/src/arrange.cpp) (`minimizeAll`, `undo`), [`tray.cpp`](../native-shell/src/tray.cpp);
+bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`proxy.c`](../bridge-wm/proxy.c)).
+
+| Item | Source | Status |
+|---|---|---|
+| The table: 12 entries `{virtual key, modifiers}` at `0x10114c4`, registered as IDs 500 to 511 on the tray (`sub_101146e`), skipped for MOD_WIN when `NoWinKeys` (0x40000044) is set: Win+R, Win+M, Win+Shift+M, Win+F1, Win+E, Win+F, Win+Ctrl+F, Win+Tab, Win+Shift+Tab, Win+Pause, Win+D, Win+B | `sub_101146e`; unregistered by `sub_103257d` | Done |
+| WM_HOTKEY: `id - 500` through the jump table at `0x102162d` | `sub_1021388` | Done |
+| Win+R: the Run dialog, or the one already open (FindWindow on `#32770` with string 722) | `sub_10213b8` | Done |
+| Win+M: the Start menu closes, then Minimize All. The taskband first asks whether any window can be minimized (message 0x434); 0x435 runs `sub_102f245` | `0x1021510`, `sub_10320ad`, `sub_10320d7` | Done |
+| Minimize All saves every visible window that is not minimized, except the tray and the desktop, with the undo string 537 "Minimize All" (`sub_1031b90`, `sub_1031b20`). A thread then minimizes the taskband's items from the last to the first, with SPI_SETANIMATION off (`sub_102e686`): SC_MINIMIZE, or SW_SHOWMINNOACTIVE for a hung window | `sub_102f245` | Done: the caption animation is paused for 1 s; the hung-window case does not apply here |
+| Win+Shift+M and the menu's Undo: the saved placements put back from the end of the list with SetWindowPlacement, animation off, the list freed. Cascade, Tile and Minimize All share the list, so Undo names whichever saved it last (534 with 535, 536 or 537) | `sub_10335c0`, `sub_10334d1`; command 0x19f | Done |
+| Win+E: ShellExecuteEx with the "explore" verb on CSIDL_DRIVES (0x11), unless restricted | `sub_103adad` | Partial: My Computer opens without the Folders pane (`filebrowser.cpp` was being changed elsewhere) |
+| Win+F: command 0xa085 (Search) unless REST_NOFIND (0x80). Win+Ctrl+F: 0xa086 (Search for Computers) | `0x102159e`, `0x10215b8` | Win+F Done; Win+Ctrl+F Missing (no network search) |
+| Win+Tab and Win+Shift+Tab: the tray to the foreground, then message 0x43d to the taskband with +1 or -1 (the hot button moves) | `0x10215dc` | Partial: the keyboard is grabbed on the task buttons, the arrows move the hot button, Enter chooses it, the menu key and Shift+F10 open its menu. The taskband's handler of 0x43d was not located |
+| Win+Pause: SHRunControlPanel on sysdm.cpl | `0x102161a` | Done |
+| Win+D: Show Desktop's toggle (`sub_1002d89`): the foreground window is kept to give back; Minimize All with lParam 1, which posts 0x453 to the desktop; the second press undoes it | `sub_1002d89` | Partial: bridge-wm's `_NET_SHOWING_DESKTOP` (the same toggle as the taskbar's menu); XP's Minimize All there also leaves "Undo Minimize All" in the menu, which the native one does not |
+| Win+B: SwitchToThisWindow on the tray, the focus on the notification area (`sub_101cdac`) | `0x1021567` | Partial: arrows move between icons, Enter clicks one, the menu key opens its menu; the focus rectangle (DrawFocusRect on the 18-pixel button) is not measured |
+| Win+F1: command 503 (Help and Support) | `0x1021543` | Missing: there is no Help and Support Center |
+| Shift and Ctrl held with the Windows key | bridge-wm wrote only the keys | Done: written as VK_SHIFT and VK_CONTROL before the key; `proxy.c` holds them for Wine (needs a MinGW rebuild of `proxy.exe`) |
+| A keyboard layout set after the window manager started (Xwayland starts with the host's) | bridge-wm kept the first key map: Win+M was lost under a layout change | Done: MappingNotify refreshes the map and the shortcuts' grabs |
+
+---
+
+## 13. What explorer.exe does that is not ported yet
+
+From `explorer.exe`'s strings, menus and dialogs, compared with the native shell. Sections 2, 6, 7 and 12 list
+the gaps in what was ported; this is the rest. The desktop, folder windows and their menus are shell32's and
+browseui's code; their gaps are in sections 3, 8, 10 and 11.
+
+| Area | Original feature | Evidence |
+|---|---|---|
+| Taskbar | Dragging an item over a task button brings its window forward after a delay; dropping on it shows 711 ("You cannot drop an item onto a button on the taskbar…") | String 711 |
+| Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx (the native button keeps the flash colour while the window wants attention) | `sub_1002819`; user32 not reversed |
+| Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604 |
+| Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
+| Taskbar | The taskband's extra rows and scroll arrows; TaskbarGroupSize 1 and 2+ | Section 6 |
+| Taskbar | Desktop, Links and New Toolbar bands; deskbands | Section 2 |
+| Balloons | "Click here to begin" on the Start button at the first logons (533, 800, 801) | Strings 533, 800, 801 |
+| Balloons | The Windows tour (821, 822), low screen resolution (811, 812), "Hiding your inactive notification icons…" (590, 591) the first time, "New programs installed." (8229) | Strings |
+| Start menu | The most-used programs ranked by shell32's UserAssist counts; "Remove from This List" (8225) and the prompt for an item that is gone (8224) | Strings 8224, 8225; section 7 |
+| Start menu | Pin to Start menu, dragging items in the panel and in All Programs, Sort by Name | shell32's verbs; StartMenu band |
+| Start menu | Newly installed programs highlighted in All Programs (8229) | String 8229 |
+| Start menu | Favorites (8235), Windows Security (7022), Undock Computer (7012, 7014), Disconnect (7017) | Strings |
+| Start menu | "Some items cannot be shown" when the panel is too small (8231, 8232); the panel's size values 8256–8260 | Strings |
+| Start menu | The classic Start menu and the Customize dialogs (1311; dialogs 9, 1036, 1135) | Dialogs |
+| Start menu | Help and Support (`helpctr.exe -FromStartHelp`, 732) | String 732 |
+| Start menu | The infotip's own drawing | Section 7 |
+| Session | Safe mode notice (538, 539); "could not load or run" for the Run key's programs (515) | Strings |

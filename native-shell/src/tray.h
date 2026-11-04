@@ -37,12 +37,14 @@ public:
     using ClickHandler = std::function<bool(quint32 id, const char *op, QPoint at)>;
     void setOwnIcons(QObject *owner, const QList<TrayIcon> &icons, ClickHandler click);
 
+    enum { MOD_CONTROL = 2, MOD_SHIFT = 4 };   // RegisterHotKey's, for hotkey()
+
 Q_SIGNALS:
     void changed();
     // The windows key, or Ctrl+Esc, under a Linux window (shellkeys.tsv of bridge-wm)
     void startRequested();
-    // A key with the Windows key, by its virtual key
-    void hotkey(int key);
+    // A key with the Windows key, by its virtual key, and Shift or Ctrl held with it
+    void hotkey(int key, int modifiers);
 
 private:
     void directoryChanged();

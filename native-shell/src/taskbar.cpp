@@ -32,6 +32,7 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QHelpEvent>
+#include <QKeyEvent>
 #include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
@@ -44,6 +45,7 @@
 #include <QToolTip>
 
 #include <functional>
+#include <iterator>
 
 using w4w::Part;
 
@@ -78,7 +80,16 @@ enum {
     CMD_PROPERTIES = 413, CMD_UNDO = 416, CMD_TASK_MANAGER = 420, CMD_CUSTOMIZE_NOTIFICATIONS = 421, CMD_LOCK = 424,
     CMD_MINIMIZE_GROUP = 311, CMD_CLOSE_GROUP = 48913,
 };
-const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_SHOW_OPEN_WINDOWS = 850;
+const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_MINIMIZE_ALL = 537, STRING_SHOW_OPEN_WINDOWS = 850;
+// explorer.exe's hotkeys: the table at 0x10114c4 (virtual key, modifiers with MOD_WIN), registered as
+// IDs 500 to 511 by sub_101146e; WM_HOTKEY goes to sub_1021388's jump table.
+enum Hotkey { HOTKEY_RUN, HOTKEY_MINIMIZE_ALL, HOTKEY_UNDO_MINIMIZE_ALL, HOTKEY_HELP, HOTKEY_EXPLORE, HOTKEY_FIND_FILES,
+              HOTKEY_FIND_COMPUTERS, HOTKEY_NEXT_TASK, HOTKEY_PREVIOUS_TASK, HOTKEY_SYSTEM, HOTKEY_DESKTOP, HOTKEY_TRAY };
+const struct
+{
+    int key, modifiers;
+} HOTKEYS[] = {{'R', 0}, {'M', 0}, {'M', Tray::MOD_SHIFT}, {0x70, 0}, {'E', 0}, {'F', 0}, {'F', Tray::MOD_CONTROL},
+               {0x09, 0}, {0x09, Tray::MOD_SHIFT}, {0x13, 0}, {'D', 0}, {'B', 0}};
 const int TEXT_RAISE = 1;           // the taskbar's small text sits a pixel above the centre
 const int TURN_OFF_DELAY_MS = 200;
 // The notification area as explorer.exe lays it out: the style's content margins (19 and 7 with Luna),
@@ -330,6 +341,10 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         m_classicStartText = QStringLiteral("Start");
 
     connect(m_windows, &WindowList::changed, this, [this] {
+        // another window chosen with the mouse takes the keyboard back
+        if (m_keyboard && m_windows->active() != m_activeAtKeyboard)
+            leaveKeyboard();
+        attentionChanged();
         relayout();
         update();
     });
@@ -347,15 +362,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         return QRect();
     });
     connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
-    connect(m_tray, &Tray::hotkey, this, [](int key) {
-        // XP's hotkeys with the Windows key, by their virtual keys
-        if (key == 'R')
-            showRunDialog();
-        else if (key == 'E')
-            FileBrowser::open(places::Computer);
-        else if (key == 'F')
-            FileBrowser::open(places::Search);
-    });
+    connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
     connect(theme(), &ShellTheme::changed, this, &Taskbar::themeChanged);
 
     m_autoHideTimer.setInterval(500);
@@ -481,7 +488,27 @@ void Taskbar::checkAutoHide()
     // not while the pointer, a menu, the Start panel or the keyboard is on the bar
     if (geometry().contains(QCursor::pos()) || m_startPanel || QApplication::activePopupWidget() || isActiveWindow())
         return;
+    // nor while a button that brought it back flashes
+    if (!m_unhidFor.isEmpty())
+        return;
     setHidden(true);
+}
+
+void Taskbar::attentionChanged()
+{
+    QSet<xcb_window_t> attention;
+    for (const Task &task : m_windows->tasks())
+        if (task.attention)
+            attention.insert(task.window);
+    for (xcb_window_t window : std::as_const(attention))
+        if (!m_attention.contains(window) && window != m_windows->active()) {
+            m_unhidFor.insert(window);
+            if (m_hidden)
+                setHidden(false);
+        }
+    // the flag goes with the flashing
+    m_unhidFor &= attention;
+    m_attention = attention;
 }
 
 void Taskbar::setHidden(bool hidden, bool animate)
@@ -889,6 +916,18 @@ void Taskbar::drawTray(QPainter &painter)
     for (int i = 0; i < icons.size() && i < m_trayIconRects.size(); ++i)
         if (!m_trayIconRects[i].isNull())
             painter.drawImage(m_trayIconRects[i], icons[i].image);
+    // Win+B: the icon with the keyboard has the toolbar's focus rectangle, DrawFocusRect's dots
+    // inverted on its 18-pixel button (not measured against XP)
+    if (m_keyboard && m_hover.kind == Hit::TrayIcon && m_hover.index < m_trayIconRects.size()) {
+        const QRect focus = m_trayIconRects[m_hover.index].adjusted(-1, -1, 1, 1);
+        painter.save();
+        painter.setCompositionMode(QPainter::RasterOp_SourceXorDestination);
+        for (int x = focus.left(); x <= focus.right(); ++x)
+            for (int y = focus.top(); y <= focus.bottom(); ++y)
+                if ((x == focus.left() || x == focus.right() || y == focus.top() || y == focus.bottom()) && (x + y) % 2 == 0)
+                    painter.fillRect(x, y, 1, 1, Qt::white);
+        painter.restore();
+    }
     if (!m_chevronRect.isNull()) {
         const Hit hit{Hit::Chevron, -1};
         const int state = m_pressed == hit && m_hover == hit ? Pressed : m_hover == hit ? Hot : Normal;
@@ -1048,6 +1087,7 @@ void Taskbar::leaveEvent(QEvent *)
 
 void Taskbar::mousePressEvent(QMouseEvent *event)
 {
+    leaveKeyboard();
     const Hit hit = hitAt(event->position().toPoint());
     m_activeAtPress = m_windows->activeAtPress();
     if (event->button() == Qt::LeftButton && hit.kind == Hit::Start) {
@@ -1662,6 +1702,171 @@ QString Taskbar::chevronTip() const
     const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
     const QString tip = explorer ? xpfiles::string(*explorer, m_trayOpen ? STRING_CHEVRON_HIDE : STRING_CHEVRON_SHOW) : QString();
     return tip.isEmpty() ? QString::fromLatin1(m_trayOpen ? "Hide" : "Show hidden icons") : tip;
+}
+
+void Taskbar::hotkey(int key, int modifiers)
+{
+    int id = -1;
+    for (int i = 0; i < int(std::size(HOTKEYS)); ++i)
+        if (HOTKEYS[i].key == key && HOTKEYS[i].modifiers == modifiers)
+            id = i;
+    switch (id) {
+    case HOTKEY_RUN:
+        showRunDialog();   // the Run dialog already open comes forward (FindWindow on string 722)
+        break;
+    case HOTKEY_MINIMIZE_ALL:
+        // the Start menu closes, the taskband minimizes its windows (message 0x435), the desktop has the focus
+        if (m_startPanel)
+            m_startPanel->close();
+        minimizeAll();
+        break;
+    case HOTKEY_UNDO_MINIMIZE_ALL:
+        // sub_10335c0: the placements saved last, whatever saved them (Minimize All, Cascade or Tile)
+        if (!m_undo.isEmpty()) {
+            arrange::undo(m_undo);
+            m_undo.clear();
+        }
+        break;
+    case HOTKEY_EXPLORE:
+        // sub_103adad: CSIDL_DRIVES (0x11) with the "explore" verb
+        FileBrowser::open(places::Computer);
+        break;
+    case HOTKEY_FIND_FILES:
+        FileBrowser::open(places::Search);
+        break;
+    case HOTKEY_NEXT_TASK:
+    case HOTKEY_PREVIOUS_TASK:
+        // the tray comes forward, the taskband moves its hot item by one (message 0x43d, +1 or -1)
+        keyboardStep(Hit::Task, id == HOTKEY_NEXT_TASK ? 1 : -1);
+        break;
+    case HOTKEY_SYSTEM:
+        // SHRunControlPanel on sysdm.cpl
+        applets::open(QStringLiteral("system"));
+        break;
+    case HOTKEY_DESKTOP:
+        toggleDesktop();
+        break;
+    case HOTKEY_TRAY:
+        // SwitchToThisWindow on the tray, then the focus on the notification area (sub_101cdac)
+        if (m_hover.kind != Hit::TrayIcon)
+            keyboardStep(Hit::TrayIcon, 1);
+        break;
+    default:
+        // Help and Support (command 503) and Search for Computers (0xa086) have nothing to open here
+        break;
+    }
+}
+
+void Taskbar::minimizeAll()
+{
+    // message 0x434: is there a window the taskband can minimize
+    const QList<xcb_window_t> windows = m_windows->arrangeable();
+    if (windows.isEmpty())
+        return;
+    m_undo = arrange::minimizeAll(windows);
+    m_undoString = STRING_MINIMIZE_ALL;
+}
+
+void Taskbar::keyboardStep(Hit::Kind kind, int step)
+{
+    QList<int> items;
+    if (kind == Hit::Task) {
+        for (int i = 0; i < m_buttons.size(); ++i)
+            if (!m_buttons[i].rect.isNull())
+                items.append(i);
+    } else {
+        for (int i = 0; i < m_trayIconRects.size() && i < m_tray->icons().size(); ++i)
+            if (!m_trayIconRects[i].isNull())
+                items.append(i);
+    }
+    if (items.isEmpty())
+        return;
+    const qsizetype at = m_hover.kind == kind ? items.indexOf(m_hover.index) : -1;
+    const qsizetype next = at < 0 ? (step > 0 ? 0 : items.size() - 1) : (at + step + items.size()) % items.size();
+    if (!m_keyboard) {
+        if (m_hidden || m_slideTimer.isActive())
+            setHidden(false, false);
+        m_keyboard = true;
+        m_activeAtKeyboard = m_windows->active();
+        grabKeyboard();
+    }
+    setHover({kind, items[next]});
+}
+
+void Taskbar::leaveKeyboard()
+{
+    if (!m_keyboard)
+        return;
+    m_keyboard = false;
+    releaseKeyboard();
+    setHover(Hit());
+}
+
+void Taskbar::chooseItem(Hit hit, bool context)
+{
+    if (hit.kind == Hit::Task && hit.index < m_buttons.size()) {
+        const Button &button = m_buttons[hit.index];
+        const QPoint at = mapToGlobal(button.rect.center() + QPoint(0, m_top));
+        if (button.group)
+            context ? showGroupMenu(hit.index, at) : showGroupList(hit.index);
+        else if (context)
+            showTaskMenu(button.tasks.first(), at);
+        else
+            m_windows->switchTo(m_windows->tasks()[button.tasks.first()].window);
+    } else if (hit.kind == Hit::TrayIcon && hit.index < m_tray->icons().size() && hit.index < m_trayIconRects.size()) {
+        const quint32 id = m_tray->icons()[hit.index].id;
+        m_trayActive.insert(id, QDateTime::currentMSecsSinceEpoch());
+        m_tray->click(id, context ? "context" : "activate", mapToGlobal(m_trayIconRects[hit.index].center() + QPoint(0, m_top)));
+    }
+}
+
+void Taskbar::keyPressEvent(QKeyEvent *event)
+{
+    if (!m_keyboard) {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    const Hit hit = m_hover;
+    const Hit::Kind kind = hit.kind == Hit::TrayIcon ? Hit::TrayIcon : Hit::Task;
+    switch (event->key()) {
+    case Qt::Key_Tab:
+    case Qt::Key_Backtab:
+        // with the Windows key still down, the next task; alone, the other toolbar
+        if (event->modifiers() & Qt::MetaModifier)
+            keyboardStep(Hit::Task, event->key() == Qt::Key_Tab ? 1 : -1);
+        else
+            keyboardStep(kind == Hit::Task ? Hit::TrayIcon : Hit::Task, 1);
+        break;
+    case Qt::Key_Left:
+    case Qt::Key_Up:
+        keyboardStep(kind, -1);
+        break;
+    case Qt::Key_Right:
+    case Qt::Key_Down:
+        keyboardStep(kind, 1);
+        break;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space:
+        leaveKeyboard();
+        chooseItem(hit, false);
+        break;
+    case Qt::Key_Menu:
+        leaveKeyboard();
+        chooseItem(hit, true);
+        break;
+    case Qt::Key_F10:
+        if (event->modifiers() & Qt::ShiftModifier) {
+            leaveKeyboard();
+            chooseItem(hit, true);
+        }
+        break;
+    case Qt::Key_Escape:
+        leaveKeyboard();
+        break;
+    default:
+        break;
+    }
 }
 
 void Taskbar::toggleDesktop()

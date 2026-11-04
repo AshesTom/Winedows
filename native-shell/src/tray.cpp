@@ -47,9 +47,21 @@ void Tray::directoryChanged()
         m_shellKeys = serial;
         if (keys.size() == 2)
             Q_EMIT startRequested();
-        else if (keys.value(1) == "windows")
-            for (int i = 2; i < keys.size(); ++i)
-                Q_EMIT hotkey(keys[i].toInt(nullptr, 16));
+        else if (keys.value(1) == "windows") {
+            // VK_SHIFT and VK_CONTROL come before the key they were held with
+            int modifiers = 0;
+            for (int i = 2; i < keys.size(); ++i) {
+                const int vk = keys[i].toInt(nullptr, 16);
+                if (vk == 0x10)
+                    modifiers |= MOD_SHIFT;
+                else if (vk == 0x11)
+                    modifiers |= MOD_CONTROL;
+                else {
+                    Q_EMIT hotkey(vk, modifiers);
+                    modifiers = 0;
+                }
+            }
+        }
     }
     read();
     showMenus();
