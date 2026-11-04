@@ -41,7 +41,7 @@ FILES = {
 # a theme without some of them still works.
 ICON_FILES = {
     'mydocs.dll': 'system32', 'desk.cpl': 'cpl', 'msiexec.exe': 'filetypes', 'zipfldr.dll': 'filetypes',
-    'iexplore.exe': 'ie', 'main.cpl': 'keyboard', 'user32.dll': 'resources', 'shimgvw.dll': 'shell',
+    'iexplore.exe': 'ie', 'main.cpl': 'keyboard', 'user32.dll': 'resources', 'shimgvw.dll': 'shell', 'photowiz.dll': 'shell',
     'netshell.dll': 'tray', 'sndvol32.exe': 'tray', 'wmploc.dll': 'wmp', 'wmplayer.exe': 'wmp',
     # Windows Media Player: its skin engine's property names (wmp.dll's type library) and its skins
     'wmp.dll': 'wmp',

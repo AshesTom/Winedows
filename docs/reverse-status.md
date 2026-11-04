@@ -209,7 +209,7 @@ Binary: `shimgvw.dll`. Port: `pictures::Viewer` in [`pictures.cpp`](../native-sh
 
 | Original feature | Status |
 |---|---|
-| Print (Photo Printing Wizard) | Partial: printed through Qt's print dialog, the picture fitted to the page; the wizard itself is not ported |
+| Print (Photo Printing Wizard) | Partial: `photowiz.dll` is extracted for its strings and the viewer shows a wizard of its own with Picture Selection (all the folder's pictures, check marks), Printing Options (printer and paper), Layout Selection (full page, 2x2, 3x3, 4x4, Wallet, Contact sheet) and a progress dialog, printing each chosen picture on the page. photowiz.dll's own dialogs 200/201 and preview are not read |
 | Help (`ImgPrev.chm`) | Partial: the Help button shows a shortcut summary; XP's `ImgPrev.chm` is not extracted/read |
 | Annotations (409–415, 402, 422, 419) | Partial: a pencil button opens a small annotation bar with Pen, Highlighter, Eraser, Clear and Save; the ink is a transparent image over the picture and Save writes a `(annotated)` copy. XP's tool set (text, shapes, stamps), undo and its own save prompt are missing |
 | Margins and remembered window size | Done: measured on XP's own viewer (`shimgvw.dll` run with rundll32 in Wine): the 22-pixel toolbar sits 8 rows above the client's bottom and the picture's frame 8 rows above the toolbar; on closing XP writes `Bounds` (a RECT) and `Maximize` (a DWORD) under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\ShellImageView`, here `Viewer/Bounds` and `Viewer/Maximize` in `native-explorer.conf` |
