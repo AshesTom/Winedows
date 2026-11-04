@@ -30,6 +30,7 @@
 #include <QFormLayout>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QPushButton>
 #include <QSlider>
 #include <QMenuBar>
 #include <QCursor>
@@ -2098,6 +2099,63 @@ void MediaPlayer::command(int id)
             layout->addWidget(mute);
             layout->addWidget(new QLabel(tr("Visualization"), &dialog));
             layout->addWidget(effect);
+            auto *equalizer = new QPushButton(tr("&Equalizer..."), &dialog);
+            layout->addWidget(equalizer);
+            QObject::connect(equalizer, &QPushButton::clicked, &dialog, [&dialog] {
+                QDialog eq(&dialog);
+                eq.setWindowTitle(QObject::tr("Graphic Equalizer"));
+                auto *layout = new QVBoxLayout(&eq);
+                auto *preset = new QComboBox(&eq);
+                preset->addItems({QObject::tr("Flat"), QObject::tr("Rock"), QObject::tr("Pop"), QObject::tr("Jazz"), QObject::tr("Classical")});
+                layout->addWidget(preset);
+                auto *row = new QHBoxLayout;
+                const QStringList bands{QStringLiteral("31"), QStringLiteral("62"), QStringLiteral("125"), QStringLiteral("250"), QStringLiteral("500"),
+                                        QStringLiteral("1k"), QStringLiteral("2k"), QStringLiteral("4k"), QStringLiteral("8k"), QStringLiteral("16k")};
+                QList<QSlider *> sliders;
+                for (const QString &band : bands) {
+                    auto *column = new QVBoxLayout;
+                    auto *slider = new QSlider(Qt::Vertical, &eq);
+                    slider->setRange(-12, 12);
+                    slider->setValue(0);
+                    column->addWidget(slider);
+                    auto *label = new QLabel(band, &eq);
+                    label->setAlignment(Qt::AlignHCenter);
+                    column->addWidget(label);
+                    row->addLayout(column);
+                    sliders.append(slider);
+                }
+                layout->addLayout(row);
+                QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+                const QVariantList saved = settings.value(QStringLiteral("equalizer")).toList();
+                for (int i = 0; i < sliders.size() && i < saved.size(); ++i)
+                    sliders[i]->setValue(saved[i].toInt());
+                auto *srs = new QCheckBox(QObject::tr("SRS WOW effects"), &eq);
+                srs->setChecked(settings.value(QStringLiteral("srsWOW"), false).toBool());
+                auto *truBass = new QCheckBox(QObject::tr("TruBass"), &eq);
+                truBass->setChecked(settings.value(QStringLiteral("truBass"), false).toBool());
+                layout->addWidget(srs);
+                layout->addWidget(truBass);
+                auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &eq);
+                layout->addWidget(buttons);
+                QObject::connect(preset, &QComboBox::currentIndexChanged, &eq, [sliders](int index) {
+                    static const int presets[][10] = {
+                        {0,0,0,0,0,0,0,0,0,0}, {5,3,0,-2,-1,2,4,5,4,3}, {2,1,0,1,3,2,0,1,2,2},
+                        {3,2,1,2,-1,-1,0,1,2,3}, {0,0,0,0,0,0,-2,-3,-4,-5}};
+                    if (index < 0 || index >= 5) return;
+                    for (int i = 0; i < sliders.size(); ++i) sliders[i]->setValue(presets[index][i]);
+                });
+                QObject::connect(buttons, &QDialogButtonBox::accepted, &eq, [&] {
+                    QVariantList values;
+                    for (QSlider *slider : sliders) values.append(slider->value());
+                    QSettings write(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+                    write.setValue(QStringLiteral("equalizer"), values);
+                    write.setValue(QStringLiteral("srsWOW"), srs->isChecked());
+                    write.setValue(QStringLiteral("truBass"), truBass->isChecked());
+                    eq.accept();
+                });
+                QObject::connect(buttons, &QDialogButtonBox::rejected, &eq, &QDialog::reject);
+                eq.exec();
+            });
             layout->addWidget(new QLabel(tr("Volume"), &dialog));
             layout->addWidget(volume);
             auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
