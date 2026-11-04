@@ -17,9 +17,13 @@
 #include "theme.h"
 #include "x11.h"
 #include "xpfiles.h"
+#include "fileops.h"
 #include "xpprogram.h"
 
 #include <QApplication>
+#include <QUrl>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QFileInfo>
 #include <QCoreApplication>
 #include <QSettings>
@@ -97,6 +101,20 @@ const Part TASK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("ta
 // the hot frame from 104, the task band 4 after the last button.
 const Part QUICK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskbar")};
 const int QUICK_WIDTH = 23, QUICK_ICON_X = 3, QUICK_ICON_Y = 7, QUICK_BAND_END = 4;
+// Show Text: the name 4 after the icon and 4 before the button's end (XP's at 134 for "Windows Media
+// Player"); Show Title: the name at the band's start, then 4 before the buttons
+const int QUICK_TEXT_GAP = 4, QUICK_TEXT_END = 4, QUICK_TITLE_GAP = 4;
+const Part REBAR{QStringLiteral("rebar"), {}, {}, 0, QStringLiteral("taskbar")};
+const Part QUICK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("taskbar")};
+// browselc.dll's menus for the band: the folder band's (258: View, Open Folder, Show Text), the
+// band site's Show Title (256) and Close Toolbar (257)
+const int MENU_ISF_BAND = 258, MENU_BAND_TITLE = 256, MENU_BAND_CLOSE = 257;
+enum { CMD_VIEW_LOGOS = 3, CMD_VIEW_LARGE = 1, CMD_VIEW_SMALL = 2, CMD_OPEN_FOLDER = 6, CMD_SHOW_TEXT = 4, CMD_SHOW_TITLE = 2,
+       CMD_CLOSE_TOOLBAR = 1 };
+// shell32.dll's item menu (210) and the commands it carries out here
+const int MENU_ITEM = 210;
+enum { CMD_ITEM_CUT = 24, CMD_ITEM_COPY = 25, CMD_ITEM_DELETE = 17 };
+const int STRING_OPEN = 8496;
 const int ICON_SHOW_DESKTOP = 3;
 // Unlocked: the sizing bar above (TaskBar.SizingBarBottom, 4 rows on XP's) and each band's gripper
 const Part SIZING_BAR{QStringLiteral("taskbar"), QStringLiteral("sizingbarbottom"), {}, 1, {}};
@@ -287,6 +305,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     setAttribute(Qt::WA_X11NetWmWindowTypeDock);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setMouseTracking(true);
+    setAcceptDrops(true);
     setWindowTitle(QStringLiteral("Taskbar"));
 
     if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")))) {
@@ -352,7 +371,8 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         const TaskbarSettings settings = TaskbarSettings::load();
         if (settings.group == m_settings.group && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
             && settings.quickLaunch == m_settings.quickLaunch && settings.locked == m_settings.locked
-            && settings.onTop == m_settings.onTop)
+            && settings.onTop == m_settings.onTop
+            && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle)
             return;
         const bool autoHide = settings.autoHide != m_settings.autoHide || settings.locked != m_settings.locked;
         m_settings = settings;
@@ -527,18 +547,38 @@ void Taskbar::relayout()
         bandStart = m_startRect.right() + 1 + theme()->scaled(6);
     }
     // Quick Launch's band first, its buttons from the band's start; unlocked, each band begins with
-    // its gripper, in a header of 10 (XP's grippers at 104 and 164, the buttons from 114)
+    // its gripper, in a header of 10 (XP's grippers at 104 and 164, the buttons from 114). Show Title
+    // puts the folder's name first; Show Text gives every button the widest name's room after its icon.
     const int header = m_settings.locked ? 0 : theme()->scaled(BAND_HEADER);
     m_grippers.clear();
-    if (header && m_settings.quickLaunch)
-        m_grippers.append(QRect(bandStart, 0, header, barHeight()));
-    for (int i = 0; i < m_quickItems.size(); ++i)
-        m_quickItems[i].rect = m_settings.quickLaunch
-            ? QRect(bandStart + header + i * theme()->scaled(QUICK_WIDTH), renderer ? 0 : (barHeight() - theme()->scaled(22)) / 2,
-                    theme()->scaled(QUICK_WIDTH), renderer ? barHeight() : theme()->scaled(22))
-            : QRect();
-    if (m_settings.quickLaunch)
-        bandStart += header + int(m_quickItems.size()) * theme()->scaled(QUICK_WIDTH) + theme()->scaled(QUICK_BAND_END);
+    m_quickBand = m_quickTitle = QRect();
+    for (QuickItem &item : m_quickItems)
+        item.rect = QRect();
+    if (m_settings.quickLaunch) {
+        const int first = bandStart;
+        if (header)
+            m_grippers.append(QRect(bandStart, 0, header, barHeight()));
+        int x = bandStart + header;
+        const QFontMetrics metrics(m_taskFont);
+        if (m_settings.quickLaunchTitle) {
+            const int title = metrics.horizontalAdvance(QFileInfo(quickLaunchFolder()).fileName());
+            m_quickTitle = QRect(x, 0, title, barHeight());
+            x += title + theme()->scaled(QUICK_TITLE_GAP);
+        }
+        int buttonWidth = theme()->scaled(QUICK_WIDTH);
+        if (m_settings.quickLaunchText) {
+            int widest = 0;
+            for (const QuickItem &item : std::as_const(m_quickItems))
+                widest = qMax(widest, metrics.horizontalAdvance(item.name));
+            buttonWidth = theme()->scaled(QUICK_ICON_X + ICON_SIZE + QUICK_TEXT_GAP + QUICK_TEXT_END) + widest;
+        }
+        for (int i = 0; i < m_quickItems.size(); ++i)
+            m_quickItems[i].rect = QRect(x + i * buttonWidth, renderer ? 0 : (barHeight() - theme()->scaled(22)) / 2, buttonWidth,
+                                         renderer ? barHeight() : theme()->scaled(22));
+        x += int(m_quickItems.size()) * buttonWidth;
+        m_quickBand = QRect(first, 0, x - first, barHeight());
+        bandStart = x + theme()->scaled(QUICK_BAND_END);
+    }
     if (header) {
         m_grippers.append(QRect(bandStart, 0, header, barHeight()));
         bandStart += header;
@@ -841,6 +881,15 @@ void Taskbar::paintEvent(QPaintEvent *)
         }
     }
     drawStart(painter);
+    if (!m_quickTitle.isNull()) {
+        const QColor title = theme()->renderer()
+            ? theme()->renderer()->colour(REBAR, QStringLiteral("textcolor")).value_or(QColor(123, 182, 232))
+            : theme()->system(QStringLiteral("btntext"), Qt::black);
+        painter.setPen(title);
+        painter.setFont(m_taskFont);
+        painter.drawText(m_quickTitle.adjusted(0, -theme()->scaled(TEXT_RAISE), 0, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                         QFileInfo(quickLaunchFolder()).fileName());
+    }
     for (int i = 0; i < m_quickItems.size(); ++i) {
         const QuickItem &item = m_quickItems[i];
         if (item.rect.isNull())
@@ -862,6 +911,16 @@ void Taskbar::paintEvent(QPaintEvent *)
             }
         }
         const int shift = pressed ? 1 : 0;
+        if (m_settings.quickLaunchText) {
+            const QColor text = theme()->renderer()
+                ? theme()->renderer()->colour(QUICK_TOOLBAR, QStringLiteral("textcolor")).value_or(QColor(Qt::white))
+                : theme()->system(QStringLiteral("btntext"), Qt::black);
+            painter.setPen(text);
+            painter.setFont(m_taskFont);
+            const int left = theme()->scaled(QUICK_ICON_X + ICON_SIZE + QUICK_TEXT_GAP);
+            painter.drawText(item.rect.adjusted(left + shift, shift - theme()->scaled(TEXT_RAISE), 0, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                             item.name);
+        }
         const QPoint at = theme()->renderer() ? item.rect.topLeft() + QPoint(theme()->scaled(QUICK_ICON_X), theme()->scaled(QUICK_ICON_Y))
                                               : item.rect.topLeft() + QPoint((item.rect.width() - 16) / 2, (item.rect.height() - 16) / 2);
         painter.drawImage(QRect(at + QPoint(shift, shift), QSize(theme()->scaled(ICON_SIZE), theme()->scaled(ICON_SIZE))), item.icon);
@@ -885,6 +944,10 @@ Taskbar::Hit Taskbar::hitAt(QPoint at) const
             hit.index = i;
             return hit;
         }
+    if (m_quickBand.contains(at)) {
+        hit.kind = Hit::QuickBand;
+        return hit;
+    }
     for (int i = 0; i < m_buttons.size(); ++i)
         if (m_buttons[i].rect.contains(at)) {
             hit.kind = Hit::Task;
@@ -964,7 +1027,11 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
         if (event->button() == Qt::LeftButton && pressed == hit)
             runQuickItem(hit.index);
         else if (event->button() == Qt::RightButton)
-            showTaskbarMenu(event->globalPosition().toPoint(), false);
+            showQuickItemMenu(hit.index, event->globalPosition().toPoint());
+        return;
+    }
+    if (hit.kind == Hit::QuickBand && event->button() == Qt::RightButton) {
+        showTaskbarMenu(event->globalPosition().toPoint(), false, true);
         return;
     }
     if (hit.kind == Hit::Task && hit.index < m_buttons.size()) {
@@ -1115,7 +1182,7 @@ void Taskbar::showGroupMenu(int index, QPoint at)
     menu->popup(at - QPoint(0, menu->sizeHint().height()));
 }
 
-void Taskbar::showTaskbarMenu(QPoint at, bool tray)
+void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
 {
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
@@ -1186,6 +1253,8 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray)
             menu->insertMenu(first, toolbars);
             menu->insertSeparator(first);
         }
+        if (band)
+            addBandItems(menu, *browselc);
     }
     // Lock the Taskbar: unlocked, the bar shows its sizing bar and grippers (it still cannot move)
     if (QAction *lock = actions.value(CMD_LOCK)) {
@@ -1353,6 +1422,126 @@ void Taskbar::loadQuickLaunch()
             item.icon = fileicons::image(file, size);
         m_quickItems.append(item);
     }
+}
+
+void Taskbar::addBandItems(QMenu *menu, const w4w::PeResources &browselc)
+{
+    // As the band site puts them over the taskbar's: the folder band's items, Show Title, Close
+    // Toolbar (XP's: View, Open Folder, Show Text, Show Title, Close Toolbar), then a line
+    auto *holder = new QMenu(menu);
+    QHash<int, QAction *> isf = xpprogram::fillMenu(holder, browselc, MENU_ISF_BAND);
+    auto *titleHolder = new QMenu(menu);
+    const QHash<int, QAction *> title = xpprogram::fillMenu(titleHolder, browselc, MENU_BAND_TITLE);
+    auto *closeHolder = new QMenu(menu);
+    const QHash<int, QAction *> close = xpprogram::fillMenu(closeHolder, browselc, MENU_BAND_CLOSE);
+    QList<QAction *> items = holder->actions();
+    if (QAction *showTitle = title.value(CMD_SHOW_TITLE))
+        items.append(showTitle);
+    if (QAction *closeToolbar = close.value(CMD_CLOSE_TOOLBAR))
+        items.append(closeToolbar);
+    // View: Logos is the Links band's; Large Icons is not ported here
+    if (QAction *logos = isf.value(CMD_VIEW_LOGOS); logos && logos->parentWidget())
+        logos->parentWidget()->removeAction(logos);
+    if (QAction *large = isf.value(CMD_VIEW_LARGE))
+        large->setEnabled(false);
+    if (QAction *small = isf.value(CMD_VIEW_SMALL)) {
+        small->setCheckable(true);
+        small->setChecked(true);
+    }
+    const auto toggle = [this](QAction *action, bool TaskbarSettings::*setting) {
+        if (!action)
+            return;
+        action->setCheckable(true);
+        action->setChecked(m_settings.*setting);
+        connect(action, &QAction::triggered, this, [setting](bool on) {
+            TaskbarSettings settings = TaskbarSettings::load();
+            settings.*setting = on;
+            settings.save();
+        });
+    };
+    toggle(isf.value(CMD_SHOW_TEXT), &TaskbarSettings::quickLaunchText);
+    toggle(title.value(CMD_SHOW_TITLE), &TaskbarSettings::quickLaunchTitle);
+    if (QAction *open = isf.value(CMD_OPEN_FOLDER))
+        connect(open, &QAction::triggered, this, [] { programs::open(quickLaunchFolder()); });
+    if (QAction *closeToolbar = close.value(CMD_CLOSE_TOOLBAR))
+        connect(closeToolbar, &QAction::triggered, this, [] {
+            TaskbarSettings settings = TaskbarSettings::load();
+            settings.quickLaunch = false;
+            settings.save();
+        });
+    QAction *first = menu->actions().value(0);
+    for (QAction *item : std::as_const(items))
+        menu->insertAction(first, item);
+    menu->insertSeparator(first);
+}
+
+void Taskbar::showQuickItemMenu(int index, QPoint at)
+{
+    // the shortcut's own menu: Open, then shell32's item menu with what is carried out here
+    const QString path = m_quickItems[index].path;
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    QAction *open = menu->addAction(xpfiles::shellString(STRING_OPEN, "&Open"));
+    QFont bold = open->font();
+    bold.setBold(true);
+    open->setFont(bold);
+    connect(open, &QAction::triggered, this, [this, index] {
+        if (index < m_quickItems.size())
+            runQuickItem(index);
+    });
+    menu->addSeparator();
+    if (const auto shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")))) {
+        const QHash<int, QAction *> items = xpprogram::fillMenu(menu, *shell32, MENU_ITEM);
+        for (auto it = items.begin(); it != items.end(); ++it) {
+            if (it.value()->menu())
+                continue;
+            it.value()->setEnabled(it.key() == CMD_ITEM_CUT || it.key() == CMD_ITEM_COPY || it.key() == CMD_ITEM_DELETE);
+        }
+        if (QAction *cut = items.value(CMD_ITEM_CUT))
+            connect(cut, &QAction::triggered, this, [path] { fileops::copyToClipboard({path}, true); });
+        if (QAction *copy = items.value(CMD_ITEM_COPY))
+            connect(copy, &QAction::triggered, this, [path] { fileops::copyToClipboard({path}, false); });
+        if (QAction *remove = items.value(CMD_ITEM_DELETE))
+            connect(remove, &QAction::triggered, this, [this, path] { fileops::remove({path}, false, this); });
+        for (QAction *action : menu->actions())
+            if (action->menu())
+                action->setEnabled(false);   // Send To is the folder windows'
+    }
+    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+}
+
+void Taskbar::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (m_settings.quickLaunch && event->mimeData()->hasUrls())
+        event->acceptProposedAction();
+}
+
+void Taskbar::dragMoveEvent(QDragMoveEvent *event)
+{
+    // dropped on the Quick Launch band, a shortcut goes into its folder
+    if (m_quickBand.adjusted(0, 0, theme()->scaled(QUICK_BAND_END), 0).contains(event->position().toPoint() - QPoint(0, m_top)))
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+
+void Taskbar::dropEvent(QDropEvent *event)
+{
+    const QDir folder(quickLaunchFolder());
+    for (const QUrl &url : event->mimeData()->urls()) {
+        if (!url.isLocalFile())
+            continue;
+        const QFileInfo file(url.toLocalFile());
+        const QString target = folder.filePath(file.fileName());
+        if (QFileInfo::exists(target))
+            continue;
+        // a program's entry is copied, as XP copies a dropped shortcut; anything else gets a link
+        if (file.suffix() == QLatin1String("desktop") || file.suffix().compare(QLatin1String("scf"), Qt::CaseInsensitive) == 0)
+            QFile::copy(file.filePath(), target);
+        else
+            QFile::link(file.absoluteFilePath(), target);
+    }
+    event->acceptProposedAction();
 }
 
 void Taskbar::toggleDesktop()

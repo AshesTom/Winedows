@@ -6,6 +6,7 @@
 #pragma once
 
 #include "taskbarproperties.h"
+#include "msstyles.h"
 
 #include <QFileSystemWatcher>
 
@@ -21,6 +22,7 @@
 #include <QTimer>
 #include <QWidget>
 
+class QMenu;
 class StartPanel;
 
 class Taskbar : public QWidget
@@ -49,7 +51,7 @@ private:
     struct Hit
     {
         // Task: a button, a window's or a group's
-        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick } kind = None;
+        enum Kind { None, Start, Task, TrayIcon, Clock, Band, Quick, QuickBand } kind = None;
         int index = -1;
         bool operator==(const Hit &o) const { return kind == o.kind && index == o.index; }
     };
@@ -84,7 +86,13 @@ private:
     void showTaskMenu(int task, QPoint at);
     void showGroupList(int button);
     void showGroupMenu(int button, QPoint at);
-    void showTaskbarMenu(QPoint at, bool tray);
+    // BAND: on Quick Launch's gripper or title, its band's items come first
+    void showTaskbarMenu(QPoint at, bool tray, bool band = false);
+    void showQuickItemMenu(int index, QPoint at);
+    void addBandItems(QMenu *menu, const w4w::PeResources &browselc);
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragMoveEvent(QDragMoveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void tickClock();
     // Auto-hide, as explorer.exe's tray does it: a 500 ms check hides the bar once the pointer is off it
     // (timer 2), leaving SM_CYFRAME / 2 rows on the screen; a move on those rows wider than the
@@ -116,6 +124,7 @@ private:
     QList<QRect> m_trayIconRects;
     QList<QuickItem> m_quickItems;
     QList<QRect> m_grippers;
+    QRect m_quickBand, m_quickTitle;
     int m_top = 0;   // the sizing bar's rows above the bar, unlocked
     QFileSystemWatcher m_quickWatcher;
     arrange::Undo m_undo;

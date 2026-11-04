@@ -64,6 +64,8 @@ TaskbarSettings TaskbarSettings::load()
     loaded.quickLaunch = settings.value(QStringLiteral("Taskbar/QuickLaunch"), false).toBool();
     loaded.locked = !settings.value(QStringLiteral("Taskbar/TaskbarSizeMove"), false).toBool();
     loaded.onTop = settings.value(QStringLiteral("Taskbar/AlwaysOnTop"), true).toBool();
+    loaded.quickLaunchText = settings.value(QStringLiteral("Taskbar/QuickLaunchText"), false).toBool();
+    loaded.quickLaunchTitle = settings.value(QStringLiteral("Taskbar/QuickLaunchTitle"), false).toBool();
     return loaded;
 }
 
@@ -76,6 +78,8 @@ void TaskbarSettings::save() const
     settings.setValue(QStringLiteral("Taskbar/QuickLaunch"), quickLaunch);
     settings.setValue(QStringLiteral("Taskbar/TaskbarSizeMove"), !locked);
     settings.setValue(QStringLiteral("Taskbar/AlwaysOnTop"), onTop);
+    settings.setValue(QStringLiteral("Taskbar/QuickLaunchText"), quickLaunchText);
+    settings.setValue(QStringLiteral("Taskbar/QuickLaunchTitle"), quickLaunchTitle);
 }
 
 TaskbarSettingsNotifier *TaskbarSettingsNotifier::instance()
@@ -182,7 +186,7 @@ void TaskbarProperties::updatePreviews()
 
 void TaskbarProperties::apply()
 {
-    TaskbarSettings settings;
+    TaskbarSettings settings = TaskbarSettings::load();   // and what the sheet does not show
     settings.group = m_checks.value(ID_GROUP) && m_checks.value(ID_GROUP)->isChecked();
     settings.clock = m_checks.value(ID_CLOCK) && m_checks.value(ID_CLOCK)->isChecked();
     settings.autoHide = m_checks.value(ID_AUTO_HIDE) && m_checks.value(ID_AUTO_HIDE)->isChecked();
