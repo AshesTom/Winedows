@@ -667,18 +667,92 @@ public:
 class DetailsDelegate : public QStyledItemDelegate
 {
 public:
+    static constexpr int GROUP_HEADER = 31, GROUP_GAP = 12, GROUP_LINE = 300;
     explicit DetailsDelegate(QTreeView *view) : QStyledItemDelegate(view), m_view(view) {}
+    void setGroups(bool groups, int column)
+    {
+        m_groups = groups;
+        m_groupColumn = column;
+    }
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
-    { QSize size = QStyledItemDelegate::sizeHint(option, index); size.setHeight(compactRowHeight(option.fontMetrics)); return size; }
+    {
+        QSize size = QStyledItemDelegate::sizeHint(option, index);
+        size.setHeight(compactRowHeight(option.fontMetrics) + (m_groups && startsGroup(index) ? ShellTheme::instance()->scaled(GROUP_HEADER + (index.row() ? GROUP_GAP : 0)) : 0));
+        return size;
+    }
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
-        if (index.column() == 0) { paintCompactItem(painter, option, index, m_view); return; }
-        QStyleOptionViewItem plain(option);
-        plain.state &= ~(QStyle::State_Selected | QStyle::State_HasFocus | QStyle::State_MouseOver);
-        QStyledItemDelegate::paint(painter, plain, index);
+        QStyleOptionViewItem item(option);
+        if (m_groups && startsGroup(index)) {
+            const int header = ShellTheme::instance()->scaled(GROUP_HEADER), gap = index.row() ? ShellTheme::instance()->scaled(GROUP_GAP) : 0;
+            if (index.column() == 0) {
+                // XP's group header: bold words 14 in, and 17 under its top a line of 300 pixels fading
+                // from the caption's gradient colour to the window's.
+                painter->save();
+                QFont bold = option.font;
+                bold.setBold(true);
+                painter->setFont(bold);
+                painter->setPen(option.palette.color(QPalette::Text));
+                painter->drawText(QRect(option.rect.x() + ShellTheme::instance()->scaled(14), option.rect.y() + ShellTheme::instance()->scaled(2),
+                                        option.rect.width() - ShellTheme::instance()->scaled(14), QFontMetrics(bold).height()),
+                                  Qt::AlignLeft | Qt::AlignTop | Qt::TextSingleLine, groupKey(index));
+                const QRect rule(option.rect.x(), option.rect.y() + ShellTheme::instance()->scaled(17),
+                                 qMin(ShellTheme::instance()->scaled(GROUP_LINE), option.rect.width()), 1);
+                QLinearGradient line(rule.topLeft(), rule.topRight());
+                line.setColorAt(0, ShellTheme::instance()->system(QStringLiteral("gradientactivecaption"), QColor(61, 149, 255)));
+                line.setColorAt(1, option.palette.color(QPalette::Base));
+                painter->fillRect(rule, line);
+                painter->restore();
+            }
+            item.rect = option.rect.adjusted(0, header + gap, 0, 0);
+        }
+        if (index.column() == 0) {
+            paintCompactItem(painter, item, index, m_view);
+            return;
+        }
+        item.state &= ~(QStyle::State_Selected | QStyle::State_HasFocus | QStyle::State_MouseOver);
+        QStyledItemDelegate::paint(painter, item, index);
     }
 private:
+    bool startsGroup(const QModelIndex &index) const
+    {
+        return index.row() == 0 || groupKey(index) != groupKey(index.sibling(index.row() - 1, 0));
+    }
+    QString groupKey(const QModelIndex &index) const
+    {
+        if (!index.isValid())
+            return QString();
+        const auto *model = static_cast<const FolderModelImpl *>(m_view->model());
+        if (!model)
+            return QString();
+        const QFileInfo info = model->files()->fileInfo(model->mapToSource(index));
+        if (m_groupColumn == 1) {
+            const qint64 size = info.size();
+            if (size == 0) return QObject::tr("0 KB");
+            if (size < 10 * 1024) return QObject::tr("Tiny");
+            if (size < 100 * 1024) return QObject::tr("Small");
+            if (size < 1024 * 1024) return QObject::tr("Medium");
+            if (size < 16 * 1024 * 1024) return QObject::tr("Large");
+            return QObject::tr("Huge");
+        }
+        if (m_groupColumn == 2)
+            return index.sibling(index.row(), 2).data().toString();
+        if (m_groupColumn == 3) {
+            const QDate date = info.lastModified().date(), today = QDate::currentDate();
+            if (date == today) return QObject::tr("Today");
+            if (date == today.addDays(-1)) return QObject::tr("Yesterday");
+            if (date >= today.addDays(-7)) return QObject::tr("Earlier this week");
+            if (date >= today.addDays(-30)) return QObject::tr("Earlier this month");
+            return QObject::tr("A long time ago");
+        }
+        const QString name = info.fileName();
+        if (name.isEmpty()) return QObject::tr("Other");
+        const QChar first = name.at(0).toUpper();
+        return first.isDigit() ? QStringLiteral("#") : QString(first);
+    }
     QTreeView *m_view;
+    bool m_groups = false;
+    int m_groupColumn = 0;
 };
 
 // How a view draws an item: XP's Tiles and Thumbnails; My Computer's group headers
@@ -1175,6 +1249,7 @@ FileBrowser::FileBrowser(const QString &location)
     }
     const QSettings settings(settingsPath(), QSettings::IniFormat);
     m_view = View(qBound(0, settings.value(QStringLiteral("view"), int(Tiles)).toInt(), int(Filmstrip)));
+    m_groups = settings.value(QStringLiteral("folder/groups"), false).toBool();
     m_foldersShown = settings.value(QStringLiteral("folders"), false).toBool();
 
     m_files = new QFileSystemModel(this);
@@ -1337,7 +1412,8 @@ void FileBrowser::buildPanes()
     m_details = new ExplorerDetailsView(m_pages);
     m_details->setModel(m_model);
     m_details->setSelectionModel(m_list->selectionModel());
-    m_details->setItemDelegate(new DetailsDelegate(m_details));
+    m_detailsDelegate = new DetailsDelegate(m_details);
+    m_details->setItemDelegate(m_detailsDelegate);
     m_details->setIconSize(QSize(16, 16));
     m_details->setUniformRowHeights(true);
     m_details->setRootIsDecorated(false);
@@ -1367,6 +1443,11 @@ void FileBrowser::buildPanes()
         showViewContextMenu(m_details, at);
     });
     connect(m_details, &QAbstractItemView::activated, this, &FileBrowser::activate);
+    connect(m_details->header(), &QHeaderView::sortIndicatorChanged, this, [this](int column, Qt::SortOrder) {
+        m_groupColumn = column;
+        if (m_groups)
+            applyGroups();
+    });
     m_pages->addWidget(m_details);
     // Filmstrip: the large picture, the viewer's four buttons under it, and the folder's
     // thumbnails on one row, the list itself moved here while this view is shown
@@ -1441,6 +1522,7 @@ void FileBrowser::buildPanes()
     m_virtualDetails->sortByColumn(0, Qt::AscendingOrder);
     connect(m_virtualDetails, &QAbstractItemView::activated, this, &FileBrowser::activate);
     connect(m_virtualDetails, &QAbstractItemView::customContextMenuRequested, this, [this](QPoint at) { showViewContextMenu(m_virtualDetails, at); });
+    applyGroups();
     m_pages->addWidget(m_virtualDetails);
     m_categoryPage = new ControlPanelCategories([this](int category) { navigate(places::ControlPanel + QLatin1Char('/') + QString::number(category)); }, this);
     m_categoryArea = new QScrollArea(m_pages);
@@ -1655,6 +1737,15 @@ void FileBrowser::buildMenus()
             m_details->setColumnHidden(column, hidden.contains(QString::number(column)));
     });
     detailsAction->setEnabled(true);
+    QAction *groupsAction = view->addAction(tr("Show in &Groups"));
+    groupsAction->setCheckable(true);
+    groupsAction->setChecked(m_groups);
+    connect(groupsAction, &QAction::triggered, this, [this, groupsAction](bool on) {
+        m_groups = on;
+        QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("folder/groups"), on);
+        applyGroups();
+        groupsAction->setChecked(on);
+    });
     view->addSeparator();
     QMenu *arrange = view->addMenu(tr("Arrange Icons &by"));
     const struct { int string; const char *fallback; int column; } orders[] = {{8976, "Name", 0}, {8978, "Size", 1}, {8979, "Type", 2}, {8980, "Date Modified", 3}};
@@ -2089,6 +2180,16 @@ void FileBrowser::setView(View view)
         selectFirstPicture();
     }
     m_list->doItemsLayout();
+}
+
+void FileBrowser::applyGroups()
+{
+    if (!m_detailsDelegate)
+        return;
+    static_cast<DetailsDelegate *>(m_detailsDelegate)->setGroups(m_groups, m_details->header()->sortIndicatorSection());
+    m_details->setUniformRowHeights(!m_groups);
+    m_details->doItemsLayout();
+    m_details->viewport()->update();
 }
 
 void FileBrowser::setFoldersShown(bool shown)
@@ -2941,9 +3042,19 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
         }
     }
     // What this window does not have yet
-    for (int command : {CMD_GROUPS, CMD_AUTO_ARRANGE, CMD_ALIGN, CMD_CUSTOMIZE, CMD_UNDO})
+    for (int command : {CMD_AUTO_ARRANGE, CMD_ALIGN, CMD_CUSTOMIZE, CMD_UNDO})
         if (QAction *action = items.value(command))
             action->setEnabled(false);
+    if (QAction *groups = items.value(CMD_GROUPS)) {
+        groups->setCheckable(true);
+        groups->setChecked(m_groups);
+        connect(groups, &QAction::triggered, this, [this, groups](bool on) {
+            m_groups = on;
+            QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("folder/groups"), on);
+            applyGroups();
+            groups->setChecked(on);
+        });
+    }
     if (QAction *refresh = items.value(CMD_REFRESH))
         connect(refresh, &QAction::triggered, this, [this] { navigate(m_location, false); });
     const bool files = fileops::clipboardHasFiles();

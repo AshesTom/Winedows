@@ -25,6 +25,7 @@ class QScrollArea;
 class QSplitter;
 class QSortFilterProxyModel;
 class QStackedWidget;
+class QStyledItemDelegate;
 class QStandardItemModel;
 class QStandardItem;
 class QTimer;
@@ -74,6 +75,7 @@ private:
     void buildToolbars();
     void buildPanes();
     void setView(View view);
+    void applyGroups();
     void configureList(QListView *list, View view);
     View shownView() const;           // Filmstrip is Thumbnails outside picture folders
     QWidget *folderPage() const;      // the page that shows a real folder in the current view
@@ -130,6 +132,9 @@ private:
     View m_view = Tiles;
     bool m_pictureFolder = false;
     bool m_foldersShown = false, m_searchShown = false, m_noTasks = false, m_singleClick = false;
+    bool m_groups = false;
+    int m_groupColumn = 0;
+    QStyledItemDelegate *m_detailsDelegate = nullptr;
     QString m_pendingRename, m_searchFrom;
     QList<std::function<void()>> m_actions;   // of the virtual list's items
 

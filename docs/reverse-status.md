@@ -175,7 +175,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Open With (submenu and the Open With dialog) | Partial: a submenu of the installed desktop entries (the first 12 by name) and a Choose Program... list; XP's registry's recommended programs and its own dialog are not read |
 | Context menu handlers from shell extensions | Missing |
 | Send To: removable drives and the actual contents of the SendTo folder | Done: `~/.local/share/win4wine/SendTo`'s `.desktop` targets (their `%f`/`%F`/`%u`/`%U`) and links to folders, plus the ready, writable mounted volumes other than the root and the home (copied into); `shellmenus.cpp` `addSendToFolder` |
-| Show in Groups, Choose Details, Customize This Folder | Partial: View > Choose Details opens shell32's dialog 1096 and shows/hides Size, Type and Date Modified, with each column's width; saved as `folder/hiddenColumns` and `folder/columnWidths`. Move Up/Down are greyed, Show in Groups and Customize This Folder remain greyed |
+| Show in Groups, Choose Details, Customize This Folder | Partial: Show in Groups (View menu and the background menu) groups Details by the sorted column — the name's first letter, size bands, type or date — drawing XP's 31-pixel header and 12-pixel gap on the group's first row; the header is painted in that row, not a separate selectable row, and Icons/Tiles are not grouped for real folders. Choose Details opens dialog 1096 and shows/hides Size, Type and Date Modified, with widths (`folder/hiddenColumns`, `folder/columnWidths`); Move Up/Down and Customize This Folder remain greyed |
 | Undo (shell32's undo stack) | Missing (greyed) |
 | Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial (Folder and Text Document only) |
 | Auto Arrange in folder windows | Missing (greyed; implemented on the desktop) |
@@ -395,7 +395,7 @@ bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`p
 ## 13. What explorer.exe does that is not ported yet
 
 The largest blocks still open, across the sections: Windows Media Player's Media Library and visualizations, Show in
-Groups, the Picture and Fax Viewer's annotations, printing wizard and help, moving and sizing the
+the Picture and Fax Viewer's annotations, printing wizard and help, moving and sizing the
 taskbar, the file Properties sheet's height (58 pixels short), and the remaining parts of the Customize Start Menu
 dialogs (Add, Remove, Sort, Clear) and of Open With.
 
