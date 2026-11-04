@@ -1253,6 +1253,7 @@ FileBrowser::FileBrowser(const QString &location)
     m_view = View(qBound(0, settings.value(QStringLiteral("view"), int(Tiles)).toInt(), int(Filmstrip)));
     m_groups = settings.value(QStringLiteral("folder/groups"), false).toBool();
     m_autoArrange = settings.value(QStringLiteral("folder/autoArrange"), true).toBool();
+    m_alignToGrid = settings.value(QStringLiteral("folder/alignToGrid"), true).toBool();
     m_foldersShown = settings.value(QStringLiteral("folders"), false).toBool();
 
     m_files = new QFileSystemModel(this);
@@ -2133,7 +2134,7 @@ void FileBrowser::configureList(QListView *list, View shown)
 {
     auto *delegate = delegateOf(list);
     list->setFlow(QListView::LeftToRight);
-    list->setMovement(m_autoArrange ? QListView::Static : QListView::Free);
+    list->setMovement(m_autoArrange ? QListView::Static : m_alignToGrid ? QListView::Snap : QListView::Free);
     list->setWrapping(true);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -3137,9 +3138,16 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
     }
     if (QAction *customize = items.value(CMD_CUSTOMIZE))
         connect(customize, &QAction::triggered, this, &FileBrowser::customizeFolder);
-    // What this window does not have yet
-    if (QAction *align = items.value(CMD_ALIGN))
-        align->setEnabled(false);
+    if (QAction *align = items.value(CMD_ALIGN)) {
+        align->setCheckable(true);
+        align->setChecked(m_alignToGrid);
+        connect(align, &QAction::triggered, this, [this, align](bool on) {
+            m_alignToGrid = on;
+            QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("folder/alignToGrid"), on);
+            align->setChecked(on);
+            configureList(m_list, shownView());
+        });
+    }
     if (QAction *undo = items.value(CMD_UNDO)) {
         undo->setEnabled(bool(m_undo));
         connect(undo, &QAction::triggered, this, [this] { m_undoAction->trigger(); });
