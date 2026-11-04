@@ -811,7 +811,12 @@ QVariant SkinView::property(const Element *element, const QString &name) const
     if (tag == QLatin1String("effects")) {
         const QString effect = m_model->get(QStringLiteral("mediacenter"), QStringLiteral("effecttype")).toString();
         const QStringList effects{QStringLiteral("Bars"), QStringLiteral("Spikes"), QStringLiteral("Ambience"), QStringLiteral("Battery"),
-                                  QStringLiteral("Plenoptic")};
+                                  QStringLiteral("Plenoptic"), QStringLiteral("Musical Colors"), QStringLiteral("Night Lights"),
+                                  QStringLiteral("Colors in Motion"), QStringLiteral("Aurora"), QStringLiteral("Rhythmic Colors"),
+                                  QStringLiteral("Star Power"), QStringLiteral("Soft Fire"), QStringLiteral("Silky Wave"),
+                                  QStringLiteral("CutOut"), QStringLiteral("Rolling Fire"), QStringLiteral("Water Spray"),
+                                  QStringLiteral("Blue Flame"), QStringLiteral("Yellow Swirl"), QStringLiteral("Critter Rock"),
+                                  QStringLiteral("Electric Rainbow"), QStringLiteral("Neon Highway"), QStringLiteral("Ice Crystals")};
         if (name == QLatin1String("currenteffecttitle"))
             return effect.isEmpty() ? QStringLiteral("Bars and Waves") : effect;
         if (name == QLatin1String("currentpresettitle"))
@@ -1778,7 +1783,20 @@ void SkinView::paintEffects(QPainter &painter, Element *element, const QRect &re
     if (bands.isEmpty())
         return;
     Q_UNUSED(element);
-    const QString effect = m_model->get(QStringLiteral("mediacenter"), QStringLiteral("effecttype")).toString().toLower();
+    QString effect = m_model->get(QStringLiteral("mediacenter"), QStringLiteral("effecttype")).toString().toLower();
+    // wmpvis.dll's names, each drawn with the nearest of the five patterns.
+    if (effect.contains(QLatin1String("fire")) || effect.contains(QLatin1String("flame")) || effect.contains(QLatin1String("heat")))
+        effect = QStringLiteral("ambience");
+    else if (effect.contains(QLatin1String("ice")) || effect.contains(QLatin1String("crystal")) || effect.contains(QLatin1String("wave")))
+        effect = QStringLiteral("plenoptic");
+    else if (effect.contains(QLatin1String("rainbow")) || effect.contains(QLatin1String("neon")) || effect.contains(QLatin1String("color")))
+        effect = QStringLiteral("plenoptic");
+    else if (effect.contains(QLatin1String("star")) || effect.contains(QLatin1String("lights")))
+        effect = QStringLiteral("ambience");
+    else if (effect.contains(QLatin1String("rock")) || effect.contains(QLatin1String("cutout")))
+        effect = QStringLiteral("spike");
+    else if (effect.contains(QLatin1String("battery")))
+        effect = QStringLiteral("battery");
     const int count = bands.size();
     const qreal time = QDateTime::currentMSecsSinceEpoch() / 1000.0;
     if (effect.contains(QLatin1String("spike"))) {

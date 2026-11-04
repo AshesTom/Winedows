@@ -2086,7 +2086,12 @@ void MediaPlayer::command(int id)
             volume->setValue(qRound(m_audio->volume() * 100));
             auto *effect = new QComboBox(&dialog);
             effect->addItems({QStringLiteral("Bars"), QStringLiteral("Spikes"), QStringLiteral("Ambience"), QStringLiteral("Battery"),
-                              QStringLiteral("Plenoptic")});
+                              QStringLiteral("Plenoptic"), QStringLiteral("Musical Colors"), QStringLiteral("Night Lights"),
+                              QStringLiteral("Colors in Motion"), QStringLiteral("Aurora"), QStringLiteral("Rhythmic Colors"),
+                              QStringLiteral("Star Power"), QStringLiteral("Soft Fire"), QStringLiteral("Silky Wave"),
+                              QStringLiteral("CutOut"), QStringLiteral("Rolling Fire"), QStringLiteral("Water Spray"),
+                              QStringLiteral("Blue Flame"), QStringLiteral("Yellow Swirl"), QStringLiteral("Critter Rock"),
+                              QStringLiteral("Electric Rainbow"), QStringLiteral("Neon Highway"), QStringLiteral("Ice Crystals")});
             effect->setCurrentText(m_mediacenter.value(QStringLiteral("effecttype"), QStringLiteral("Bars")).toString());
             layout->addWidget(shuffle);
             layout->addWidget(repeat);

@@ -45,6 +45,7 @@ ICON_FILES = {
     'netshell.dll': 'tray', 'sndvol32.exe': 'tray', 'wmploc.dll': 'wmp', 'wmplayer.exe': 'wmp',
     # Windows Media Player: its skin engine's property names (wmp.dll's type library) and its skins
     'wmp.dll': 'wmp',
+    'wmpvis.dll': 'wmp',
     # The folder windows' flag, the Common Tasks pane in each colour scheme, and the Control Panel's applets
     'browseui.dll': 'system32', 'blue_ss.dll': 'themes/Luna/Shell/NormalColor', 'home_ss.dll': 'themes/Luna/Shell/Homestead',
     'metal_ss.dll': 'themes/Luna/Shell/Metallic', 'timedate.cpl': 'cpl', 'mmsys.cpl': 'cpl', 'sysdm.cpl': 'cpl',
