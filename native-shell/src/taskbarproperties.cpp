@@ -2,11 +2,13 @@
 #include "taskbarproperties.h"
 #include "theme.h"
 
+#include "programs.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
 #include <QAbstractButton>
 #include <QCheckBox>
+#include <QDateTime>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPointer>
@@ -258,9 +260,14 @@ static void showClassicCustomize(QWidget *parent)
         item->setData(0, Qt::UserRole, int(option.first));
     }
     // Add/Remove/Advanced/Sort/Clear change the Start Menu folder; their files are not read here.
-    for (int id : {1126, 1127, 1128, 1124, 1125})
+    for (int id : {1126, 1127, 1128, 1124})
         if (QWidget *control = page.controls.value(id))
             control->setEnabled(false);
+    if (auto *clear = qobject_cast<QPushButton *>(page.controls.value(1125)))
+        QObject::connect(clear, &QPushButton::clicked, &dialog, [] {
+            QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat)
+                .setValue(QStringLiteral("StartMenu/RecentCleared"), QDateTime::currentMSecsSinceEpoch());
+        });
     const auto save = [&] {
         TaskbarSettings changed = TaskbarSettings::load();
         for (int i = 0; i < tree->topLevelItemCount(); ++i) {
@@ -309,11 +316,13 @@ static void showStartPanelCustomize(QWidget *parent)
     }
     if (auto *count = qobject_cast<QLineEdit *>(generalPage.controls.value(1304)))
         count->setText(QString::number(settings.panelMinMFU));
-    for (int id : {1310})
-        if (QWidget *button = generalPage.controls.value(id))
-            button->setEnabled(false);
-    if (QWidget *button = advancedPage.controls.value(1309))
-        button->setEnabled(false);
+    if (auto *clear = qobject_cast<QPushButton *>(generalPage.controls.value(1310)))
+        QObject::connect(clear, &QPushButton::clicked, &dialog, [] { programs::clearUses(); });
+    if (auto *clear = qobject_cast<QPushButton *>(advancedPage.controls.value(1309)))
+        QObject::connect(clear, &QPushButton::clicked, &dialog, [] {
+            QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat)
+                .setValue(QStringLiteral("StartMenu/RecentCleared"), QDateTime::currentMSecsSinceEpoch());
+        });
     if (auto *recent = qobject_cast<QAbstractButton *>(advancedPage.controls.value(1308)))
         recent->setChecked(settings.panelRecentDocs);
     if (auto *hover = qobject_cast<QAbstractButton *>(advancedPage.controls.value(1306)))

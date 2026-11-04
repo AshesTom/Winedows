@@ -139,7 +139,7 @@ Binary: `explorer.exe`. Port: [`taskbarproperties.cpp`](../native-shell/src/task
 | The Desktop, Links and New Toolbar bands, and deskbands such as Windows Media Player's | Partial: the Desktop band lists the Desktop folder's files, Links lists `Favorites/Links` and New Toolbar a chosen folder, as 16-pixel buttons (`Taskbar/DesktopBand`, `Taskbar/LinksBand`, `Taskbar/CustomToolbar`); the deskbands are missing |
 | Hide inactive icons and Customize Notifications (dialog 7) | Partial: the rule (an icon idle for TrayIconResidentInterval is hidden, checked every IconDemoteTimerTick) is read from the defaults and their names, not from the demotion code; the dialog now shows Current Items' icons (Past Items have none), and the open chevron closes on a click elsewhere on the bar (but not in another application) |
 | Classic Start menu | Done (section 14) |
-| Both Customize dialogs (dialogs 9, 1036, 1135) | Partial: the classic Start menu's dialog 9 and the Start panel's property sheet (General 1135, Advanced 1036) open from Taskbar and Start Menu Properties. Dialog 9's four tree options work; the Start panel's places tree, program count, icon size, recent documents and hover-open are saved and read. Add/Remove/Advanced/Sort/Clear and the pages' Clear List buttons are greyed |
+| Both Customize dialogs (dialogs 9, 1036, 1135) | Partial: the classic Start menu's dialog 9 and the Start panel's property sheet (General 1135, Advanced 1036) open from Taskbar and Start Menu Properties. Dialog 9's four tree options work; the Start panel's places tree, program count, icon size, recent documents and hover-open are saved and read. Add/Remove/Advanced/Sort are greyed; Clear List now clears the Start menu's launch counts and makes the recent documents list empty from then on (`StartMenu/RecentCleared`) |
 | The "?" button and context help | Missing |
 
 ---
@@ -397,7 +397,7 @@ bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`p
 The largest blocks still open, across the sections: Windows Media Player's Media Library and visualizations, Show in
 the Picture and Fax Viewer's annotations, printing wizard and help, moving and sizing the
 taskbar, the file Properties sheet's height (58 pixels short), and the remaining parts of the Customize Start Menu
-dialogs (Add, Remove, Sort, Clear) and of Open With.
+dialogs (Add, Remove, Sort) and of Open With.
 
 Values from other contributors are kept only once checked in XP's binaries or measured on XP running in Wine;
 where that was not possible the row says "not measured" or "unverified".
@@ -442,7 +442,7 @@ Binary: `explorer.exe` (menu 204, banners 158–167), `shell32.dll` (icons), mea
 | Keys: the arrows, Right opening a cascade, access keys underlined when the keys opened the menu | StartPanel's routing, one column | Done |
 | The Start Menu page: Start menu or Classic Start menu (controls 1132, 1133), preview 170 or 171 | dialog 205; `sub_1038a95` | Done; saved as `StartMenu/Classic` |
 | The Start Menu folder's own items | XP: Set Program Access and Defaults, Windows Catalog, Windows Update | Partial: Set Program Access and Defaults only |
-| Customize Classic Start Menu (dialog 9) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | `explorer.exe` dialog 9 ("Customize Classic Start Menu"; 1135 is the Start panel's General page and 1036 its Advanced page) | Partial: dialog 9 opens and its Display Favorites, Display Log Off, Display Run and Show Small Icons options change the classic menu; Add/Remove/Advanced/Sort/Clear are greyed and the other Advanced options are not wired |
+| Customize Classic Start Menu (dialog 9) and its Advanced options (Display Administrative Tools, Favorites, Log Off, Run; Expand Control Panel, My Documents…; small icons) | `explorer.exe` dialog 9 ("Customize Classic Start Menu"; 1135 is the Start panel's General page and 1036 its Advanced page) | Partial: dialog 9 opens and its Display Favorites, Display Log Off, Display Run and Show Small Icons options change the classic menu; Add/Remove/Advanced/Sort are greyed, Clear clears the recent documents list, and the other Advanced options are not wired |
 | The desktop's icons in classic mode (XP keeps HideDesktopIcons per mode: ClassicStartMenu shows them) | XP in Wine (icons shown) | Done: `desktop/hideIcons` for the Start panel and `desktop/hideIconsClassic` for the classic menu, chosen by `StartMenu/Classic` |
 
 ---

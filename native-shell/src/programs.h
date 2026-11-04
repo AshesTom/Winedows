@@ -37,6 +37,8 @@ QList<Program> allPrograms();
 std::optional<Program> chooseProgram(const QString &path, QWidget *parent);
 // Makes PROGRAM the default for PATH's MIME type through xdg-mime.
 void setDefaultFor(const QString &path, const Program &program);
+// Forget the Start menu's launch counts (Customize Start Menu's Clear List).
+void clearUses();
 // Programs by their uses, most used first.
 QList<Program> mostUsed(int count);
 // The user's default programs, through xdg-settings and xdg-mime.

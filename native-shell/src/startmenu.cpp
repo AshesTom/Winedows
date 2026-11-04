@@ -1299,6 +1299,9 @@ QList<MenuEntry> StartPanel::recentDocuments() const
         }
     }
     std::sort(found.begin(), found.end(), std::greater<>());
+    // Customize Start Menu's Clear List hides what was there before it was pressed.
+    const qint64 cleared = QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat)
+                               .value(QStringLiteral("StartMenu/RecentCleared"), 0).toLongLong();
     ShellTheme *theme = ShellTheme::instance();
     const QIcon documentIcon(QPixmap::fromImage(theme->shellIcon(ICON_DOCUMENT, theme->scaled(CASCADE_ICON))));
     QList<MenuEntry> out;
@@ -1307,6 +1310,8 @@ QList<MenuEntry> StartPanel::recentDocuments() const
             break;
         const QString path = QUrl(href).toLocalFile();
         if (path.isEmpty() || !QFileInfo::exists(path))
+            continue;
+        if (QDateTime::fromString(modified, Qt::ISODate).toMSecsSinceEpoch() <= cleared)
             continue;
         MenuEntry entry;
         entry.text = QFileInfo(path).fileName();
