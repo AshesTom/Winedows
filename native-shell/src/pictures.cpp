@@ -529,7 +529,7 @@ Viewer::Viewer(const QString &path)
         m_buttons.insert(button.command, tool);
     }
     // what this viewer cannot do: XP's help (ImgPrev.chm); printing without Qt's print support
-    m_buttons.value(VIEW_HELP)->setEnabled(false);
+    m_buttons.value(VIEW_HELP)->setEnabled(true);
 #ifndef XP_PRINTING
     m_buttons.value(VIEW_PRINT)->setEnabled(false);
 #endif
@@ -728,6 +728,16 @@ void Viewer::command(int id)
 #endif
         break;
     }
+    case VIEW_HELP:
+        QMessageBox::information(this, viewerString(VIEW_HELP, "Help"),
+                                 tr("Windows Picture and Fax Viewer\n\n"
+                                    "Left/Right: previous/next picture\n"
+                                    "Ctrl+B: Best Fit; Ctrl+A: Actual Size\n"
+                                    "+/- or the wheel: zoom; Ctrl or middle button: move\n"
+                                    "F11: slide show; Ctrl+K / Ctrl+L: rotate\n"
+                                    "Ctrl+S: Copy To; Ctrl+P: Print; Delete: Recycle Bin\n"
+                                    "Ctrl+E: open for editing"));
+        break;
     case VIEW_COPY_TO: {
         const QString target = QFileDialog::getSaveFileName(this, viewerString(STRING_COPY_TO, "Copy To"), path);
         if (!target.isEmpty() && target != path)
