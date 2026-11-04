@@ -18,6 +18,9 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
+#include <QTreeWidget>
+#include <QLineEdit>
+#include <QDirIterator>
 #include <QProcess>
 #include <QToolButton>
 #include <QMediaMetaData>
@@ -1217,7 +1220,10 @@ std::optional<wmpskin::Node> MediaPlayer::task(QString *folder)
     folder->clear();
     if (m_task.compare(QLatin1String("NowPlaying"), Qt::CaseInsensitive) == 0)
         return skin(QStringLiteral("NowPlaying.wsz"));
-    if (m_task.compare(QLatin1String("SkinViewer"), Qt::CaseInsensitive) == 0)
+    static const QSet<QString> widgets{QStringLiteral("skinviewer"), QStringLiteral("medialibrary"), QStringLiteral("mediaguide"),
+                                       QStringLiteral("cdaudio"), QStringLiteral("radiotuner"), QStringLiteral("portabledevice"),
+                                       QStringLiteral("services")};
+    if (widgets.contains(m_task.toLower()))
         return std::nullopt;   // taskWidget
     // The tasks wmp.dll draws itself (Media Guide is a web page, the Media Library and the CD tasks
     // its own windows) are not ported: their place shows the player's colours and the task's name.
@@ -1660,8 +1666,75 @@ void MediaPlayer::connectMenu(const QHash<int, QAction *> &actions)
 // The Skin Chooser: dialog 203 of wmploc.dll, stretched over the task's room as wmp.dll does it
 QWidget *MediaPlayer::taskWidget(QWidget *parent)
 {
-    if (m_task.compare(QLatin1String("SkinViewer"), Qt::CaseInsensitive) != 0 || !m_loc)
-        return nullptr;
+    if (m_task.compare(QLatin1String("MediaLibrary"), Qt::CaseInsensitive) == 0) {
+        auto *library = new QWidget(parent);
+        auto *layout = new QVBoxLayout(library);
+        layout->setContentsMargins(8, 8, 8, 8);
+        auto *search = new QLineEdit(library);
+        search->setPlaceholderText(QObject::tr("Search"));
+        auto *list = new QTreeWidget(library);
+        list->setRootIsDecorated(false);
+        list->setHeaderLabels({QObject::tr("Title"), QObject::tr("Artist"), QObject::tr("Album"), QObject::tr("Length")});
+        layout->addWidget(search);
+        layout->addWidget(list, 1);
+        QStringList patterns;
+        for (const QString &filter : mediaFilters())
+            patterns.append(filter.mid(2)); // "*.mp3" -> "mp3"
+        QDirIterator it(QStandardPaths::writableLocation(QStandardPaths::MusicLocation), QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            if (!patterns.contains(QFileInfo(path).suffix().toLower(), Qt::CaseInsensitive))
+                continue;
+            const QFileInfo info(path);
+            auto *item = new QTreeWidgetItem(list, {info.completeBaseName(), QString(), info.dir().dirName(), QString()});
+            item->setData(0, Qt::UserRole, path);
+        }
+        list->setColumnWidth(0, 260);
+        QObject::connect(search, &QLineEdit::textChanged, list, [list](const QString &text) {
+            for (int i = 0; i < list->topLevelItemCount(); ++i)
+                list->topLevelItem(i)->setHidden(!text.isEmpty()
+                    && !list->topLevelItem(i)->text(0).contains(text, Qt::CaseInsensitive)
+                    && !list->topLevelItem(i)->text(2).contains(text, Qt::CaseInsensitive));
+        });
+        QObject::connect(list, &QTreeWidget::itemActivated, library, [this, list](QTreeWidgetItem *item) {
+            if (item)
+                open({item->data(0, Qt::UserRole).toString()});
+        });
+        QObject::connect(list, &QTreeWidget::itemDoubleClicked, library, [this, list](QTreeWidgetItem *item) {
+            if (item)
+                open({item->data(0, Qt::UserRole).toString()});
+        });
+        return library;
+    }
+    if (m_task.compare(QLatin1String("SkinViewer"), Qt::CaseInsensitive) != 0 || !m_loc) {
+        // The online tasks are gone and there is no CD or portable device here: their page says so
+        // instead of the bare task name.
+        if (m_task.compare(QLatin1String("MediaLibrary"), Qt::CaseInsensitive) != 0) {
+            static const QHash<QString, QString> messages{
+                {QStringLiteral("mediaguide"), QObject::tr("Media Guide is not available: the online service has closed.")},
+                {QStringLiteral("radiotuner"), QObject::tr("Radio Tuner is not available: the online service has closed.")},
+                {QStringLiteral("cdaudio"), QObject::tr("Insert an audio CD in a drive.")},
+                {QStringLiteral("portabledevice"), QObject::tr("No portable device is connected.")},
+                {QStringLiteral("services"), QObject::tr("No premium services are available.")},
+            };
+            const QString message = messages.value(m_task.toLower());
+            if (!message.isEmpty()) {
+                auto *page = new QWidget(parent);
+                page->setAutoFillBackground(true);
+                QPalette palette = page->palette();
+                palette.setColor(QPalette::Window, QColor(57, 68, 114));
+                page->setPalette(palette);
+                auto *layout = new QVBoxLayout(page);
+                auto *label = new QLabel(message, page);
+                label->setWordWrap(true);
+                label->setAlignment(Qt::AlignCenter);
+                label->setStyleSheet(QStringLiteral("color: white; font-size: 14px;"));
+                layout->addWidget(label);
+                return page;
+            }
+            return nullptr;
+        }
+    }
     auto *chooser = new QWidget(parent);
     // opaque over the taskcenter's "Opening..." (the style's window colour may have no alpha)
     QPalette palette = chooser->palette();

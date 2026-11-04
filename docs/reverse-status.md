@@ -84,10 +84,10 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 
 | Original feature | Status |
 |---|---|
-| Media Library (tree, lists, search, auto playlists), native code in `wmp.dll` | Missing (the task shows its name only) |
-| Media Guide and Radio Tuner (RT_HTML pages of `wmploc.dll`; the online services are gone) | Missing |
-| Copy from CD, Copy to CD or Device, CD and DVD playback | Missing |
-| Premium Services | Missing |
+| Media Library (tree, lists, search, auto playlists), native code in `wmp.dll` | Partial: the task is a basic library that scans the Music folder, lists Title/Artist/Album/Length, filters with the Search box and plays on double-click; wmp.dll's tree, columns and auto playlists are not there |
+| Media Guide and Radio Tuner (RT_HTML pages of `wmploc.dll`; the online services are gone) | Partial: their task pages say the online service has closed; the RT_HTML pages are not shown |
+| Copy from CD, Copy to CD or Device, CD and DVD playback | Partial: the CD task page says to insert an audio CD; no drive is enumerated and no copy/playback is done |
+| Premium Services | Partial: its task page says no premium services are available |
 | Full-mode menu bar (show, hide, auto-hide) | Partial: `app.titleBarVisible` ("Show menu bar", `appautohidebtn`) puts the skin in a framed window under menu 102, remembered between runs; the auto-hidden bar does not appear on hovering the top |
 | Visualizations other than Bars (`wmpvis.dll`: Ambience, Battery, Plenoptic, Spikes…) | Missing (an approximate FFT bar display stands in) |
 | Audio effect of the equalizer, SRS WOW, crossfading, auto volume levelling | Missing |
@@ -394,7 +394,7 @@ bridge-wm passes Shift and Ctrl with the key ([`wm.py`](../bridge-wm/wm.py), [`p
 
 ## 13. What explorer.exe does that is not ported yet
 
-The largest blocks still open, across the sections: Windows Media Player's Media Library and visualizations, Show in
+The largest blocks still open, across the sections: Windows Media Player's visualizations and remaining library, Show in
 the Picture and Fax Viewer's annotations, printing wizard and help, moving and sizing the
 taskbar, the file Properties sheet's height (58 pixels short), and the remaining parts of the Customize Start Menu
 dialogs (Add, Remove, Sort) and of Open With.
