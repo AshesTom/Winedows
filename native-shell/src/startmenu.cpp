@@ -613,6 +613,16 @@ QRect StartPanel::moreBand() const
 }
 
 namespace {
+// command 503, the Help and Support Center: Linux's own when it has one
+void openHelpCenter()
+{
+    for (const char *name : {"khelpcenter", "yelp"})
+        if (const QString help = QStandardPaths::findExecutable(QLatin1String(name)); !help.isEmpty()) {
+            QProcess::startDetached(help, {});
+            return;
+        }
+}
+
 QString startMenuFolder()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
@@ -765,7 +775,7 @@ void StartPanel::buildClassicMenu(QPoint bottomLeft)
         // the find extensions: shell32's own, For Files or Folders
         return QList<MenuEntry>{{shellString(SHELL_FIND_FILES, "For &Files or Folders..."), small(ICON_SEARCH), [] { FileBrowser::open(places::Search); }, {}}};
     }});
-    middle.append({word(CMD_HELP, "&Help and Support"), big(ICON_HELP), {}, {}});
+    middle.append({word(CMD_HELP, "&Help and Support"), big(ICON_HELP), [] { openHelpCenter(); }, {}});
     if (classicSettings.classicRun)
         middle.append({word(CMD_RUN, "&Run..."), big(ICON_RUN), [] { showRunDialog(); }, {}});
     // Log Off %s... with the user's name; Shut Down... becomes Turn Off Computer... (string 731)
@@ -959,7 +969,7 @@ void StartPanel::build(QPoint bottomLeft)
     m_items.append(separator);
     y += theme->scaled(8);
     if (shown("Help")) {
-        addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "&Help and Support"), false, {});
+        addPlace(y, ICON_HELP, explorerString(EXPLORER_HELP, "&Help and Support"), false, [] { openHelpCenter(); });
         tip(TIP_HELP);
     }
     if (shown("Search")) {
