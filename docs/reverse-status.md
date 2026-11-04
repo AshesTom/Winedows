@@ -84,7 +84,7 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 
 | Original feature | Status |
 |---|---|
-| Media Library (tree, lists, search, auto playlists), native code in `wmp.dll` | Partial: the task is a basic library that scans the Music folder, lists Title/Artist/Album/Length, filters with the Search box and plays on double-click; wmp.dll's tree, columns and auto playlists are not there |
+| Media Library (tree, lists, search, auto playlists), native code in `wmp.dll` | Partial: the task scans the Music folder into a tree (All Music, Recently Added, Artist, Album) and a Title/Artist/Album/Length list, filters with the Search box and plays on double-click; wmp.dll's own columns and auto playlists beyond Recently Added are not there |
 | Media Guide and Radio Tuner (RT_HTML pages of `wmploc.dll`; the online services are gone) | Partial: their task pages say the online service has closed; the RT_HTML pages are not shown |
 | Copy from CD, Copy to CD or Device, CD and DVD playback | Partial: the CD task page says to insert an audio CD; no drive is enumerated and no copy/playback is done |
 | Premium Services | Partial: its task page says no premium services are available |

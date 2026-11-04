@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QTreeWidget>
+#include <QSplitter>
 #include <QLineEdit>
 #include <QDirIterator>
 #include <QProcess>
@@ -1793,38 +1794,86 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         layout->setContentsMargins(8, 8, 8, 8);
         auto *search = new QLineEdit(library);
         search->setPlaceholderText(QObject::tr("Search"));
-        auto *list = new QTreeWidget(library);
+        auto *split = new QSplitter(Qt::Horizontal, library);
+        auto *categories = new QTreeWidget(split);
+        categories->setHeaderHidden(true);
+        auto *list = new QTreeWidget(split);
         list->setRootIsDecorated(false);
         list->setHeaderLabels({QObject::tr("Title"), QObject::tr("Artist"), QObject::tr("Album"), QObject::tr("Length")});
+        split->addWidget(categories);
+        split->addWidget(list);
+        split->setStretchFactor(1, 1);
         layout->addWidget(search);
-        layout->addWidget(list, 1);
+        layout->addWidget(split, 1);
+        struct Track { QString path, title, artist, album; QDateTime modified; };
+        QList<Track> tracks;
         QStringList patterns;
         for (const QString &filter : mediaFilters())
             patterns.append(filter.mid(2)); // "*.mp3" -> "mp3"
         QDirIterator it(QStandardPaths::writableLocation(QStandardPaths::MusicLocation), QDir::Files, QDirIterator::Subdirectories);
         while (it.hasNext()) {
             const QString path = it.next();
-            if (!patterns.contains(QFileInfo(path).suffix().toLower(), Qt::CaseInsensitive))
-                continue;
             const QFileInfo info(path);
-            auto *item = new QTreeWidgetItem(list, {info.completeBaseName(), QString(), info.dir().dirName(), QString()});
-            item->setData(0, Qt::UserRole, path);
+            if (!patterns.contains(info.suffix().toLower(), Qt::CaseInsensitive))
+                continue;
+            tracks.append({path, info.completeBaseName(), info.dir().dirName(), info.dir().dirName(), info.lastModified()});
+        }
+        const auto addCategory = [categories](const QString &name, int kind, const QString &value, QTreeWidgetItem *parent = nullptr) {
+            auto *item = parent ? new QTreeWidgetItem(parent, {name}) : new QTreeWidgetItem(categories, {name});
+            item->setData(0, Qt::UserRole, kind);
+            item->setData(0, Qt::UserRole + 1, value);
+            return item;
+        };
+        addCategory(QObject::tr("All Music"), 0, QString());
+        addCategory(QObject::tr("Recently Added"), 1, QString());
+        auto *artists = addCategory(QObject::tr("Artist"), 2, QString());
+        auto *albums = addCategory(QObject::tr("Album"), 3, QString());
+        QStringList artistNames, albumNames;
+        for (const Track &track : std::as_const(tracks)) {
+            if (!artistNames.contains(track.artist)) artistNames.append(track.artist);
+            if (!albumNames.contains(track.album)) albumNames.append(track.album);
+        }
+        artistNames.sort(Qt::CaseInsensitive);
+        albumNames.sort(Qt::CaseInsensitive);
+        for (const QString &name : std::as_const(artistNames)) addCategory(name, 2, name, artists);
+        for (const QString &name : std::as_const(albumNames)) addCategory(name, 3, name, albums);
+        artists->setExpanded(true);
+        albums->setExpanded(true);
+        for (const Track &track : std::as_const(tracks)) {
+            auto *item = new QTreeWidgetItem(list, {track.title, track.artist, track.album, QString()});
+            item->setData(0, Qt::UserRole, track.path);
+            item->setData(0, Qt::UserRole + 1, track.modified.toMSecsSinceEpoch());
+            item->setData(0, Qt::UserRole + 2, track.artist);
+            item->setData(0, Qt::UserRole + 3, track.album);
         }
         list->setColumnWidth(0, 260);
-        QObject::connect(search, &QLineEdit::textChanged, list, [list](const QString &text) {
-            for (int i = 0; i < list->topLevelItemCount(); ++i)
-                list->topLevelItem(i)->setHidden(!text.isEmpty()
-                    && !list->topLevelItem(i)->text(0).contains(text, Qt::CaseInsensitive)
-                    && !list->topLevelItem(i)->text(2).contains(text, Qt::CaseInsensitive));
-        });
-        QObject::connect(list, &QTreeWidget::itemActivated, library, [this, list](QTreeWidgetItem *item) {
-            if (item)
+        const auto applyFilter = [list, categories, search] {
+            const QTreeWidgetItem *category = categories->currentItem();
+            const int kind = category ? category->data(0, Qt::UserRole).toInt() : 0;
+            const QString value = category ? category->data(0, Qt::UserRole + 1).toString() : QString();
+            const QString text = search->text();
+            const qint64 recent = QDateTime::currentDateTime().addDays(-30).toMSecsSinceEpoch();
+            for (int i = 0; i < list->topLevelItemCount(); ++i) {
+                QTreeWidgetItem *item = list->topLevelItem(i);
+                bool match = true;
+                if (kind == 1) match = item->data(0, Qt::UserRole + 1).toLongLong() >= recent;
+                else if (kind == 2) match = item->data(0, Qt::UserRole + 2).toString() == value;
+                else if (kind == 3) match = item->data(0, Qt::UserRole + 3).toString() == value;
+                if (match && !text.isEmpty())
+                    match = item->text(0).contains(text, Qt::CaseInsensitive) || item->text(1).contains(text, Qt::CaseInsensitive)
+                        || item->text(2).contains(text, Qt::CaseInsensitive);
+                item->setHidden(!match);
+            }
+        };
+        QObject::connect(categories, &QTreeWidget::currentItemChanged, library, [applyFilter] { applyFilter(); });
+        QObject::connect(search, &QLineEdit::textChanged, library, [applyFilter] { applyFilter(); });
+        const auto play = [this, list](QTreeWidgetItem *item) {
+            if (item && item->data(0, Qt::UserRole).isValid())
                 open({item->data(0, Qt::UserRole).toString()});
-        });
-        QObject::connect(list, &QTreeWidget::itemDoubleClicked, library, [this, list](QTreeWidgetItem *item) {
-            if (item)
-                open({item->data(0, Qt::UserRole).toString()});
-        });
+        };
+        QObject::connect(list, &QTreeWidget::itemActivated, library, play);
+        QObject::connect(list, &QTreeWidget::itemDoubleClicked, library, play);
+        categories->setCurrentItem(categories->topLevelItem(0));
         return library;
     }
     if (m_task.compare(QLatin1String("SkinViewer"), Qt::CaseInsensitive) != 0 || !m_loc) {
