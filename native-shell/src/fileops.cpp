@@ -4,10 +4,14 @@
 #include "sounds.h"
 
 #include "fileicons.h"
+#include "xpdialog.h"
+#include "xpfiles.h"
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QtEndian>
 #include <QDirIterator>
@@ -21,9 +25,11 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <atomic>
+#include <memory>
 
 namespace fileops {
 namespace {
@@ -48,7 +54,7 @@ public:
 
 Q_SIGNALS:
     void fileStarted(const QString &name, const QString &from);
-    void progressed(int percent);
+    void progressed(qint64 done, qint64 total);
     void askReplace(const QString &path, int *answer);
 
 protected:
@@ -104,7 +110,7 @@ private:
 
     void report()
     {
-        Q_EMIT progressed(int(m_done * 100 / m_total));
+        Q_EMIT progressed(m_done, m_total);
     }
 
     void copyItem(const QString &source, const QString &target)
@@ -302,29 +308,141 @@ QString freeName(const QString &folder, const QString &base)
     return name;
 }
 
+namespace {
+
+// shell32's copy engine (its dialog thread sub_300afcf5, the dialog's procedure sub_300ae487)
+const int DIALOG_PROGRESS = 1020, ID_CANCEL = 2, ID_ANIMATION = 106, ID_FILE = 102, ID_FROM = 103, ID_BAR = 104, ID_TIME = 105;
+const int STRING_MOVING = 5953, STRING_COPYING = 5954, STRING_FROM_TO = 5968, STRING_MINUTES = 8739, STRING_SECONDS = 8740;
+const int AVI_MOVE = 160, AVI_COPY = 161;
+// the dialog comes after a second, if the work is not done by then, and stays at least a second;
+// the time left is worked out every 2 seconds
+const int SHOW_DELAY = 1000, LEAST_SHOWN = 1000, ESTIMATE_INTERVAL = 2000;
+// the work in blocks of 32 KB, as sub_300a9b1e counts the bytes
+const qint64 BLOCK = 0x8000;
+
+// sub_300ab727 and sub_300aa71e: the blocks done since the last look, per second, evened with the
+// rate before ((new + 2 old) / 3); then the time left, shown from 5 seconds, in minutes past one
+// (rounded up) or in seconds rounded up to 5, and nothing past 4 hours.
+class Estimate
+{
+public:
+    QString update(qint64 done, qint64 total)
+    {
+        const qint64 now = m_clock.isValid() ? m_clock.elapsed() : 0;
+        if (!m_clock.isValid())
+            m_clock.start();
+        QString text;
+        const qint64 moved = done - m_lastDone, elapsed = now - m_lastTime;
+        if (moved && done > 0 && elapsed) {
+            const qint64 tenths = qMax<qint64>(1, elapsed / 100);
+            qint64 rate = qMax<qint64>(1, moved * 10 / tenths);
+            if (elapsed < 1000)
+                rate = m_rate;
+            if (m_rate)
+                rate = (rate + 2 * m_rate) / 3;
+            if (rate) {
+                m_rate = rate;
+                const qint64 seconds = (total - done) / rate + 1;
+                if (seconds >= 5)
+                    text = timeLeft(seconds);
+            }
+        }
+        m_lastTime = now;
+        m_lastDone = done;
+        return text;
+    }
+    bool started() const { return m_clock.isValid(); }
+
+private:
+    static QString timeLeft(qint64 seconds)
+    {
+        if (seconds > 14400)
+            return QString();
+        if (seconds > 60)
+            return xpfiles::shellString(STRING_MINUTES, "%d Minutes Remaining").replace(QLatin1String("%d"), QString::number(seconds / 60 + 1));
+        return xpfiles::shellString(STRING_SECONDS, "%d Seconds Remaining").replace(QLatin1String("%d"), QString::number((seconds + 4) / 5 * 5));
+    }
+
+    QElapsedTimer m_clock;
+    qint64 m_lastTime = 0, m_lastDone = 0, m_rate = 0;
+};
+
+} // namespace
+
 void transfer(const QStringList &sources, const QString &targetFolder, Action action, QWidget *parent)
 {
     if (sources.isEmpty())
         return;
-    auto *window = new QWidget(nullptr, Qt::Dialog);
+    auto *window = new QDialog(nullptr);
     window->setAttribute(Qt::WA_DeleteOnClose);
-    window->setWindowTitle(action == Action::Copy ? QObject::tr("Copying...") : QObject::tr("Moving..."));
-    window->setFixedSize(370, 150);
-    auto *layout = new QVBoxLayout(window);
-    auto *name = new QLabel(window), *from = new QLabel(window);
-    auto *bar = new QProgressBar(window);
-    bar->setTextVisible(false);
-    auto *cancel = new QPushButton(QObject::tr("Cancel"), window);
-    layout->addWidget(name);
-    layout->addWidget(from);
-    layout->addWidget(bar);
-    layout->addWidget(cancel, 0, Qt::AlignRight);
+    const bool copy = action == Action::Copy;
+    window->setWindowTitle(xpfiles::shellString(copy ? STRING_COPYING : STRING_MOVING, copy ? "Copying..." : "Moving..."));
+    QLabel *name = nullptr, *from = nullptr, *time = nullptr;
+    QProgressBar *bar = nullptr;
+    QPushButton *cancel = nullptr;
+    const std::optional<w4w::PeResources> shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
+    if (shell32) {
+        const xpdialog::Page page = xpdialog::build(*shell32, DIALOG_PROGRESS, window);
+        name = qobject_cast<QLabel *>(page.controls.value(ID_FILE));
+        from = qobject_cast<QLabel *>(page.controls.value(ID_FROM));
+        time = qobject_cast<QLabel *>(page.controls.value(ID_TIME));
+        bar = qobject_cast<QProgressBar *>(page.controls.value(ID_BAR));
+        cancel = qobject_cast<QPushButton *>(page.controls.value(ID_CANCEL));
+        // on WM_SHOWWINDOW: the move's animation (160) or the copy's (161)
+        if (auto *animation = dynamic_cast<xpdialog::Animation *>(page.controls.value(ID_ANIMATION)))
+            animation->open(*shell32, copy ? AVI_COPY : AVI_MOVE);
+    }
+    if (!name || !from || !bar || !cancel) {
+        // without the user's shell32: the same lines in a window of their own
+        qDeleteAll(window->findChildren<QWidget *>(Qt::FindDirectChildrenOnly));
+        window->setFixedSize(370, 150);
+        auto *layout = new QVBoxLayout(window);
+        name = new QLabel(window);
+        from = new QLabel(window);
+        time = new QLabel(window);
+        bar = new QProgressBar(window);
+        bar->setTextVisible(false);
+        cancel = new QPushButton(QObject::tr("Cancel"), window);
+        layout->addWidget(name);
+        layout->addWidget(from);
+        layout->addWidget(bar);
+        layout->addWidget(time);
+        layout->addWidget(cancel, 0, Qt::AlignRight);
+    }
+    bar->setRange(0, 100);
     auto *worker = new Worker(sources, targetFolder, action, window);
     QObject::connect(worker, &Worker::fileStarted, window, [name, from, targetFolder](const QString &file, const QString &folder) {
         name->setText(file);
-        from->setText(QObject::tr("From '%1' to '%2'").arg(QFileInfo(folder).fileName(), QFileInfo(targetFolder).fileName()));
+        from->setText(xpfiles::shellString(STRING_FROM_TO, "From '%1!ls!' to '%2!ls!'")
+                          .replace(QLatin1String("%1!ls!"), QFileInfo(folder).fileName())
+                          .replace(QLatin1String("%2!ls!"), QFileInfo(targetFolder).fileName()));
     });
-    QObject::connect(worker, &Worker::progressed, bar, &QProgressBar::setValue);
+    auto estimate = std::make_shared<Estimate>();
+    auto counts = std::make_shared<QPair<qint64, qint64>>(0, 1);
+    QObject::connect(worker, &Worker::progressed, window, [bar, counts](qint64 done, qint64 total) {
+        *counts = {done / BLOCK, qMax<qint64>(1, total / BLOCK)};
+        bar->setValue(int(done * 100 / qMax<qint64>(1, total)));
+    });
+    auto *estimates = new QTimer(window);
+    QObject::connect(estimates, &QTimer::timeout, window, [time, estimate, counts] {
+        if (time)
+            time->setText(estimate->update(counts->first, counts->second));
+    });
+    auto shown = std::make_shared<QElapsedTimer>();
+    auto showNow = [window, worker, shown, estimates, estimate, counts, time] {
+        if (shown->isValid() || worker->isFinished())
+            return;
+        shown->start();
+        window->show();
+        if (time)
+            time->setText(estimate->update(counts->first, counts->second));
+        estimates->start(ESTIMATE_INTERVAL);
+    };
+    auto *showing = new QTimer(window);
+    showing->setSingleShot(true);
+    QObject::connect(showing, &QTimer::timeout, window, showNow);
+    // a replace question can come before the dialog: it is the dialog's own, so the dialog comes too
+    QObject::connect(worker, &Worker::askReplace, window, showNow);
     QObject::connect(worker, &Worker::askReplace, window, [window](const QString &path, int *answer) {
         QMessageBox box(QMessageBox::Question, QObject::tr("Confirm File Replace"),
                         QObject::tr("This folder already contains a file named '%1'.\n\nWould you like to replace the existing file?").arg(QFileInfo(path).fileName()),
@@ -337,12 +455,13 @@ void transfer(const QStringList &sources, const QString &targetFolder, Action ac
         *answer = box.clickedButton() == yes ? Worker::Yes : box.clickedButton() == all ? Worker::YesToAll : box.clickedButton() == no ? Worker::No : Worker::Cancel;
     }, Qt::BlockingQueuedConnection);
     QObject::connect(cancel, &QPushButton::clicked, window, [worker] { worker->cancelled = true; });
-    QObject::connect(worker, &QThread::finished, window, [window, worker, parent] {
+    QObject::connect(worker, &QThread::finished, window, [window, worker, parent, shown] {
         if (!worker->error.isEmpty())
             QMessageBox::warning(parent, window->windowTitle(), worker->error);
-        window->close();
+        const qint64 left = shown->isValid() ? LEAST_SHOWN - shown->elapsed() : 0;
+        QTimer::singleShot(qMax<qint64>(0, left), window, &QWidget::close);
     });
-    window->show();
+    showing->start(SHOW_DELAY);
     worker->start();
 }
 
