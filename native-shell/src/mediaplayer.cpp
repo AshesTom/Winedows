@@ -1491,7 +1491,12 @@ public:
             if (property->window == x11::root() && property->atom == x11::atom("_WIN4WINE_WMP_BAND_SITE"))
                 QTimer::singleShot(0, qApp, m_gone);
         } else if ((event->response_type & 0x7f) == XCB_KEY_PRESS) {
-            const quint8 key = reinterpret_cast<xcb_key_press_event_t *>(event)->detail;
+            // the grab's Ctrl+Alt, not the key alone in one of the player's windows
+            const auto *press = reinterpret_cast<xcb_key_press_event_t *>(event);
+            const quint16 wanted = XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1;
+            if ((press->state & wanted) != wanted)
+                return false;
+            const quint8 key = press->detail;
             QTimer::singleShot(0, qApp, [this, key] { m_key(key); });
         }
         return false;

@@ -466,6 +466,8 @@ private:
     bool read(const QByteArray &data, qint64 start)
     {
         const int version = u16(data, start);
+        if (start < 0 || start + 148 > data.size())
+            return false;
         if ((version != 0x200 && version != 0x300) || u16(data, start + 68) != 8 || u16(data, start + 70) != 96)
             return false;
         m_height = u16(data, start + 88);

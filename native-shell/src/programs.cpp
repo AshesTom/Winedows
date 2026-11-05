@@ -356,7 +356,11 @@ bool fits(const Program &program, const QStringList &types)
 QStringList typesOf(const QString &path)
 {
     const QMimeType type = QMimeDatabase().mimeTypeForFile(path);
-    return QStringList{type.name()} + type.allAncestors();
+    QStringList types = QStringList{type.name()} + type.allAncestors();
+    // every file's last ancestor would recommend the programs that open any file for each
+    if (!type.isDefault())
+        types.removeAll(QStringLiteral("application/octet-stream"));
+    return types;
 }
 
 } // namespace

@@ -112,22 +112,23 @@ public:
         else
             box = boxOf(widget);
         QWidget *owner = box.line ? static_cast<QWidget *>(box.line) : box.rich ? static_cast<QWidget *>(box.rich) : box.plain;
-        if (!box || widget->contextMenuPolicy() != Qt::DefaultContextMenu)
+        // a text box with a menu of its own keeps it
+        if (!box || widget->contextMenuPolicy() != Qt::DefaultContextMenu || owner->contextMenuPolicy() != Qt::DefaultContextMenu)
             return false;
-        show(box, owner, static_cast<QContextMenuEvent *>(event)->globalPos());
-        return true;
+        return show(box, owner, static_cast<QContextMenuEvent *>(event)->globalPos());
     }
 
 private:
-    static void show(const Box &box, QWidget *owner, const QPoint &at)
+    // false without user32's menu: Qt's own then
+    static bool show(const Box &box, QWidget *owner, const QPoint &at)
     {
         static const auto user32 = xpfiles::resources(xpfiles::find(QStringLiteral("user32.dll")));
         if (!user32)
-            return;
+            return false;
         QMenu menu(owner);
         const QHash<int, QAction *> items = xpprogram::fillMenu(&menu, *user32, 1);
         if (items.isEmpty())
-            return;
+            return false;
         for (auto it = items.begin(); it != items.end(); ++it)
             if (it.key() >= COMPLEX && it.value()) {
                 if (QMenu *sub = it.value()->menu())
@@ -161,10 +162,11 @@ private:
         QPointer<QWidget> alive(owner);
         QAction *chosen = menu.exec(at);
         if (!chosen || !alive)
-            return;
+            return true;
         for (auto it = items.cbegin(); it != items.cend(); ++it)
             if (it.value() == chosen)
                 box.run(it.key());
+        return true;
     }
 };
 

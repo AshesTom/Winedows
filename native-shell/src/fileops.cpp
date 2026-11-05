@@ -140,15 +140,21 @@ protected:
                 continue;
             }
             QDir().mkpath(QFileInfo(target).absolutePath());
+            // a folder merged into one already there, or a file the user kept, is not this
+            // operation's alone: the source stays and the undo stack does not take it
+            const bool merged = QFileInfo::exists(target) && QFileInfo(source).isDir();
+            const int skipped = m_skipped;
             copyItem(source, target);
-            if (m_action == Action::Move && !cancelled && error.isEmpty()) {
+            const bool whole = m_skipped == skipped;
+            if (m_action == Action::Move && whole && !cancelled && error.isEmpty()) {
                 QFileInfo info(source);
                 if (info.isDir() && !info.isSymLink())
                     QDir(source).removeRecursively();
                 else
                     QFile::remove(source);
             }
-            done(source, target);
+            if (whole && !merged)
+                done(source, target);
         }
     }
 
@@ -203,8 +209,10 @@ private:
                 cancelled = true;
                 return;
             }
-            if (answer == No)
+            if (answer == No) {
+                ++m_skipped;
                 return;
+            }
             m_replaceAll = answer == YesToAll;
         }
         Q_EMIT fileStarted(info.fileName(), info.absolutePath());
@@ -241,6 +249,7 @@ private:
     Action m_action;
     qint64 m_total = 1, m_done = 0;
     bool m_replaceAll = false;
+    int m_skipped = 0;   // the files the user chose not to replace
 };
 
 // The delete's work: to the Recycle Bin an item at a time, or for good a file at a time, each
@@ -628,6 +637,7 @@ enum Operation { FO_MOVE = 1, FO_COPY = 2, FO_DELETE = 3, FO_RENAME = 4 };
 
 struct UndoEntry
 {
+    int id;
     int operation;
     QList<QPair<QString, QString>> items;   // where each item was, and where the operation put it
 };
@@ -646,7 +656,8 @@ void record(int operation, const QList<QPair<QString, QString>> &items)
     if (items.isEmpty())
         return;
     QList<UndoEntry> &entries = undoEntries();
-    entries.append({operation, items});
+    static int next = 0;
+    entries.append({++next, operation, items});
     while (entries.size() > UNDO_DEPTH)
         entries.removeFirst();
     Q_EMIT UndoStack::instance()->changed();
@@ -766,10 +777,10 @@ void UndoStack::undo(QWidget *parent)
     ++undoing;
     Q_EMIT changed();
     // the entry leaves the stack once the undo is done
-    const auto finished = [](bool done) {
+    const auto finished = [id = entry.id](bool done) {
         --undoing;
-        if (done && !undoEntries().isEmpty())
-            undoEntries().removeLast();
+        if (done)
+            undoEntries().removeIf([id](const UndoEntry &undone) { return undone.id == id; });
         Q_EMIT UndoStack::instance()->changed();
     };
     QStringList before, after;
