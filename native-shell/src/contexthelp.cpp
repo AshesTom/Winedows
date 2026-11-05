@@ -2,8 +2,12 @@
 #include "contexthelp.h"
 
 #include "xpfiles.h"
+#include "xpprogram.h"
 
 #include <QApplication>
+#include <QContextMenuEvent>
+#include <QLineEdit>
+#include <QMenu>
 #include <QCursor>
 #include <QFile>
 #include <QHash>
@@ -730,6 +734,16 @@ public:
                 return true;
             }
             break;
+        case QEvent::ContextMenu:
+            // WM_CONTEXTMENU: the dialog's HELP_CONTEXTMENU, user32's menu 4 ("What's This?") at
+            // the pointer, its popup where the menu was asked for. Edit boxes keep their own menu.
+            if (const QPoint at = static_cast<QContextMenuEvent *>(event)->globalPos(); !editor(QApplication::widgetAt(at))) {
+                if (QWidget *control = helped(widget, at); control && control->property(HELP_ID).toInt() != -1) {
+                    whatsThisMenu(control, at);
+                    return true;
+                }
+            }
+            break;
         case QEvent::KeyPress:
             // any key closes the popup, wherever the keyboard is
             if (shown()) {
@@ -766,6 +780,27 @@ private:
                 && control->parentWidget()->isVisible() && QRect(control->mapToGlobal(QPoint(0, 0)), control->size()).contains(at))
                 return control;
         return nullptr;
+    }
+
+    static bool editor(QWidget *widget)
+    {
+        for (; widget; widget = widget->isWindow() ? nullptr : widget->parentWidget())
+            if (qobject_cast<QLineEdit *>(widget) || widget->inherits("QTextEdit") || widget->inherits("QPlainTextEdit"))
+                return true;
+        return false;
+    }
+
+    static void whatsThisMenu(QWidget *control, const QPoint &at)
+    {
+        QMenu menu(control);
+        static const auto user32 = xpfiles::resources(xpfiles::find(QStringLiteral("user32.dll")));
+        if (user32)
+            xpprogram::fillMenu(&menu, *user32, 4);
+        if (menu.actions().isEmpty())
+            menu.addAction(QObject::tr("&What's This?"));
+        QPointer<QWidget> target(control);
+        if (menu.exec(at) && target)
+            showFor(target, at);
     }
 
     static void showFor(QWidget *control, const QPoint &at)
