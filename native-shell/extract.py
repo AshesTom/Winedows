@@ -63,6 +63,8 @@ ICON_FILES = {
     **dict.fromkeys(('arial.ttf', 'arialbd.ttf', 'ariali.ttf', 'arialbi.ttf', 'micross.ttf'), 'fonts'),
     # XP's Command Prompt (session/xp_cmd.py): its raster font and its icon
     'vgaoem.fon': 'fonts', 'cmd.exe': 'system32',
+    # The dialogs' "?" popups: the shell's help file and its MS Sans Serif raster font
+    'windows.hlp': 'help', 'sserife.fon': 'fonts',
     # System Properties' other pages
     'netid.dll': 'cpl', 'wuaucpl.cpl': 'cpl', 'remotepg.dll': 'cpl', 'srrstr.dll': 'cpl',
     # The Search Companion: its icons and words, its steps, and its character

@@ -4,6 +4,7 @@
 #include "theme.h"
 
 #include "programs.h"
+#include "contexthelp.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
@@ -26,6 +27,23 @@ namespace {
 // explorer.exe's words and pictures
 const int STRING_SHEET = 810, STRING_TASKBAR = 518, STRING_START_MENU = 510;
 const int DIALOG_TASKBAR = 6, DIALOG_START_MENU = 205;
+
+// The dialogs' aHelpIds tables in explorer.exe, which hands them to shell32's SHWinHelp (ordinal
+// 127) with windows.hlp on WM_HELP and WM_CONTEXTMENU: each control and its help number, -1 for none.
+const QList<QPair<int, int>> HELP_TASKBAR = {   // 0x103a268
+    {1111, 6019}, {1112, 6019}, {1102, 6005}, {1103, 6016}, {1101, 6004}, {1105, 51143}, {1104, 6024}, {1000, 6028}, {1007, 6026}, {1107, 6033}};
+const QList<QPair<int, int>> HELP_START_MENU = {   // 0x103a6b8
+    {1134, 6025}, {1132, 6031}, {1133, 6029}, {1131, 6032}, {1130, 6030}};
+const QList<QPair<int, int>> HELP_CLASSIC_CUSTOMIZE = {   // 0x102a0b8, dialog 9
+    {650, -1}, {651, -1}, {652, -1}, {653, -1}, {300, 28548}, {301, 6011}, {302, 28548}, {1126, 6012}, {1127, 6013}, {1128, 6014},
+    {1125, 6011}, {1124, 6021}, {1132, 51132}};
+const QList<QPair<int, int>> HELP_START_GENERAL = {   // 0x1039570, page 1135
+    {1301, 6050}, {1300, 6051}, {1302, 6050}, {1303, 6051}, {1304, 6052}, {1305, 6052}, {1310, 6053}, {1320, 6054}, {1321, 6055},
+    {1322, 6056}, {1323, 6057}};
+const QList<QPair<int, int>> HELP_START_ADVANCED = {   // 0x102a158, page 1036
+    {1306, 6058}, {1326, 6059}, {1123, 6060}, {1313, -1}, {1312, -1}, {1308, 6061}, {1309, 6062}};
+const QList<QPair<int, int>> HELP_NOTIFICATIONS = {   // 0x102a128, dialog 7
+    {1400, -1}, {1401, -1}, {1006, -1}, {1005, -1}, {1402, 6027}};
 // The Taskbar page's controls
 enum {
     ID_ON_TOP = 1101, ID_AUTO_HIDE = 1102, ID_CLOCK = 1103, ID_GROUP = 1104, ID_LOCK = 1105, ID_QUICK_LAUNCH = 1107,
@@ -203,6 +221,7 @@ QWidget *TaskbarProperties::taskbarPage()
     if (!explorer())
         return page;
     const xpdialog::Page dialog = xpdialog::build(*explorer(), DIALOG_TASKBAR, page);
+    contexthelp::attach(dialog, HELP_TASKBAR);
     for (auto it = dialog.controls.begin(); it != dialog.controls.end(); ++it)
         if (auto *check = qobject_cast<QCheckBox *>(it.value()))
             m_checks.insert(it.key(), check);
@@ -245,6 +264,7 @@ static void showClassicCustomize(QWidget *parent)
         return;
     QDialog dialog(parent);
     const xpdialog::Page page = xpdialog::build(*explorer(), 9, &dialog);
+    contexthelp::attach(page, HELP_CLASSIC_CUSTOMIZE);
     dialog.setWindowTitle(page.caption);
     QWidget *place = page.controls.value(1123);
     auto *tree = new QTreeWidget(&dialog);
@@ -339,6 +359,8 @@ static void showStartPanelCustomize(QWidget *parent)
     auto *advanced = new QWidget;
     const xpdialog::Page generalPage = xpdialog::build(*explorer(), 1135, general);
     const xpdialog::Page advancedPage = xpdialog::build(*explorer(), 1036, advanced);
+    contexthelp::attach(generalPage, HELP_START_GENERAL);
+    contexthelp::attach(advancedPage, HELP_START_ADVANCED);
     tabs->addTab(general, generalPage.caption.isEmpty() ? QObject::tr("General") : generalPage.caption);
     tabs->addTab(advanced, advancedPage.caption.isEmpty() ? QObject::tr("Advanced") : advancedPage.caption);
     const TaskbarSettings settings = TaskbarSettings::load();
@@ -426,6 +448,7 @@ QWidget *TaskbarProperties::startMenuPage()
     if (!explorer())
         return page;
     const xpdialog::Page dialog = xpdialog::build(*explorer(), DIALOG_START_MENU, page);
+    contexthelp::attach(dialog, HELP_START_MENU);
     // The Start menu or the classic one; the preview is 170 or 171 (sub_1038a95). Their Customize dialogs
     // are greyed.
     m_startRadio = qobject_cast<QAbstractButton *>(dialog.controls.value(ID_START_MENU));
@@ -541,6 +564,7 @@ void customize(QWidget *parent)
     auto *dialog = new QDialog(parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     const xpdialog::Page page = xpdialog::build(*explorer(), DIALOG_CUSTOMIZE, dialog);
+    contexthelp::attach(page, HELP_NOTIFICATIONS);
     dialog->setWindowTitle(page.caption);
     // The list view: Name and Behavior, the items under Current Items and Past Items; a click on
     // an item's behaviour gives it the choice of three, as XP's in-place combo box (control 1006)
