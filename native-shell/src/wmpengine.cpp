@@ -558,6 +558,9 @@ void SkinView::assign(Element *element, const QString &name, const QVariant &val
         bind(element, name, text.mid(12), true, true);
     else if (text.startsWith(QLatin1String("jscript:"), Qt::CaseInsensitive))
         setProperty(element, name, fromScript(evaluate(text.mid(8), keyOf(element))));
+    // a string of the skin's as an attribute has it (MediaInfo.js: txtLink1.value = "res://wmploc.dll/RT_STRING/#1452")
+    else if (text.startsWith(QLatin1String("res://"), Qt::CaseInsensitive) && text.contains(QLatin1String("RT_STRING"), Qt::CaseInsensitive))
+        setProperty(element, name, m_model->string(text));
     else
         setProperty(element, name, value);
 }
@@ -2211,6 +2214,10 @@ void SkinView::mouseReleaseEvent(QMouseEvent *event)
     m_pressedButton = -1;
     m_playlistDragFrom = -1;
     m_frameEdges = {};
+    // the view hears the button come up on its background, and the right button's anywhere
+    // (taskbar.wsz's Deskband.OnContextMenu is the view's onmouseup)
+    if (m_view && (!pressed || (event->button() == Qt::RightButton && pressed != m_view)))
+        fireMouse(m_view, QStringLiteral("onmouseup"), event);
     if (!pressed) {
         update();
         return;
