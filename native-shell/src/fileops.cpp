@@ -45,6 +45,8 @@ public:
     using QThread::QThread;
     std::atomic<bool> cancelled{false};
     QString error;
+    // each item done, where it was and where it is now: for the undo stack
+    QList<QPair<QString, QString>> results;
 
 Q_SIGNALS:
     void fileStarted(const QString &name, const QString &from);
@@ -59,10 +61,12 @@ class Worker : public Job
     Q_OBJECT
 public:
     enum Answer { Yes, YesToAll, No, Cancel };
-    Worker(QStringList sources, QString target, Action action, QObject *parent)
+    // into the folder TARGET, or each source to its own path in TARGETS (FOF_MULTIDESTFILES)
+    Worker(QStringList sources, QString target, QStringList targets, Action action, QObject *parent)
         : Job(parent)
         , m_sources(std::move(sources))
         , m_target(std::move(target))
+        , m_targets(std::move(targets))
         , m_action(action)
     {
     }
@@ -77,13 +81,17 @@ protected:
         for (const QString &source : std::as_const(m_sources))
             total += sizeOf(source);
         m_total = qMax<qint64>(1, total);
-        for (const QString &source : std::as_const(m_sources)) {
+        for (qsizetype i = 0; i < m_sources.size(); ++i) {
+            const QString &source = m_sources.at(i);
             if (cancelled)
                 return;
-            const QString target = QDir(m_target).filePath(QFileInfo(source).fileName());
+            const QString target = m_targets.isEmpty() ? QDir(m_target).filePath(QFileInfo(source).fileName()) : m_targets.value(i);
             if (QFileInfo(target).absoluteFilePath() == QFileInfo(source).absoluteFilePath()) {
-                if (m_action == Action::Copy)
-                    copyItem(source, QDir(m_target).filePath(freeName(m_target, QFileInfo(source).fileName())));
+                if (m_action == Action::Copy) {
+                    const QString copy = QDir(m_target).filePath(freeName(m_target, QFileInfo(source).fileName()));
+                    copyItem(source, copy);
+                    done(source, copy);
+                }
                 continue;
             }
             if (target.startsWith(QFileInfo(source).absoluteFilePath() + QLatin1Char('/'))) {
@@ -93,8 +101,10 @@ protected:
             if (m_action == Action::Move && !QFileInfo::exists(target) && QFile::rename(source, target)) {
                 m_done += sizeOf(target);
                 report();
+                results.append({source, target});
                 continue;
             }
+            QDir().mkpath(QFileInfo(target).absolutePath());
             copyItem(source, target);
             if (m_action == Action::Move && !cancelled && error.isEmpty()) {
                 QFileInfo info(source);
@@ -103,10 +113,17 @@ protected:
                 else
                     QFile::remove(source);
             }
+            done(source, target);
         }
     }
 
 private:
+    void done(const QString &source, const QString &target)
+    {
+        if (!cancelled && error.isEmpty() && QFileInfo::exists(target))
+            results.append({source, target});
+    }
+
     static qint64 sizeOf(const QString &path)
     {
         QFileInfo info(path);
@@ -185,6 +202,7 @@ private:
 
     QStringList m_sources;
     QString m_target;
+    QStringList m_targets;
     Action m_action;
     qint64 m_total = 1, m_done = 0;
     bool m_replaceAll = false;
@@ -219,7 +237,10 @@ protected:
             bool done;
             if (!m_permanent) {
                 Q_EMIT fileStarted(info.fileName(), info.absolutePath());
-                done = QFile::moveToTrash(path);
+                QString inTrash;
+                done = QFile::moveToTrash(path, &inTrash);
+                if (done)
+                    results.append({path, inTrash});
                 ++m_done;
                 Q_EMIT progressed(m_done, m_total);
             } else {
@@ -564,15 +585,45 @@ QDialog *progressWindow(int caption, const char *fallback)
     return window;
 }
 
-} // namespace
+// shell32's undo stack (sub_300ba1b1 pushes, sub_300ba22e reads the top, sub_3006b401 undoes): an
+// entry for each move, copy, delete to the Recycle Bin and rename, the oldest dropped past ten,
+// named by string 4143 plus the operation. An undo that fails or is cancelled stays on the stack.
+const int UNDO_DEPTH = 10, STRING_UNDO_ITEM = 4164, STRING_UNDO = 4165, STRING_OPERATION = 4143;
+enum Operation { FO_MOVE = 1, FO_COPY = 2, FO_DELETE = 3, FO_RENAME = 4 };
 
-void transfer(const QStringList &sources, const QString &targetFolder, Action action, QWidget *parent)
+struct UndoEntry
 {
-    if (sources.isEmpty())
+    int operation;
+    QList<QPair<QString, QString>> items;   // where each item was, and where the operation put it
+};
+
+QList<UndoEntry> &undoEntries()
+{
+    static QList<UndoEntry> entries;
+    return entries;
+}
+
+// an undo running: nothing more can be undone until it ends
+int undoing = 0;
+
+void record(int operation, const QList<QPair<QString, QString>> &items)
+{
+    if (items.isEmpty())
         return;
+    QList<UndoEntry> &entries = undoEntries();
+    entries.append({operation, items});
+    while (entries.size() > UNDO_DEPTH)
+        entries.removeFirst();
+    Q_EMIT UndoStack::instance()->changed();
+}
+
+// Runs the copy or move; DONE learns whether all of it was done. RECORD puts it on the undo stack.
+void startTransfer(const QStringList &sources, const QString &targetFolder, const QStringList &targets, Action action, bool record,
+                   QWidget *parent, const std::function<void(bool)> &done = {})
+{
     const bool copy = action == Action::Copy;
     QDialog *window = progressWindow(copy ? STRING_COPYING : STRING_MOVING, copy ? "Copying..." : "Moving...");
-    auto *worker = new Worker(sources, targetFolder, action, window);
+    auto *worker = new Worker(sources, targetFolder, targets, action, window);
     QObject::connect(worker, &Worker::askReplace, window, [window](const QString &path, int *answer) {
         QMessageBox box(QMessageBox::Question, QObject::tr("Confirm File Replace"),
                         QObject::tr("This folder already contains a file named '%1'.\n\nWould you like to replace the existing file?").arg(QFileInfo(path).fileName()),
@@ -584,36 +635,129 @@ void transfer(const QStringList &sources, const QString &targetFolder, Action ac
         box.exec();
         *answer = box.clickedButton() == yes ? Worker::Yes : box.clickedButton() == all ? Worker::YesToAll : box.clickedButton() == no ? Worker::No : Worker::Cancel;
     }, Qt::BlockingQueuedConnection);
-    const auto from = [targetFolder](const QString &folder) {
+    QObject::connect(worker, &QThread::finished, window, [worker, copy, record, done] {
+        if (record)
+            fileops::record(copy ? FO_COPY : FO_MOVE, worker->results);
+        if (done)
+            done(!worker->cancelled && worker->error.isEmpty());
+    });
+    const auto from = [targetFolder, targets](const QString &folder) {
+        const QString to = targets.isEmpty() ? targetFolder : QFileInfo(targets.first()).absolutePath();
         return xpfiles::shellString(STRING_FROM_TO, "From '%1!ls!' to '%2!ls!'")
             .replace(QLatin1String("%1!ls!"), QFileInfo(folder).fileName())
-            .replace(QLatin1String("%2!ls!"), QFileInfo(targetFolder).fileName());
+            .replace(QLatin1String("%2!ls!"), QFileInfo(to).fileName());
     };
     runWithDialog(worker, window, copy ? AVI_COPY : AVI_MOVE, BLOCK, from, QString(), parent);
 }
 
-void remove(const QStringList &paths, bool permanent, QWidget *parent)
+void startRemove(const QStringList &paths, bool permanent, bool record, QWidget *parent, const std::function<void(bool)> &done = {})
 {
-    if (paths.isEmpty())
-        return;
     const QString title = paths.size() == 1 ? QObject::tr("Confirm File Delete") : QObject::tr("Confirm Multiple File Delete");
     const QString question = permanent ? QObject::tr("Are you sure you want to delete %1?").arg(quotedList(paths))
                                        : QObject::tr("Are you sure you want to send %1 to the Recycle Bin?").arg(quotedList(paths));
     // Recycle Bin Properties' "Display delete confirmation dialog"
     QSettings settings(QStringLiteral("win4wine"), QStringLiteral("fileops"));
     if (settings.value(QStringLiteral("RecycleBin/ConfirmDelete"), true).toBool()
-        && QMessageBox::question(parent, title, question) != QMessageBox::Yes)
+        && QMessageBox::question(parent, title, question) != QMessageBox::Yes) {
+        if (done)
+            done(false);
         return;
+    }
     // the Recycle Bin's folder deletes its own items with FOF_SIMPLEPROGRESS and title 9026
     const QString trash = QFileInfo(trashFiles()).canonicalFilePath();
     const bool fromBin = permanent && QFileInfo(QFileInfo(paths.first()).absolutePath()).canonicalFilePath() == trash;
     QDialog *window = progressWindow(STRING_DELETING, "Deleting...");
     auto *deleter = new Deleter(paths, permanent, trash, window);
+    // only what went to the Recycle Bin (FOF_ALLOWUNDO) can come back
+    QObject::connect(deleter, &QThread::finished, window, [deleter, permanent, record, done] {
+        if (record && !permanent)
+            fileops::record(FO_DELETE, deleter->results);
+        if (done)
+            done(!deleter->cancelled && deleter->error.isEmpty());
+    });
     const auto from = [](const QString &folder) {
         return xpfiles::shellString(STRING_FROM, "From '%1!ls!'").replace(QLatin1String("%1!ls!"), QFileInfo(folder).fileName());
     };
     const QString simple = fromBin ? xpfiles::shellString(STRING_DELETING_BIN, "Deleting files from the Recycle Bin") : QString();
     runWithDialog(deleter, window, fromBin ? AVI_FROM_BIN : permanent ? AVI_DELETE : AVI_RECYCLE, 1, from, simple, parent);
+}
+
+} // namespace
+
+void transfer(const QStringList &sources, const QString &targetFolder, Action action, QWidget *parent)
+{
+    if (!sources.isEmpty())
+        startTransfer(sources, targetFolder, {}, action, true, parent);
+}
+
+void remove(const QStringList &paths, bool permanent, QWidget *parent)
+{
+    if (!paths.isEmpty())
+        startRemove(paths, permanent, true, parent);
+}
+
+void recordRename(const QString &before, const QString &after)
+{
+    if (!undoing)
+        record(FO_RENAME, {{before, after}});
+}
+
+UndoStack *UndoStack::instance()
+{
+    static UndoStack *stack = new UndoStack;
+    return stack;
+}
+
+bool UndoStack::canUndo() const
+{
+    return !undoing && !undoEntries().isEmpty();
+}
+
+QString UndoStack::menuText() const
+{
+    if (!canUndo())
+        return xpfiles::shellString(STRING_UNDO, "&Undo\tCtrl+Z");
+    static const char *const names[] = {"Move", "Copy", "Delete", "Rename"};
+    const int operation = undoEntries().last().operation;
+    return xpfiles::shellString(STRING_UNDO_ITEM, "&Undo %s\tCtrl+Z")
+        .replace(QLatin1String("%s"), xpfiles::shellString(STRING_OPERATION + operation, names[operation - 1]));
+}
+
+void UndoStack::undo(QWidget *parent)
+{
+    if (!canUndo())
+        return;
+    const UndoEntry entry = undoEntries().last();
+    ++undoing;
+    Q_EMIT changed();
+    // the entry leaves the stack once the undo is done
+    const auto finished = [](bool done) {
+        --undoing;
+        if (done && !undoEntries().isEmpty())
+            undoEntries().removeLast();
+        Q_EMIT UndoStack::instance()->changed();
+    };
+    QStringList before, after;
+    for (const auto &item : entry.items) {
+        before << item.first;
+        after << item.second;
+    }
+    switch (entry.operation) {
+    case FO_MOVE:
+        // back where each item was (FO_MOVE with FOF_MULTIDESTFILES)
+        startTransfer(after, QString(), before, Action::Move, false, parent, finished);
+        break;
+    case FO_COPY:
+        // the copies deleted for good, after asking (FO_DELETE without FOF_ALLOWUNDO)
+        startRemove(after, true, false, parent, finished);
+        break;
+    case FO_DELETE:
+        finished(restoreFromTrash(after, parent));
+        break;
+    case FO_RENAME:
+        finished(QFile::rename(after.first(), before.first()));
+        break;
+    }
 }
 
 void copyToClipboard(const QStringList &paths, bool cut)
@@ -689,8 +833,9 @@ void emptyTrash(QWidget *parent)
     runWithDialog(deleter, window, AVI_FROM_BIN, 1, {}, xpfiles::shellString(STRING_EMPTYING, "Emptying the Recycle Bin"), parent);
 }
 
-void restoreFromTrash(const QStringList &paths, QWidget *parent)
+bool restoreFromTrash(const QStringList &paths, QWidget *parent)
 {
+    bool all = true;
     for (const QString &path : paths) {
         const QString name = QFileInfo(path).fileName();
         const QString infoPath = QFileInfo(trashFiles()).absolutePath() + QStringLiteral("/info/") + name + QStringLiteral(".trashinfo");
@@ -699,14 +844,18 @@ void restoreFromTrash(const QStringList &paths, QWidget *parent)
         const QString original = QUrl::fromPercentEncoding(encoded);
         if (original.isEmpty() || QFileInfo::exists(original)) {
             QMessageBox::warning(parent, QObject::tr("Restore"), QObject::tr("Cannot restore '%1': something else has its place.").arg(name));
+            all = false;
             continue;
         }
         QDir().mkpath(QFileInfo(original).absolutePath());
         if (QFile::rename(path, original))
             QFile::remove(infoPath);
-        else
+        else {
             QMessageBox::warning(parent, QObject::tr("Restore"), QObject::tr("Cannot restore '%1'.").arg(name));
+            all = false;
+        }
     }
+    return all;
 }
 
 } // namespace fileops

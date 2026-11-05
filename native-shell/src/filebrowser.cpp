@@ -1606,12 +1606,7 @@ void FileBrowser::buildPanes()
         updateStatus();
     });
     connect(m_files, &QFileSystemModel::fileRenamed, this, [this](const QString &path, const QString &oldName, const QString &newName) {
-        if (m_undoing)
-            return;
-        const QString before = QDir(path).filePath(oldName), after = QDir(path).filePath(newName);
-        m_undo = [before, after] { QFile::rename(after, before); };
-        m_undoAction->setText(tr("&Undo Rename"));
-        m_undoAction->setEnabled(true);
+        fileops::recordRename(QDir(path).filePath(oldName), QDir(path).filePath(newName));
     });
 }
 
@@ -1644,17 +1639,14 @@ void FileBrowser::buildMenus()
     file->addAction(tr("&Close"), this, &QWidget::close);
 
     QMenu *edit = menuBar()->addMenu(tr("&Edit"));
-    m_undoAction = edit->addAction(tr("&Undo"), QKeySequence::Undo, this, [this] {
-        const std::function<void()> undo = m_undo;
-        m_undo = {};
-        m_undoAction->setText(tr("&Undo"));
-        m_undoAction->setEnabled(false);
-        m_undoing = true;
-        if (undo)
-            undo();
-        m_undoing = false;
-    });
-    m_undoAction->setEnabled(false);
+    // the undo stack is every folder window's: its newest entry names the item (string 4164)
+    m_undoAction = edit->addAction(QString(), QKeySequence::Undo, this, [this] { fileops::UndoStack::instance()->undo(this); });
+    const auto undoChanged = [this] {
+        m_undoAction->setText(fileops::UndoStack::instance()->menuText());
+        m_undoAction->setEnabled(fileops::UndoStack::instance()->canUndo());
+    };
+    connect(fileops::UndoStack::instance(), &fileops::UndoStack::changed, this, undoChanged);
+    undoChanged();
     edit->addSeparator();
     m_cutAction = edit->addAction(tr("Cu&t"), QKeySequence::Cut, this, [this] { fileops::copyToClipboard(selectedPaths(), true); });
     m_copyAction = edit->addAction(tr("&Copy"), QKeySequence::Copy, this, [this] { fileops::copyToClipboard(selectedPaths(), false); });
@@ -3235,7 +3227,8 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
         });
     }
     if (QAction *undo = items.value(CMD_UNDO)) {
-        undo->setEnabled(bool(m_undo));
+        undo->setText(fileops::UndoStack::instance()->menuText());
+        undo->setEnabled(fileops::UndoStack::instance()->canUndo());
         connect(undo, &QAction::triggered, this, [this] { m_undoAction->trigger(); });
     }
     if (QAction *groups = items.value(CMD_GROUPS)) {
