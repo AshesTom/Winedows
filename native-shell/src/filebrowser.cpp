@@ -2497,8 +2497,9 @@ void FileBrowser::addNetworkPlace()
 void FileBrowser::fillComputer()
 {
     addVirtualHeader(xpfiles::shellString(9425, "Files Stored on This Computer"));
+    // the folders without XP's "File Folder" under their name (the user's choice for this shell)
     const auto folder = [this](int icon, const QString &name, const QString &path) {
-        addVirtual(name, fileicons::shell(icon), [this, path] { navigate(path); }, tr("File Folder"));
+        addVirtual(name, fileicons::shell(icon), [this, path] { navigate(path); });
         m_virtual->item(m_virtual->rowCount() - 1)->setData(path, PathRole);
     };
     folder(fileicons::Documents, xpfiles::shellString(9227, "My Documents"), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
