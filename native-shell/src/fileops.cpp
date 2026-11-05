@@ -29,6 +29,7 @@
 #include <QVBoxLayout>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 namespace fileops {
@@ -36,25 +37,37 @@ namespace {
 
 const qint64 CHUNK = 1 << 20;
 
-// The transfer's work, off the GUI thread. A blocking signal asks about files of the same name.
-class Worker : public QThread
+// The work behind a progress dialog, off the GUI thread
+class Job : public QThread
 {
     Q_OBJECT
 public:
-    enum Answer { Yes, YesToAll, No, Cancel };
-    Worker(QStringList sources, QString target, Action action, QObject *parent)
-        : QThread(parent)
-        , m_sources(std::move(sources))
-        , m_target(std::move(target))
-        , m_action(action)
-    {
-    }
+    using QThread::QThread;
     std::atomic<bool> cancelled{false};
     QString error;
 
 Q_SIGNALS:
     void fileStarted(const QString &name, const QString &from);
     void progressed(qint64 done, qint64 total);
+    // a question comes: the dialog shows now if it has not yet
+    void wantsDialog();
+};
+
+// The transfer's work. A blocking signal asks about files of the same name.
+class Worker : public Job
+{
+    Q_OBJECT
+public:
+    enum Answer { Yes, YesToAll, No, Cancel };
+    Worker(QStringList sources, QString target, Action action, QObject *parent)
+        : Job(parent)
+        , m_sources(std::move(sources))
+        , m_target(std::move(target))
+        , m_action(action)
+    {
+    }
+
+Q_SIGNALS:
     void askReplace(const QString &path, int *answer);
 
 protected:
@@ -132,6 +145,7 @@ private:
         }
         if (QFileInfo::exists(target) && !m_replaceAll) {
             int answer = Cancel;
+            Q_EMIT wantsDialog();
             Q_EMIT askReplace(target, &answer);
             if (answer == Cancel) {
                 cancelled = true;
@@ -174,6 +188,94 @@ private:
     Action m_action;
     qint64 m_total = 1, m_done = 0;
     bool m_replaceAll = false;
+};
+
+// The delete's work: to the Recycle Bin an item at a time, or for good a file at a time, each
+// folder after what it holds. What is deleted from the Recycle Bin takes its .trashinfo with it.
+class Deleter : public Job
+{
+    Q_OBJECT
+public:
+    Deleter(QStringList paths, bool permanent, QString trash, QObject *parent)
+        : Job(parent)
+        , m_paths(std::move(paths))
+        , m_permanent(permanent)
+        , m_trash(std::move(trash))
+    {
+    }
+
+protected:
+    void run() override
+    {
+        qint64 total = 0;
+        for (const QString &path : std::as_const(m_paths))
+            total += m_permanent ? countOf(path) : 1;
+        m_total = qMax<qint64>(1, total);
+        QStringList failed;
+        for (const QString &path : std::as_const(m_paths)) {
+            if (cancelled)
+                break;
+            const QFileInfo info(path);
+            bool done;
+            if (!m_permanent) {
+                Q_EMIT fileStarted(info.fileName(), info.absolutePath());
+                done = QFile::moveToTrash(path);
+                ++m_done;
+                Q_EMIT progressed(m_done, m_total);
+            } else {
+                done = removeItem(path);
+            }
+            if (done && m_permanent && QFileInfo(info.absolutePath()).canonicalFilePath() == m_trash)
+                QFile::remove(QFileInfo(m_trash).absolutePath() + QStringLiteral("/info/") + info.fileName() + QStringLiteral(".trashinfo"));
+            if (!done && !cancelled)
+                failed << info.fileName();
+        }
+        if (!failed.isEmpty())
+            error = QObject::tr("Cannot delete %1.").arg(failed.join(QStringLiteral(", ")));
+    }
+
+private:
+    static qint64 countOf(const QString &path)
+    {
+        const QFileInfo info(path);
+        if (!info.isDir() || info.isSymLink())
+            return 1;
+        qint64 count = 1;
+        QDirIterator it(path, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            ++count;
+        }
+        return count;
+    }
+
+    bool removeItem(const QString &path)
+    {
+        if (cancelled)
+            return false;
+        const QFileInfo info(path);
+        bool done = true;
+        if (info.isDir() && !info.isSymLink()) {
+            const QFileInfoList children = QDir(path).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+            for (const QFileInfo &child : children)
+                done = removeItem(child.absoluteFilePath()) && done;
+            if (cancelled)
+                return false;
+            Q_EMIT fileStarted(info.fileName(), info.absolutePath());
+            done = QDir().rmdir(path) && done;
+        } else {
+            Q_EMIT fileStarted(info.fileName(), info.absolutePath());
+            done = QFile::remove(path);
+        }
+        ++m_done;
+        Q_EMIT progressed(m_done, m_total);
+        return done;
+    }
+
+    QStringList m_paths;
+    bool m_permanent;
+    QString m_trash;
+    qint64 m_total = 1, m_done = 0;
 };
 
 QString quotedList(const QStringList &paths)
@@ -310,10 +412,14 @@ QString freeName(const QString &folder, const QString &base)
 
 namespace {
 
-// shell32's copy engine (its dialog thread sub_300afcf5, the dialog's procedure sub_300ae487)
+// shell32's copy engine (its dialog thread sub_300afcf5, the dialog's procedure sub_300ae4d3)
 const int DIALOG_PROGRESS = 1020, ID_CANCEL = 2, ID_ANIMATION = 106, ID_FILE = 102, ID_FROM = 103, ID_BAR = 104, ID_TIME = 105;
-const int STRING_MOVING = 5953, STRING_COPYING = 5954, STRING_FROM_TO = 5968, STRING_MINUTES = 8739, STRING_SECONDS = 8740;
-const int AVI_MOVE = 160, AVI_COPY = 161;
+// the caption is 5952 plus the operation (FO_MOVE 1, FO_COPY 2, FO_DELETE 3)
+const int STRING_MOVING = 5953, STRING_COPYING = 5954, STRING_DELETING = 5955, STRING_FROM_TO = 5968, STRING_FROM = 5969;
+const int STRING_MINUTES = 8739, STRING_SECONDS = 8740, STRING_EMPTYING = 9025, STRING_DELETING_BIN = 9026;
+// on WM_SHOWWINDOW: 159 plus the operation; a delete has 164 for good, 162 to the Recycle Bin
+// (FOF_ALLOWUNDO), and 163 when its progress title is 9025 or 9026, the Recycle Bin's own
+const int AVI_MOVE = 160, AVI_COPY = 161, AVI_RECYCLE = 162, AVI_FROM_BIN = 163, AVI_DELETE = 164;
 // the dialog comes after a second, if the work is not done by then, and stays at least a second;
 // the time left is worked out every 2 seconds
 const int SHOW_DELAY = 1000, LEAST_SHOWN = 1000, ESTIMATE_INTERVAL = 2000;
@@ -367,60 +473,56 @@ private:
     qint64 m_lastTime = 0, m_lastDone = 0, m_rate = 0;
 };
 
-} // namespace
-
-void transfer(const QStringList &sources, const QString &targetFolder, Action action, QWidget *parent)
+// Dialog 1020 for JOB, made its child: CAPTION, animation AVI, and FROM for the folder of each file
+// (empty: the line stays blank). UNIT is the size the estimate counts in. A SIMPLE title takes the
+// file's line for good, as FOF_SIMPLEPROGRESS has it.
+void runWithDialog(Job *job, QDialog *window, int avi, qint64 unit, const std::function<QString(const QString &)> &from,
+                   const QString &simple, QWidget *parent)
 {
-    if (sources.isEmpty())
-        return;
-    auto *window = new QDialog(nullptr);
-    window->setAttribute(Qt::WA_DeleteOnClose);
-    const bool copy = action == Action::Copy;
-    window->setWindowTitle(xpfiles::shellString(copy ? STRING_COPYING : STRING_MOVING, copy ? "Copying..." : "Moving..."));
-    QLabel *name = nullptr, *from = nullptr, *time = nullptr;
+    QLabel *name = nullptr, *fromLine = nullptr, *time = nullptr;
     QProgressBar *bar = nullptr;
     QPushButton *cancel = nullptr;
     const std::optional<w4w::PeResources> shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
     if (shell32) {
         const xpdialog::Page page = xpdialog::build(*shell32, DIALOG_PROGRESS, window);
         name = qobject_cast<QLabel *>(page.controls.value(ID_FILE));
-        from = qobject_cast<QLabel *>(page.controls.value(ID_FROM));
+        fromLine = qobject_cast<QLabel *>(page.controls.value(ID_FROM));
         time = qobject_cast<QLabel *>(page.controls.value(ID_TIME));
         bar = qobject_cast<QProgressBar *>(page.controls.value(ID_BAR));
         cancel = qobject_cast<QPushButton *>(page.controls.value(ID_CANCEL));
-        // on WM_SHOWWINDOW: the move's animation (160) or the copy's (161)
         if (auto *animation = dynamic_cast<xpdialog::Animation *>(page.controls.value(ID_ANIMATION)))
-            animation->open(*shell32, copy ? AVI_COPY : AVI_MOVE);
+            animation->open(*shell32, avi);
     }
-    if (!name || !from || !bar || !cancel) {
+    if (!name || !fromLine || !bar || !cancel) {
         // without the user's shell32: the same lines in a window of their own
         qDeleteAll(window->findChildren<QWidget *>(Qt::FindDirectChildrenOnly));
         window->setFixedSize(370, 150);
         auto *layout = new QVBoxLayout(window);
         name = new QLabel(window);
-        from = new QLabel(window);
+        fromLine = new QLabel(window);
         time = new QLabel(window);
         bar = new QProgressBar(window);
         bar->setTextVisible(false);
         cancel = new QPushButton(QObject::tr("Cancel"), window);
         layout->addWidget(name);
-        layout->addWidget(from);
+        layout->addWidget(fromLine);
         layout->addWidget(bar);
         layout->addWidget(time);
         layout->addWidget(cancel, 0, Qt::AlignRight);
     }
     bar->setRange(0, 100);
-    auto *worker = new Worker(sources, targetFolder, action, window);
-    QObject::connect(worker, &Worker::fileStarted, window, [name, from, targetFolder](const QString &file, const QString &folder) {
-        name->setText(file);
-        from->setText(xpfiles::shellString(STRING_FROM_TO, "From '%1!ls!' to '%2!ls!'")
-                          .replace(QLatin1String("%1!ls!"), QFileInfo(folder).fileName())
-                          .replace(QLatin1String("%2!ls!"), QFileInfo(targetFolder).fileName()));
-    });
+    job->setParent(window);
+    if (!simple.isEmpty())
+        name->setText(simple);
+    else
+        QObject::connect(job, &Job::fileStarted, window, [name, fromLine, from](const QString &file, const QString &folder) {
+            name->setText(file);
+            fromLine->setText(from(folder));
+        });
     auto estimate = std::make_shared<Estimate>();
     auto counts = std::make_shared<QPair<qint64, qint64>>(0, 1);
-    QObject::connect(worker, &Worker::progressed, window, [bar, counts](qint64 done, qint64 total) {
-        *counts = {done / BLOCK, qMax<qint64>(1, total / BLOCK)};
+    QObject::connect(job, &Job::progressed, window, [bar, counts, unit](qint64 done, qint64 total) {
+        *counts = {done / unit, qMax<qint64>(1, total / unit)};
         bar->setValue(int(done * 100 / qMax<qint64>(1, total)));
     });
     auto *estimates = new QTimer(window);
@@ -429,8 +531,8 @@ void transfer(const QStringList &sources, const QString &targetFolder, Action ac
             time->setText(estimate->update(counts->first, counts->second));
     });
     auto shown = std::make_shared<QElapsedTimer>();
-    auto showNow = [window, worker, shown, estimates, estimate, counts, time] {
-        if (shown->isValid() || worker->isFinished())
+    auto showNow = [window, job, shown, estimates, estimate, counts, time] {
+        if (shown->isValid() || job->isFinished())
             return;
         shown->start();
         window->show();
@@ -441,8 +543,36 @@ void transfer(const QStringList &sources, const QString &targetFolder, Action ac
     auto *showing = new QTimer(window);
     showing->setSingleShot(true);
     QObject::connect(showing, &QTimer::timeout, window, showNow);
-    // a replace question can come before the dialog: it is the dialog's own, so the dialog comes too
-    QObject::connect(worker, &Worker::askReplace, window, showNow);
+    // a question can come before the dialog: it is the dialog's own, so the dialog comes too
+    QObject::connect(job, &Job::wantsDialog, window, showNow);
+    QObject::connect(cancel, &QPushButton::clicked, window, [job] { job->cancelled = true; });
+    QObject::connect(job, &QThread::finished, window, [window, job, parent, shown] {
+        if (!job->error.isEmpty())
+            QMessageBox::warning(parent, window->windowTitle(), job->error);
+        const qint64 left = shown->isValid() ? LEAST_SHOWN - shown->elapsed() : 0;
+        QTimer::singleShot(qMax<qint64>(0, left), window, &QWidget::close);
+    });
+    showing->start(SHOW_DELAY);
+    job->start();
+}
+
+QDialog *progressWindow(int caption, const char *fallback)
+{
+    auto *window = new QDialog(nullptr);
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->setWindowTitle(xpfiles::shellString(caption, fallback));
+    return window;
+}
+
+} // namespace
+
+void transfer(const QStringList &sources, const QString &targetFolder, Action action, QWidget *parent)
+{
+    if (sources.isEmpty())
+        return;
+    const bool copy = action == Action::Copy;
+    QDialog *window = progressWindow(copy ? STRING_COPYING : STRING_MOVING, copy ? "Copying..." : "Moving...");
+    auto *worker = new Worker(sources, targetFolder, action, window);
     QObject::connect(worker, &Worker::askReplace, window, [window](const QString &path, int *answer) {
         QMessageBox box(QMessageBox::Question, QObject::tr("Confirm File Replace"),
                         QObject::tr("This folder already contains a file named '%1'.\n\nWould you like to replace the existing file?").arg(QFileInfo(path).fileName()),
@@ -454,15 +584,12 @@ void transfer(const QStringList &sources, const QString &targetFolder, Action ac
         box.exec();
         *answer = box.clickedButton() == yes ? Worker::Yes : box.clickedButton() == all ? Worker::YesToAll : box.clickedButton() == no ? Worker::No : Worker::Cancel;
     }, Qt::BlockingQueuedConnection);
-    QObject::connect(cancel, &QPushButton::clicked, window, [worker] { worker->cancelled = true; });
-    QObject::connect(worker, &QThread::finished, window, [window, worker, parent, shown] {
-        if (!worker->error.isEmpty())
-            QMessageBox::warning(parent, window->windowTitle(), worker->error);
-        const qint64 left = shown->isValid() ? LEAST_SHOWN - shown->elapsed() : 0;
-        QTimer::singleShot(qMax<qint64>(0, left), window, &QWidget::close);
-    });
-    showing->start(SHOW_DELAY);
-    worker->start();
+    const auto from = [targetFolder](const QString &folder) {
+        return xpfiles::shellString(STRING_FROM_TO, "From '%1!ls!' to '%2!ls!'")
+            .replace(QLatin1String("%1!ls!"), QFileInfo(folder).fileName())
+            .replace(QLatin1String("%2!ls!"), QFileInfo(targetFolder).fileName());
+    };
+    runWithDialog(worker, window, copy ? AVI_COPY : AVI_MOVE, BLOCK, from, QString(), parent);
 }
 
 void remove(const QStringList &paths, bool permanent, QWidget *parent)
@@ -477,20 +604,16 @@ void remove(const QStringList &paths, bool permanent, QWidget *parent)
     if (settings.value(QStringLiteral("RecycleBin/ConfirmDelete"), true).toBool()
         && QMessageBox::question(parent, title, question) != QMessageBox::Yes)
         return;
-    QStringList failed;
-    for (const QString &path : paths) {
-        bool done;
-        if (!permanent)
-            done = QFile::moveToTrash(path);
-        else if (QFileInfo(path).isDir() && !QFileInfo(path).isSymLink())
-            done = QDir(path).removeRecursively();
-        else
-            done = QFile::remove(path);
-        if (!done)
-            failed << QFileInfo(path).fileName();
-    }
-    if (!failed.isEmpty())
-        QMessageBox::warning(parent, title, QObject::tr("Cannot delete %1.").arg(failed.join(QStringLiteral(", "))));
+    // the Recycle Bin's folder deletes its own items with FOF_SIMPLEPROGRESS and title 9026
+    const QString trash = QFileInfo(trashFiles()).canonicalFilePath();
+    const bool fromBin = permanent && QFileInfo(QFileInfo(paths.first()).absolutePath()).canonicalFilePath() == trash;
+    QDialog *window = progressWindow(STRING_DELETING, "Deleting...");
+    auto *deleter = new Deleter(paths, permanent, trash, window);
+    const auto from = [](const QString &folder) {
+        return xpfiles::shellString(STRING_FROM, "From '%1!ls!'").replace(QLatin1String("%1!ls!"), QFileInfo(folder).fileName());
+    };
+    const QString simple = fromBin ? xpfiles::shellString(STRING_DELETING_BIN, "Deleting files from the Recycle Bin") : QString();
+    runWithDialog(deleter, window, fromBin ? AVI_FROM_BIN : permanent ? AVI_DELETE : AVI_RECYCLE, 1, from, simple, parent);
 }
 
 void copyToClipboard(const QStringList &paths, bool cut)
@@ -547,11 +670,23 @@ void emptyTrash(QWidget *parent)
                               names.size() == 1 ? QObject::tr("Are you sure you want to delete '%1'?").arg(names.first())
                                                  : QObject::tr("Are you sure you want to delete these %1 items?").arg(names.size())) != QMessageBox::Yes)
         return;
-    QDir(trashFiles()).removeRecursively();
-    QDir().mkpath(trashFiles());
-    QDir info(QFileInfo(trashFiles()).absolutePath() + QStringLiteral("/info"));
-    for (const QString &name : info.entryList(QDir::Files))
-        info.remove(name);
+    // FO_DELETE of everything in it, FOF_SIMPLEPROGRESS under title 9025
+    QStringList paths;
+    for (const QString &name : names)
+        paths << files.absoluteFilePath(name);
+    const QString trash = QFileInfo(trashFiles()).canonicalFilePath();
+    QDialog *window = progressWindow(STRING_DELETING, "Deleting...");
+    auto *deleter = new Deleter(paths, true, trash, window);
+    QObject::connect(deleter, &QThread::finished, window, [deleter, trash] {
+        if (deleter->cancelled)
+            return;
+        // .trashinfo files left without their item
+        QDir info(QFileInfo(trash).absolutePath() + QStringLiteral("/info"));
+        for (const QString &name : info.entryList(QDir::Files))
+            if (name.endsWith(QLatin1String(".trashinfo")) && !QFileInfo::exists(QDir(trash).filePath(name.chopped(10))))
+                info.remove(name);
+    });
+    runWithDialog(deleter, window, AVI_FROM_BIN, 1, {}, xpfiles::shellString(STRING_EMPTYING, "Emptying the Recycle Bin"), parent);
 }
 
 void restoreFromTrash(const QStringList &paths, QWidget *parent)
