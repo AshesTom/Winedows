@@ -4,7 +4,9 @@
 #include "xpfiles.h"
 #include "xpdialog.h"
 #include "xpprogram.h"
+#include "x11.h"
 
+#include <QAbstractNativeEventFilter>
 #include <QApplication>
 #include <QAudioBuffer>
 #include <QAudioBufferOutput>
@@ -422,6 +424,9 @@ MediaPlayer::MediaPlayer(const QStringList &files)
 
 MediaPlayer::~MediaPlayer()
 {
+    if (m_band && x11::connection())
+        x11::setProperty32(x11::root(), "_WIN4WINE_WMP_DESKBAND", XCB_ATOM_WINDOW, {});
+    delete m_band;
     QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
     settings.setValue(QStringLiteral("volume"), qRound(m_audio->volume() * 100));
     settings.setValue(QStringLiteral("mute"), m_audio->isMuted());
@@ -610,6 +615,10 @@ QHash<QString, QString> MediaPlayer::globals() const
         {QStringLiteral("mediacenter"), QStringLiteral("mediacenter")},
         {QStringLiteral("app"), QStringLiteral("app")},
         {QStringLiteral("helper"), QStringLiteral("helper")},
+        // taskbar.wsz's host, wmpband.dll
+        {QStringLiteral("Deskband"), QStringLiteral("deskband")},
+        // IWMPPlayerApplication: the player seen from the band's remote control
+        {QStringLiteral("playerapplication"), QStringLiteral("app")},
     };
 }
 
@@ -665,7 +674,9 @@ bool MediaPlayer::isMethod(const QString &object, const QString &name) const
         {QStringLiteral("player.network"), {QStringLiteral("getproxyname"), QStringLiteral("getproxysettings")}},
         {QStringLiteral("mediacenter"), {QStringLiteral("getnamedstring"), QStringLiteral("getdurationstringfromseconds")}},
         {QStringLiteral("app"), {QStringLiteral("gotoskinmode"), QStringLiteral("adjustleft"), QStringLiteral("configureplugins"),
-                                 QStringLiteral("gettimestring")}},
+                                 QStringLiteral("gettimestring"), QStringLiteral("switchtocontrol"), QStringLiteral("switchtoplayerapplication")}},
+        {QStringLiteral("deskband"), {QStringLiteral("restoreplayer"), QStringLiteral("oncontextmenu"), QStringLiteral("onmediachange"),
+                                      QStringLiteral("showpopupwindow"), QStringLiteral("gethtmlviewurl")}},
         {QStringLiteral("helper"), {QStringLiteral("viewfriendlyname"), QStringLiteral("viewpresetcount"), QStringLiteral("viewpresetname"),
                                     QStringLiteral("effectfriendlyname"), QStringLiteral("effectpresetname"), QStringLiteral("resolvedisplayview"),
                                     QStringLiteral("isvaliddisplayview"), QStringLiteral("getskinfile"), QStringLiteral("gettimestring"),
@@ -911,6 +922,11 @@ QVariant MediaPlayer::get(const QString &object, const QString &name)
     if (object == QLatin1String("app")) {
         if (name == QLatin1String("maximized"))
             return m_window && fullWindow()->isMaximized();
+        // (its video and visualization always have somewhere to go: the flyout)
+        if (name == QLatin1String("hasdisplay"))
+            return true;
+        if (name == QLatin1String("playerdocked"))
+            return !m_band.isNull();
         return m_app.value(name);
     }
     return {};
@@ -1159,6 +1175,13 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
     if (object == QLatin1String("app")) {
         if (name == QLatin1String("gettimestring"))
             return timeString(arguments.value(0).toDouble());
+        // switchToControl: the band keeps the video (in its flyout); switchToPlayerApplication: the player comes back
+        if (name == QLatin1String("switchtocontrol"))
+            return {};
+        if (name == QLatin1String("switchtoplayerapplication")) {
+            QTimer::singleShot(0, this, &MediaPlayer::restoreFromBand);
+            return {};
+        }
         if (name == QLatin1String("gotoskinmode")) {
             QTimer::singleShot(0, this, [this] { showSkin(currentSkin()); });
             return {};
@@ -1169,6 +1192,32 @@ QVariant MediaPlayer::call(const QString &object, const QString &name, const QVa
             QRect geometry = fullWindow()->geometry();
             geometry.setLeft(geometry.left() + dx);
             fullWindow()->setGeometry(geometry);
+        }
+        return {};
+    }
+    if (object == QLatin1String("deskband")) {
+        if (name == QLatin1String("restoreplayer")) {
+            // (not from inside the band's own handler, which it takes down)
+            QTimer::singleShot(0, this, &MediaPlayer::restoreFromBand);
+        } else if (name == QLatin1String("oncontextmenu")) {
+            // the band site's menu: the taskbar's
+            const QList<quint32> site = x11::property32(x11::root(), x11::atom("_WIN4WINE_WMP_BAND_SITE"));
+            if (!site.isEmpty()) {
+                xcb_client_message_event_t message{};
+                message.response_type = XCB_CLIENT_MESSAGE;
+                message.format = 32;
+                message.window = site.first();
+                message.type = x11::atom("_WIN4WINE_WMP_BAND_MENU");
+                xcb_send_event(x11::connection(), false, site.first(), XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<const char *>(&message));
+                xcb_flush(x11::connection());
+            }
+        } else if (name == QLatin1String("gethtmlviewurl")) {
+            return call(QStringLiteral("helper"), name, arguments);
+        } else if (name == QLatin1String("onmediachange")) {
+            QTimer::singleShot(0, this, &MediaPlayer::showToast);
+        } else if (name == QLatin1String("showpopupwindow")) {
+            const bool shown = arguments.value(0).toBool();
+            QTimer::singleShot(0, this, [this, shown] { showFlyout(shown); });
         }
         return {};
     }
@@ -1423,6 +1472,223 @@ void MediaPlayer::setPreference(const QString &name, const QString &value)
     settings.setValue(QStringLiteral("preferences/") + m_preferenceGroup + name, value);
 }
 
+// ---- the taskbar's toolbar ----
+
+namespace {
+
+// The bar's toolbar going away (unchecked, or the shell gone): the player comes back.
+class BandSiteEvents : public QAbstractNativeEventFilter
+{
+public:
+    BandSiteEvents(std::function<void()> gone, std::function<void(quint8)> key) : m_gone(std::move(gone)), m_key(std::move(key)) {}
+    bool nativeEventFilter(const QByteArray &type, void *message, qintptr *) override
+    {
+        if (type != "xcb_generic_event_t")
+            return false;
+        auto *event = static_cast<xcb_generic_event_t *>(message);
+        if ((event->response_type & 0x7f) == XCB_PROPERTY_NOTIFY) {
+            auto *property = reinterpret_cast<xcb_property_notify_event_t *>(event);
+            if (property->window == x11::root() && property->atom == x11::atom("_WIN4WINE_WMP_BAND_SITE"))
+                QTimer::singleShot(0, qApp, m_gone);
+        } else if ((event->response_type & 0x7f) == XCB_KEY_PRESS) {
+            const quint8 key = reinterpret_cast<xcb_key_press_event_t *>(event)->detail;
+            QTimer::singleShot(0, qApp, [this, key] { m_key(key); });
+        }
+        return false;
+    }
+
+private:
+    std::function<void()> m_gone;
+    std::function<void(quint8)> m_key;
+};
+
+} // namespace
+
+bool MediaPlayer::bandSite()
+{
+    return x11::connection() && !x11::property32(x11::root(), x11::atom("_WIN4WINE_WMP_BAND_SITE")).isEmpty();
+}
+
+// wmpband.dll loads res://wmploc/RT_TEXT/taskbar.wsz (vtaskbar.wsz on a vertical bar, which this
+// bar never is) unless HKCU\Software\Microsoft\MediaPlayer\TaskbarPlayer's HorizontalMode names
+// another skin; the player's own window leaves the taskbar while the band stands for it.
+void MediaPlayer::minimizeToBand(QWidget *window)
+{
+    if (m_band || !window)
+        return;
+    if (!bandSite()) {
+        minimizeDialog();
+        return;
+    }
+    const std::optional<wmpskin::Node> document = skin(QStringLiteral("taskbar.wsz"));
+    if (!document)
+        return;
+    if (!m_bandEvents) {
+        m_bandEvents = true;
+        qApp->installNativeEventFilter(new BandSiteEvents([this] {
+            if (m_band && !bandSite())
+                restoreFromBand();
+        }, [this](quint8 key) {
+            if (m_band && key == m_restoreKey)
+                restoreFromBand();
+        }));
+        x11::watchProperties(x11::root());
+    }
+    // The bar takes it in (its WMP9DeskBand child): a window no window manager handles, put out of
+    // sight until then.
+    auto *band = new wmp::SkinView(this, *document, QString());
+    band->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint | Qt::WindowDoesNotAcceptFocus);
+    band->windowRequest = [this](const QString &request) {
+        if (request.startsWith(QLatin1String("automenu:")) || request.startsWith(QLatin1String("menu:")))
+            showMenu(request.section(QLatin1Char(':'), 1));
+    };
+    band->setGeometry(QRect(QPoint(-10000, -10000), band->preferredSize()));
+    band->show();
+    band->start();
+    m_band = band;
+    m_bandFrom = window;
+    window->hide();
+    x11::setProperty32(x11::root(), "_WIN4WINE_WMP_DESKBAND", XCB_ATOM_WINDOW, {quint32(band->winId())});
+    // wmpband.dll: RegisterHotKey(MOD_CONTROL | MOD_ALT, 'P')
+    m_restoreKey = x11::grabKey(0x70 /* XK_p */, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
+}
+
+// A view's close() runs its onclose; its window goes with it.
+static void dismiss(QPointer<wmp::SkinView> &view)
+{
+    if (!view)
+        return;
+    view->close();
+    view->QWidget::close();
+    view.clear();
+}
+
+// A window of the band's above it (below it on a bar at the top), its left edge on the band's.
+wmp::SkinView *MediaPlayer::bandPopup(const QString &skinName)
+{
+    const std::optional<wmpskin::Node> document = skin(skinName);
+    if (!m_band || !document)
+        return nullptr;
+    auto *popup = new wmp::SkinView(this, *document, QString());
+    popup->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint | Qt::WindowDoesNotAcceptFocus);
+    popup->setAttribute(Qt::WA_ShowWithoutActivating);
+    popup->setAttribute(Qt::WA_DeleteOnClose);
+    // (the bar holds the band: X knows where it is, Qt does not)
+    const QRect band = x11::frameGeometry(m_band->winId());
+    const QSize size = popup->preferredSize();
+    const QScreen *screen = QGuiApplication::screenAt(band.center()) ? QGuiApplication::screenAt(band.center()) : QGuiApplication::primaryScreen();
+    const int y = band.center().y() > screen->geometry().center().y() ? band.top() - size.height() : band.bottom() + 1;
+    popup->setGeometry(QRect(QPoint(band.left(), y), size));
+    return popup;
+}
+
+void MediaPlayer::showToast()
+{
+    if (!m_band || m_flyout)
+        return;
+    if (!m_toast) {
+        m_toast = bandPopup(QStringLiteral("bugger.wsz"));
+        if (!m_toast)
+            return;
+        m_toastAlpha = 5;
+        m_toast->setWindowOpacity(m_toastAlpha / 255.0);
+        m_toast->show();
+        m_toast->start();
+    }
+    if (!m_toastFade.isActive() && m_toastStep == 0) {
+        m_toastFade.setInterval(25);
+        connect(&m_toastFade, &QTimer::timeout, this, [this] {
+            if (!m_toast) {
+                m_toastFade.stop();
+                return;
+            }
+            if (m_toastStep > 0) {
+                m_toastAlpha = m_toastAlpha > 230 ? 255 : m_toastAlpha + 25;
+                if (m_toastAlpha == 255)
+                    m_toastFade.stop();
+            } else if (m_toastAlpha < 30) {
+                m_toastFade.stop();
+                dismiss(m_toast);
+                return;
+            } else {
+                m_toastAlpha -= 25;
+            }
+            m_toast->setWindowOpacity(m_toastAlpha / 255.0);
+        });
+        m_toastTimer.setSingleShot(true);
+        connect(&m_toastTimer, &QTimer::timeout, this, [this] {
+            m_toastStep = -1;
+            m_toastFade.start();
+        });
+    }
+    m_toastStep = 1;
+    m_toastFade.start();
+    m_toastTimer.start(5000);
+}
+
+void MediaPlayer::showFlyout(bool shown)
+{
+    if (m_toast)
+        dismiss(m_toast);
+    if (!shown) {
+        if (m_flyout)
+            dismiss(m_flyout);
+        return;
+    }
+    if (m_flyout)
+        return;
+    m_flyout = bandPopup(QStringLiteral("flyout.wsz"));
+    if (!m_flyout)
+        return;
+    m_flyout->show();
+    m_flyout->start();
+}
+
+// Deskband.RestorePlayer (the band's Restore button, the logo's double click)
+void MediaPlayer::restoreFromBand()
+{
+    if (!m_band)
+        return;
+    if (m_toast)
+        dismiss(m_toast);
+    if (m_flyout)
+        dismiss(m_flyout);
+    x11::setProperty32(x11::root(), "_WIN4WINE_WMP_DESKBAND", XCB_ATOM_WINDOW, {});
+    x11::ungrabKey(m_restoreKey, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
+    m_restoreKey = 0;
+    m_band->deleteLater();
+    m_band.clear();
+    QWidget *window = m_bandFrom ? m_bandFrom.data() : fullWindow();
+    m_bandFrom.clear();
+    if (!window)
+        return;
+    window->showNormal();
+    window->raise();
+    window->activateWindow();
+}
+
+// wmp.dll shows dialog 1226 of wmploc.dll ("Mini-mode...", its animation AVI 1229) on minimizing
+// without the band, unless ShowMinimizeDialog (default 1) was cleared by "Don't show this message again"
+void MediaPlayer::minimizeDialog()
+{
+    QSettings settings(QStringLiteral("win4wine"), QStringLiteral("mediaplayer"));
+    if (!settings.value(QStringLiteral("ShowMinimizeDialog"), true).toBool() || !m_loc)
+        return;
+    QDialog dialog;
+    const xpdialog::Page page = xpdialog::build(*m_loc, 1226, &dialog);
+    dialog.setWindowTitle(page.caption.isEmpty() ? text(102) : page.caption);
+    QCheckBox *again = nullptr;
+    for (QWidget *control : page.controls) {
+        if (auto *box = qobject_cast<QCheckBox *>(control))
+            again = box;
+        else if (auto *button = qobject_cast<QPushButton *>(control))
+            QObject::connect(button, &QPushButton::clicked, &dialog, &QDialog::accept);
+    }
+    dialog.exec();
+    if (again && again->isChecked())
+        settings.setValue(QStringLiteral("ShowMinimizeDialog"), false);
+}
+
 // ---- the window ----
 
 bool MediaPlayer::eventFilter(QObject *watched, QEvent *event)
@@ -1438,6 +1704,15 @@ bool MediaPlayer::eventFilter(QObject *watched, QEvent *event)
     }
     const bool ours = watched == m_window || (m_skinWindow && watched == m_skinWindow) || (m_fullScreen && watched == m_fullScreen)
         || (m_menuFrame && watched == m_menuFrame);
+    // wmp.dll's sub_4b6384b1 on SW_SHOWMINNOACTIVE: the band's window takes the command (WM_USER)
+    if (ours && event->type() == QEvent::WindowStateChange && watched->isWidgetType()) {
+        auto *window = static_cast<QWidget *>(watched);
+        if (window->isWindow() && window->isMinimized() && window != m_fullScreen)
+            QTimer::singleShot(0, this, [this, window = QPointer<QWidget>(window)] {
+                if (window && window->isMinimized())
+                    minimizeToBand(window);
+            });
+    }
     if (m_autoHideBar && m_menuFrame && ours && (event->type() == QEvent::MouseMove || event->type() == QEvent::Enter)) {
         if (watched == m_window) {
             const QPoint at = m_window->mapFromGlobal(QCursor::pos());

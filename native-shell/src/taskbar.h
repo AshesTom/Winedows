@@ -33,6 +33,11 @@ class Taskbar : public QWidget
 public:
     Taskbar(WindowList *windows, Tray *tray);
     void placeOnScreen();
+    // Windows Media Player's band window came or went (_WIN4WINE_WMP_DESKBAND), or asks for the band's menu
+    void mediaBandChanged();
+    void showMediaBandMenu();
+    void mediaBandGone();
+    quint32 mediaWindow() const { return m_mediaWindow; }
     // A window's button on the screen; null when it has none shown
     QRect buttonRect(quint32 window) const;
 
@@ -182,6 +187,13 @@ private:
     QList<QuickItem> m_linksItems;
     QRect m_linksBand;
     QFileSystemWatcher m_linksWatcher;
+    // Windows Media Player's toolbar (wmpband.dll): while the player is minimized, its window for
+    // wmploc.dll's taskbar.wsz is a child of the bar, left of the notification area
+    QPointer<QWidget> m_mediaContainer;
+    quint32 m_mediaWindow = 0;
+    QRect m_mediaBand;
+    void publishMediaBandSite();
+    void releaseMediaWindow();
     // Hide inactive icons: when each icon last changed or was clicked, the ones hidden, the chevron
     // (TrayNotifyHoriz::Button) and whether it has them all shown
     QHash<quint32, qint64> m_trayActive;

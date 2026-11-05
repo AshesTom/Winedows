@@ -24,6 +24,12 @@ void watchProperties(xcb_window_t window);
 void sendToManager(xcb_window_t window, const char *type, const QList<quint32> &data);
 // A client's rectangle on the root with its frame (_NET_FRAME_EXTENTS); null if it has gone.
 QRect frameGeometry(xcb_window_t window);
+// The key of KEYSYM with MODIFIERS on the root, whatever Caps Lock and Num Lock: its presses come to
+// this client (RegisterHotKey). Returns its keycode, or 0 when no key has that keysym.
+xcb_keycode_t grabKey(quint32 keysym, quint16 modifiers);
+void ungrabKey(xcb_keycode_t key, quint16 modifiers);
+// WINDOW's parent; 0 if it has gone.
+xcb_window_t parent(xcb_window_t window);
 // Moves and sizes a client so that its frame fills OUTER (_NET_MOVERESIZE_WINDOW).
 void moveFrame(xcb_window_t window, const QRect &outer);
 // How long the user has not touched the keyboard or the mouse (MIT-SCREEN-SAVER); 0 if the server cannot tell.

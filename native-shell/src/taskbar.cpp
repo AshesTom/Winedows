@@ -47,6 +47,8 @@
 #include <QStandardPaths>
 #include <QToolTip>
 #include <QWheelEvent>
+#include <QAbstractNativeEventFilter>
+#include <QWindow>
 
 #include <functional>
 #include <iterator>
@@ -171,6 +173,42 @@ const int ICON_SHOW_DESKTOP = 3;
 const Part SIZING_BAR{QStringLiteral("taskbar"), QStringLiteral("sizingbarbottom"), {}, 1, {}};
 const Part GRIPPER{QStringLiteral("rebar"), QStringLiteral("gripper"), {}, 1, QStringLiteral("taskbar")};
 const int BAND_HEADER = 10, SIZING_BAR_HEIGHT = 4;    // explorer.exe's fourth icon, Show Desktop's
+
+// Windows Media Player's toolbar. wmpband.dll is a deskband inside explorer; here the player is a
+// program of its own, so the two speak through the root window: the bar puts its window in
+// _WIN4WINE_WMP_BAND_SITE while the toolbar is on (XP's player looks for the band's WMP9DeskBand
+// window in Shell_TrayWnd's rebar), the player puts its band window in _WIN4WINE_WMP_DESKBAND when
+// it minimizes to it, and sends _WIN4WINE_WMP_BAND_MENU for the band's right click (wmpband.dll has
+// no menu of its own: Deskband.OnContextMenu is the band site's).
+class MediaBandEvents : public QAbstractNativeEventFilter
+{
+public:
+    explicit MediaBandEvents(Taskbar *taskbar) : m_taskbar(taskbar) {}
+    bool nativeEventFilter(const QByteArray &type, void *message, qintptr *) override
+    {
+        if (type != "xcb_generic_event_t")
+            return false;
+        auto *event = static_cast<xcb_generic_event_t *>(message);
+        const int kind = event->response_type & 0x7f;
+        if (kind == XCB_PROPERTY_NOTIFY) {
+            auto *property = reinterpret_cast<xcb_property_notify_event_t *>(event);
+            if (property->window == x11::root() && property->atom == x11::atom("_WIN4WINE_WMP_DESKBAND"))
+                QTimer::singleShot(0, m_taskbar, &Taskbar::mediaBandChanged);
+        } else if (kind == XCB_DESTROY_NOTIFY) {
+            auto *destroyed = reinterpret_cast<xcb_destroy_notify_event_t *>(event);
+            if (m_taskbar && destroyed->window == m_taskbar->mediaWindow())
+                QTimer::singleShot(0, m_taskbar, &Taskbar::mediaBandGone);
+        } else if (kind == XCB_CLIENT_MESSAGE) {
+            auto *client = reinterpret_cast<xcb_client_message_event_t *>(event);
+            if (client->type == x11::atom("_WIN4WINE_WMP_BAND_MENU"))
+                QTimer::singleShot(0, m_taskbar, &Taskbar::showMediaBandMenu);
+        }
+        return false;
+    }
+
+private:
+    QPointer<Taskbar> m_taskbar;
+};
 const Part TASK_FLASH{QStringLiteral("taskband"), QStringLiteral("flashbutton"), {}, 1, {}};
 const Part BACKGROUND{QStringLiteral("taskbar"), QStringLiteral("backgroundbottom"), {}, 1, {}};
 const Part TRAY_BACKGROUND{QStringLiteral("traynotify"), QStringLiteral("background"), {}, 1, QStringLiteral("traynotifyhoriz")};
@@ -523,6 +561,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
             && settings.clock == m_settings.clock && settings.autoHide == m_settings.autoHide
             && settings.quickLaunch == m_settings.quickLaunch && settings.desktopBand == m_settings.desktopBand
             && settings.customToolbar == m_settings.customToolbar && settings.linksBand == m_settings.linksBand
+            && settings.mediaPlayerBand == m_settings.mediaPlayerBand
             && settings.locked == m_settings.locked
             && settings.onTop == m_settings.onTop
             && settings.quickLaunchText == m_settings.quickLaunchText && settings.quickLaunchTitle == m_settings.quickLaunchTitle
@@ -541,6 +580,7 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         loadDesktopBand();
         loadCustomToolbar();
         loadLinksBand();
+        publishMediaBandSite();
         setOnTop();
         updateTrayHiding();
         if (autoHide) {
@@ -586,6 +626,80 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     // bridge-wm and the session's supervisor know XP's taskbar by this class.
     x11::setString(winId(), "_WIN4WINE_CLASS", "Shell_TrayWnd");
     setOnTop();
+    if (x11::connection()) {
+        qApp->installNativeEventFilter(new MediaBandEvents(this));
+        x11::watchProperties(x11::root());
+        publishMediaBandSite();
+        mediaBandChanged();
+    }
+}
+
+void Taskbar::mediaBandGone()
+{
+    m_mediaWindow = 0;
+    delete m_mediaContainer;
+    relayout();
+    update();
+}
+
+void Taskbar::showMediaBandMenu()
+{
+    showTaskbarMenu(QCursor::pos(), false, true);
+}
+
+void Taskbar::publishMediaBandSite()
+{
+    if (!x11::connection())
+        return;
+    x11::setProperty32(x11::root(), "_WIN4WINE_WMP_BAND_SITE", XCB_ATOM_WINDOW,
+                       m_settings.mediaPlayerBand ? QList<quint32>{quint32(winId())} : QList<quint32>{});
+    if (!m_settings.mediaPlayerBand && m_mediaContainer) {
+        releaseMediaWindow();
+        relayout();
+        update();
+    }
+}
+
+// The player's window goes back to the root before its container goes, so that it is not destroyed
+// with it: the player takes it down itself.
+void Taskbar::releaseMediaWindow()
+{
+    if (m_mediaWindow && m_mediaContainer) {
+        // (checked: the player may have taken it down already)
+        xcb_connection_t *c = x11::connection();
+        xcb_discard_reply(c, xcb_unmap_window_checked(c, m_mediaWindow).sequence);
+        xcb_discard_reply(c, xcb_reparent_window_checked(c, m_mediaWindow, x11::root(), -10000, -10000).sequence);
+        xcb_flush(c);
+    }
+    delete m_mediaContainer;
+    m_mediaWindow = 0;
+}
+
+// The player's band window comes or goes. wmpband.dll shows its band in the rebar (RB_SHOWBAND 1)
+// for command 0x1001 and hides it (RB_SHOWBAND 0) for 0x1000: the band takes room only while there.
+void Taskbar::mediaBandChanged()
+{
+    const QList<quint32> window = x11::property32(x11::root(), x11::atom("_WIN4WINE_WMP_DESKBAND"));
+    const quint32 id = m_settings.mediaPlayerBand && !window.isEmpty() ? window.first() : 0;
+    // (X gives a new player the ids of one that went: the same id is the same window only while it is still ours)
+    if (id == m_mediaWindow && (!id || (m_mediaContainer && m_mediaContainer->windowHandle()
+                                        && x11::parent(id) == m_mediaContainer->windowHandle()->winId())))
+        return;
+    releaseMediaWindow();
+    m_mediaWindow = id;
+    if (id) {
+        // its end (the player gone without a word) frees the band
+        const quint32 mask = XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+        xcb_discard_reply(x11::connection(), xcb_change_window_attributes_checked(x11::connection(), id, XCB_CW_EVENT_MASK, &mask).sequence);
+        QWindow *foreign = QWindow::fromWinId(id);
+        // its size is the view's (taskbar.wsz: 170 x 25)
+        const QRect rect = x11::frameGeometry(id);
+        m_mediaContainer = QWidget::createWindowContainer(foreign, this);
+        m_mediaContainer->resize(rect.isValid() ? rect.size() : QSize(170, 25));
+        m_mediaContainer->show();
+    }
+    relayout();
+    update();
 }
 
 void Taskbar::themeChanged()
@@ -913,7 +1027,20 @@ void Taskbar::relayout()
                     chevronSize)
             : QRect(QPoint(m_trayRect.x() + first, (barHeight() - chevronSize.height()) / 2), chevronSize);
 
-    layoutButtons(bandStart, (m_chevronRect.isNull() || !renderer ? m_trayRect.x() : m_chevronRect.x()) - theme()->scaled(BAND_END));
+    int bandEnd = (m_chevronRect.isNull() || !renderer ? m_trayRect.x() : m_chevronRect.x()) - theme()->scaled(BAND_END);
+    // the media player's band, right of the task band, with a gripper of its own when unlocked
+    m_mediaBand = QRect();
+    if (m_mediaContainer) {
+        const QSize size = m_mediaContainer->size();
+        m_mediaBand = QRect(QPoint(bandEnd - size.width(), (barHeight() - size.height()) / 2), size);
+        m_mediaContainer->move(m_mediaBand.topLeft());
+        bandEnd = m_mediaBand.x() - theme()->scaled(QUICK_BAND_END);
+        if (header) {
+            m_grippers.append(QRect(bandEnd - header, 0, header, barHeight()));
+            bandEnd -= header;
+        }
+    }
+    layoutButtons(bandStart, bandEnd);
     m_tray->balloons()->iconsChanged();
 }
 
@@ -1959,6 +2086,19 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
             connect(links, &QAction::triggered, this, [](bool on) {
                 TaskbarSettings settings = TaskbarSettings::load();
                 settings.linksBand = on;
+                settings.save();
+            });
+            // the deskband wmpband.dll registers, by its name (its string 101)
+            QString mediaName = tr("Windows Media Player");
+            if (const auto band = xpfiles::resources(xpfiles::find(QStringLiteral("wmpband.dll"))))
+                if (const QString name = xpfiles::string(*band, 101); !name.isEmpty())
+                    mediaName = name;
+            auto *media = toolbars->addAction(mediaName);
+            media->setCheckable(true);
+            media->setChecked(m_settings.mediaPlayerBand);
+            connect(media, &QAction::triggered, this, [](bool on) {
+                TaskbarSettings settings = TaskbarSettings::load();
+                settings.mediaPlayerBand = on;
                 settings.save();
             });
             QAction *first = menu->actions().value(0);

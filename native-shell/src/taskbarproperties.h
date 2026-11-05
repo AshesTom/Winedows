@@ -34,6 +34,7 @@ struct TaskbarSettings
     bool desktopBand = false;   // the Toolbars menu's Desktop band
     QString customToolbar;      // the Toolbars menu's New Toolbar... folder
     bool linksBand = false;     // the Toolbars menu's Links band
+    bool mediaPlayerBand = false;   // the Toolbars menu's Windows Media Player (wmpband.dll's deskband)
     bool locked = true;
     int position = 0;   // Taskbar/Position: 0 bottom, 1 top (left and right are not laid out)
     int rows = 1;       // Taskbar/Rows: the bar's task rows

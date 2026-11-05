@@ -94,6 +94,7 @@ TaskbarSettings TaskbarSettings::load()
     loaded.desktopBand = settings.value(QStringLiteral("Taskbar/DesktopBand"), false).toBool();
     loaded.customToolbar = settings.value(QStringLiteral("Taskbar/CustomToolbar")).toString();
     loaded.linksBand = settings.value(QStringLiteral("Taskbar/LinksBand"), false).toBool();
+    loaded.mediaPlayerBand = settings.value(QStringLiteral("Taskbar/MediaPlayerBand"), false).toBool();
     loaded.locked = !settings.value(QStringLiteral("Taskbar/TaskbarSizeMove"), false).toBool();
     loaded.position = settings.value(QStringLiteral("Taskbar/Position"), 0).toInt();
     loaded.rows = qBound(1, settings.value(QStringLiteral("Taskbar/Rows"), 1).toInt(), 3);
@@ -131,6 +132,7 @@ void TaskbarSettings::save() const
     else
         settings.setValue(QStringLiteral("Taskbar/CustomToolbar"), customToolbar);
     settings.setValue(QStringLiteral("Taskbar/LinksBand"), linksBand);
+    settings.setValue(QStringLiteral("Taskbar/MediaPlayerBand"), mediaPlayerBand);
     settings.setValue(QStringLiteral("Taskbar/TaskbarSizeMove"), !locked);
     settings.setValue(QStringLiteral("Taskbar/Position"), position);
     settings.setValue(QStringLiteral("Taskbar/Rows"), qBound(1, rows, 3));

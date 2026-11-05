@@ -113,6 +113,55 @@ void sendToManager(xcb_window_t window, const char *type, const QList<quint32> &
     xcb_flush(connection());
 }
 
+// (Lock, and Mod2 for Num Lock as X servers set it up)
+static const quint16 IGNORED[] = {0, XCB_MOD_MASK_LOCK, XCB_MOD_MASK_2, XCB_MOD_MASK_LOCK | XCB_MOD_MASK_2};
+
+xcb_keycode_t grabKey(quint32 keysym, quint16 modifiers)
+{
+    const xcb_setup_t *setup = xcb_get_setup(connection());
+    const int count = setup->max_keycode - setup->min_keycode + 1;
+    xcb_generic_error_t *error = nullptr;
+    auto *mapping = xcb_get_keyboard_mapping_reply(connection(), xcb_get_keyboard_mapping(connection(), setup->min_keycode, count), &error);
+    free(error);
+    if (!mapping)
+        return 0;
+    const xcb_keysym_t *syms = xcb_get_keyboard_mapping_keysyms(mapping);
+    xcb_keycode_t key = 0;
+    for (int i = 0; i < count && !key; ++i)
+        for (int j = 0; j < mapping->keysyms_per_keycode && !key; ++j)
+            if (syms[i * mapping->keysyms_per_keycode + j] == keysym)
+                key = xcb_keycode_t(setup->min_keycode + i);
+    free(mapping);
+    if (!key)
+        return 0;
+    for (const quint16 ignored : IGNORED)
+        xcb_discard_reply(connection(), xcb_grab_key_checked(connection(), true, root(), modifiers | ignored, key,
+                                                             XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC).sequence);
+    xcb_flush(connection());
+    return key;
+}
+
+void ungrabKey(xcb_keycode_t key, quint16 modifiers)
+{
+    if (!key)
+        return;
+    for (const quint16 ignored : IGNORED)
+        xcb_ungrab_key(connection(), key, root(), modifiers | ignored);
+    xcb_flush(connection());
+}
+
+xcb_window_t parent(xcb_window_t window)
+{
+    xcb_generic_error_t *error = nullptr;
+    auto *tree = xcb_query_tree_reply(connection(), xcb_query_tree(connection(), window), &error);
+    free(error);
+    if (!tree)
+        return 0;
+    const xcb_window_t parent = tree->parent;
+    free(tree);
+    return parent;
+}
+
 QRect frameGeometry(xcb_window_t window)
 {
     xcb_generic_error_t *error = nullptr;

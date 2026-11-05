@@ -140,4 +140,23 @@ private:
     QString m_preferenceGroup;   // the skin's, for theme.loadPreference
     QTimer m_decay;
     QHash<QString, QString> m_skinNames;   // lower-case resource name -> as wmploc.dll has it
+    // The taskbar's toolbar (wmpband.dll): minimized, the player is wmploc.dll's taskbar.wsz in the
+    // bar when the bar has the toolbar on; without it, wmp.dll's dialog 1226 tells how to turn it on
+    QPointer<wmp::SkinView> m_band;
+    QPointer<QWidget> m_bandFrom;   // the window it stands for
+    bool m_bandEvents = false;
+    quint8 m_restoreKey = 0;   // "Windows Media Player Restore Key": Ctrl+Alt+P while the band is there
+    static bool bandSite();
+    void minimizeToBand(QWidget *window);
+    void restoreFromBand();
+    void minimizeDialog();
+    // Deskband.OnMediaChange: bugger.wsz above the band for 5 s, faded in and out (timers 1, 2 and 3 of
+    // wmpband.dll's: 5000 ms; 25 ms steps of 25 from 5 to 255 and back under 30); Deskband.ShowPopupWindow:
+    // flyout.wsz, the video or the visualization, above it
+    QPointer<wmp::SkinView> m_toast, m_flyout;
+    QTimer m_toastTimer, m_toastFade;
+    int m_toastAlpha = 0, m_toastStep = 0;
+    wmp::SkinView *bandPopup(const QString &skinName);
+    void showToast();
+    void showFlyout(bool shown);
 };
