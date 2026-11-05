@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "desktop.h"
 
+#include "fileops.h"
+
 #include "desktopicons.h"
 #include "session.h"
 #include "theme.h"
@@ -110,6 +112,11 @@ void Desktop::mouseDoubleClickEvent(QMouseEvent *event)
 
 void Desktop::keyPressEvent(QKeyEvent *event)
 {
-    if (!m_icons->key(event->key()))
+    // Ctrl+Z: the shell's undo stack, as the desktop's view passes it on
+    if (event->matches(QKeySequence::Undo)) {
+        fileops::UndoStack::instance()->undo(this);
+        return;
+    }
+    if (!m_icons->key(event->key(), event->modifiers()))
         QWidget::keyPressEvent(event);
 }

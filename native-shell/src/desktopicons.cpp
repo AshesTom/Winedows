@@ -521,14 +521,14 @@ void DesktopIcons::open(const Item &item)
         programs::open(item.path);
 }
 
-bool DesktopIcons::key(int key)
+bool DesktopIcons::key(int key, Qt::KeyboardModifiers modifiers)
 {
     if (m_selected < 0 || m_selected >= m_items.size())
         return false;
     if (key == Qt::Key_Return || key == Qt::Key_Enter)
         open(m_items[m_selected]);
     else if (key == Qt::Key_Delete)
-        trash(m_selected);
+        trash(m_selected, modifiers & Qt::ShiftModifier);
     else if (key == Qt::Key_F2)
         rename(m_selected);
     else
@@ -547,17 +547,19 @@ void DesktopIcons::rename(int index)
         return;
     const QString target = QFileInfo(item.path).absoluteDir().filePath(name);
     if (QFile::rename(item.path, target)) {
+        fileops::recordRename(item.path, target);
         QSettings places(placesPath(), QSettings::IniFormat);
         places.remove(placeKey(item.path));
         places.setValue(placeKey(target), item.place);
     }
 }
 
-void DesktopIcons::trash(int index)
+// The desktop's Delete: the shell's, which asks, shows its progress and can be undone; Shift for good
+void DesktopIcons::trash(int index, bool permanent)
 {
     const Item item = m_items[index];
     if (!item.trash && !item.shell)
-        QFile::moveToTrash(item.path);
+        fileops::remove({item.path}, permanent, m_desktop);
 }
 
 void DesktopIcons::arrange()
@@ -746,8 +748,11 @@ void DesktopIcons::showMenu(int index, QPoint global)
             makeShortcuts(paths, folder);
         });
     }
-    if (QAction *undo = items.value(CMD_UNDO))
-        undo->setEnabled(false);
+    if (QAction *undo = items.value(CMD_UNDO)) {
+        undo->setText(fileops::UndoStack::instance()->menuText());
+        undo->setEnabled(fileops::UndoStack::instance()->canUndo());
+        connect(undo, &QAction::triggered, this, [this] { fileops::UndoStack::instance()->undo(m_desktop); });
+    }
     menu->addSeparator();
     QMenu *create = menu->addMenu(tr("Ne&w"));
     create->addAction(fileicons::shell(fileicons::Folder), tr("&Folder"), this, [this, folder] {

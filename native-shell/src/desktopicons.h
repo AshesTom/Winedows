@@ -37,7 +37,7 @@ public:
     void move(QPoint at);
     void release();
     void doubleClick(QPoint at);
-    bool key(int key);
+    bool key(int key, Qt::KeyboardModifiers modifiers = {});
 
 private:
     struct Item
@@ -58,7 +58,7 @@ private:
     QPoint freeCell(const QList<Item> &taken) const;
     void open(const Item &item);
     void rename(int index);
-    void trash(int index);
+    void trash(int index, bool permanent = false);
     void arrange();
     void arrangeBy(int column);
     void savePlace(const Item &item);
