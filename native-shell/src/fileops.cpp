@@ -21,6 +21,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QProgressBar>
+#include <QRegularExpression>
 #include <QPushButton>
 #include <QSettings>
 #include <QStandardPaths>
@@ -36,6 +37,40 @@ namespace fileops {
 namespace {
 
 const qint64 CHUNK = 1 << 20;
+const int STRING_COPY_PLATE = 4178;
+
+// The copy engine's name for a copy in its own folder (sub_3006d1c7): "Copy () of " (4178) before
+// NAME, or NAME itself when it already starts as the template does up to its "(". Then
+// PathYetAnotherMakeUniqueName (sub_30030889): first without the "()" and the space before it
+// ("Copy of a.txt"), then 2, 3… in the first parentheses holding only digits ("Copy (2) of a.txt").
+QString copyName(const QString &folder, const QString &name)
+{
+    const QString plate = xpfiles::shellString(STRING_COPY_PLATE, "Copy () of ");
+    const qsizetype open = plate.indexOf(QLatin1Char('('));
+    const QString pattern = open > 0 && name.startsWith(plate.left(open + 1)) ? name : plate + name;
+    const QDir dir(folder);
+    QString first = pattern;
+    if (qsizetype empty = pattern.indexOf(QLatin1String("()")); empty >= 0) {
+        qsizetype length = 2;
+        if (empty > 0 && pattern.at(empty - 1) == QLatin1Char(' ')) {
+            --empty;
+            ++length;
+        }
+        first.remove(empty, length);
+    }
+    if (!QFileInfo::exists(dir.filePath(first)))
+        return first;
+    static const QRegularExpression digits(QStringLiteral("\\(([0-9]*)\\)"));
+    const QRegularExpressionMatch match = digits.match(pattern);
+    if (!match.hasMatch())
+        return freeName(folder, name);   // " (%d)" before the extension
+    for (int number = 2; number < 1000; ++number) {
+        const QString candidate = pattern.left(match.capturedStart(1)) + QString::number(number) + pattern.mid(match.capturedEnd(1));
+        if (!QFileInfo::exists(dir.filePath(candidate)))
+            return candidate;
+    }
+    return freeName(folder, name);
+}
 
 // The work behind a progress dialog, off the GUI thread
 class Job : public QThread
@@ -88,7 +123,7 @@ protected:
             const QString target = m_targets.isEmpty() ? QDir(m_target).filePath(QFileInfo(source).fileName()) : m_targets.value(i);
             if (QFileInfo(target).absoluteFilePath() == QFileInfo(source).absoluteFilePath()) {
                 if (m_action == Action::Copy) {
-                    const QString copy = QDir(m_target).filePath(freeName(m_target, QFileInfo(source).fileName()));
+                    const QString copy = QDir(m_target).filePath(copyName(m_target, QFileInfo(source).fileName()));
                     copyItem(source, copy);
                     done(source, copy);
                 }
