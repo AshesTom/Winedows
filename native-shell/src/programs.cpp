@@ -4,14 +4,22 @@
 #include "filebrowser.h"
 #include "fileops.h"
 #include "session.h"
+#include "contexthelp.h"
+#include "fileicons.h"
+#include "xpdialog.h"
+#include "xpfiles.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QXmlStreamReader>
 #include <QDir>
+#include <QCheckBox>
 #include <QDialog>
+#include <QFileDialog>
+#include <QTreeWidget>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -80,6 +88,7 @@ Program toProgram(const QString &path, const QHash<QString, QString> &values)
                                                 values.value(QStringLiteral("Comment"))));
     program.icon = values.value(QStringLiteral("Icon"));
     program.categories = values.value(QStringLiteral("Categories")).split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    program.mimeTypes = values.value(QStringLiteral("MimeType")).split(QLatin1Char(';'), Qt::SkipEmptyParts);
     // Without its field codes: nothing is being opened with it.
     QString exec = values.value(QStringLiteral("Exec"));
     exec.remove(QRegularExpression(QStringLiteral("\\s%[A-Za-z]")));
@@ -286,7 +295,19 @@ QList<Program> allPrograms()
     return all;
 }
 
-std::optional<Program> chooseProgram(const QString &path, QWidget *parent)
+namespace {
+
+// shell32's Open With: dialog 1063 for a file of a known type, 1070 (with a description for the new
+// type) for one of none
+const int DIALOG_OPEN_WITH = 1063, DIALOG_OPEN_WITH_NEW = 1070, STRING_RECOMMENDED = 29952, STRING_OTHER = 29953;
+enum { ID_FILE_ICON = 12297, ID_FILE = 13582, ID_PROGRAMS = 13829, ID_ALWAYS = 13577, ID_BROWSE = 13581, ID_DESCRIPTION = 13574 };
+// its aHelpIds table in shell32 (0x7c9de730), with windows.hlp
+const QList<QPair<int, int>> HELP_OPEN_WITH = {
+    {12297, 4789}, {12291, 4789}, {13582, -1}, {13576, 4788}, {13574, 4788}, {13829, 4789}, {13577, 4794}, {13575, 4790},
+    {13581, 4790}, {13585, 3001}};
+
+// Qt's own list, without the user's shell32
+std::optional<Program> chooseInList(const QString &path, QWidget *parent)
 {
     QDialog dialog(parent);
     dialog.setWindowTitle(QObject::tr("Open With - %1").arg(QFileInfo(path).fileName()));
@@ -324,6 +345,167 @@ std::optional<Program> chooseProgram(const QString &path, QWidget *parent)
     if (list->count())
         list->setCurrentRow(0);
     dialog.exec();
+    return chosen;
+}
+
+bool fits(const Program &program, const QStringList &types)
+{
+    return std::any_of(types.cbegin(), types.cend(), [&](const QString &type) { return program.mimeTypes.contains(type); });
+}
+
+QStringList typesOf(const QString &path)
+{
+    const QMimeType type = QMimeDatabase().mimeTypeForFile(path);
+    return QStringList{type.name()} + type.allAncestors();
+}
+
+} // namespace
+
+QList<Program> recommendedFor(const QString &path)
+{
+    const QStringList types = typesOf(path);
+    QList<Program> out;
+    for (const Program &program : allPrograms())
+        if (fits(program, types))
+            out.append(program);
+    return out;
+}
+
+std::optional<Program> chooseProgram(const QString &path, QWidget *parent, bool alwaysFixed)
+{
+    const auto shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
+    if (!shell32)
+        return chooseInList(path, parent);
+    const QMimeType type = QMimeDatabase().mimeTypeForFile(path);
+    const bool unknown = type.isDefault();
+    QDialog dialog(parent);
+    dialog.setWindowFlag(Qt::WindowContextHelpButtonHint, true);
+    const xpdialog::Page page = xpdialog::build(*shell32, unknown ? DIALOG_OPEN_WITH_NEW : DIALOG_OPEN_WITH, &dialog);
+    if (page.controls.isEmpty())
+        return chooseInList(path, parent);
+    dialog.setWindowTitle(page.caption);
+    contexthelp::attach(page, HELP_OPEN_WITH);
+    if (auto *icon = qobject_cast<QLabel *>(page.controls.value(ID_FILE_ICON)))
+        icon->setPixmap(fileicons::forFile(QFileInfo(path)).pixmap(32, 32));
+    if (auto *file = qobject_cast<QLabel *>(page.controls.value(ID_FILE)))
+        file->setText(QFileInfo(path).fileName());
+    // The programs: a tree view of two parents, Recommended Programs (those whose MimeType holds the
+    // file's type or one it comes from) and Other Programs, without lines or buttons (the template's
+    // TVS_SHOWSELALWAYS only), each program with its small icon
+    QWidget *place = page.controls.value(ID_PROGRAMS);
+    // (without TVS_HASLINES or TVS_HASBUTTONS: no branches drawn)
+    struct Tree : QTreeWidget
+    {
+        using QTreeWidget::QTreeWidget;
+        void drawBranches(QPainter *, const QRect &, const QModelIndex &) const override {}
+    };
+    auto *tree = new Tree(&dialog);
+    if (place) {
+        tree->setGeometry(place->geometry());
+        place->hide();
+    }
+    tree->setHeaderHidden(true);
+    tree->setRootIsDecorated(false);
+    tree->setIconSize(QSize(16, 16));
+    tree->setIndentation(19);
+    const QStringList types = typesOf(path);
+    QList<Program> programs = allPrograms();
+    const auto parent_ = [&](int id, const char *fallback) {
+        auto *item = new QTreeWidgetItem(tree, {xpfiles::shellString(id, fallback)});
+        item->setFlags(Qt::ItemIsEnabled);
+        item->setExpanded(true);
+        return item;
+    };
+    QTreeWidgetItem *recommended = parent_(STRING_RECOMMENDED, "Recommended Programs:");
+    QTreeWidgetItem *other = parent_(STRING_OTHER, "Other Programs:");
+    QList<QTreeWidgetItem *> firsts;
+    for (qsizetype i = 0; i < programs.size(); ++i) {
+        const Program &program = programs.at(i);
+        auto *item = new QTreeWidgetItem(fits(program, types) ? recommended : other, {program.name});
+        item->setIcon(0, iconOf(program));
+        item->setData(0, Qt::UserRole, int(i));
+        item->setToolTip(0, program.comment);
+    }
+    // XP leaves out an empty parent
+    if (!recommended->childCount()) {
+        delete recommended;
+        recommended = nullptr;
+    }
+    if (!other->childCount()) {
+        delete other;
+        other = nullptr;
+    }
+    for (int i = 0; i < tree->topLevelItemCount(); ++i)
+        tree->topLevelItem(i)->setExpanded(true);
+    if (tree->topLevelItemCount() && tree->topLevelItem(0)->childCount())
+        tree->setCurrentItem(tree->topLevelItem(0)->child(0));
+    tree->show();
+    // Always use: on for a type of none, and fixed on from a file's Change...
+    auto *always = qobject_cast<QCheckBox *>(page.controls.value(ID_ALWAYS));
+    if (always) {
+        always->setChecked(unknown || alwaysFixed);
+        always->setEnabled(!alwaysFixed);
+    }
+    std::optional<Program> chosen;
+    const auto accept = [&] {
+        QTreeWidgetItem *item = tree->currentItem();
+        const QVariant index = item ? item->data(0, Qt::UserRole) : QVariant();
+        if (!index.isValid())
+            return;
+        chosen = programs.value(index.toInt());
+        dialog.accept();
+    };
+    if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(1))) {
+        ok->setDefault(true);
+        QObject::connect(ok, &QPushButton::clicked, &dialog, accept);
+    }
+    if (auto *cancel = qobject_cast<QPushButton *>(page.controls.value(2)))
+        QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(tree, &QTreeWidget::itemDoubleClicked, &dialog, accept);
+    // Browse...: a program file, then in Other Programs and chosen
+    if (auto *browse = qobject_cast<QPushButton *>(page.controls.value(ID_BROWSE)))
+        QObject::connect(browse, &QPushButton::clicked, &dialog, [&] {
+            const QString file = QFileDialog::getOpenFileName(&dialog, browse->text().remove(QLatin1Char('&')).remove(QStringLiteral("...")),
+                                                              QStringLiteral("/usr/bin"));
+            if (file.isEmpty())
+                return;
+            Program program;
+            program.name = QFileInfo(file).fileName();
+            program.command = {file};
+            programs.append(program);
+            if (!other)
+                other = parent_(STRING_OTHER, "Other Programs:");
+            auto *item = new QTreeWidgetItem(other, {program.name});
+            item->setData(0, Qt::UserRole, int(programs.size() - 1));
+            other->setExpanded(true);
+            tree->setCurrentItem(item);
+        });
+    dialog.exec();
+    if (chosen && always && always->isChecked() && !alwaysFixed && !chosen->id.isEmpty()) {
+        if (!unknown) {
+            setDefaultFor(path, *chosen);
+        } else if (const QString suffix = QFileInfo(path).suffix().toLower(); !suffix.isEmpty()) {
+            // XP makes a type of the extension, named by the description (its "XYZQ File" without
+            // one): a shared-mime-info type of the user's for it, then the program its default
+            auto *description = qobject_cast<QLineEdit *>(page.controls.value(ID_DESCRIPTION));
+            const QString name = description && !description->text().trimmed().isEmpty()
+                ? description->text().trimmed() : QObject::tr("%1 File").arg(suffix.toUpper());
+            const QString type = QStringLiteral("application/x-win4wine-") + suffix;
+            const QString mime = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/mime");
+            QDir().mkpath(mime + QStringLiteral("/packages"));
+            QFile file(mime + QStringLiteral("/packages/win4wine-") + suffix + QStringLiteral(".xml"));
+            if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                file.write(QStringLiteral("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                                          "<mime-info xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\">\n"
+                                          "  <mime-type type=\"%1\">\n    <comment>%2</comment>\n    <glob pattern=\"*.%3\"/>\n"
+                                          "  </mime-type>\n</mime-info>\n")
+                               .arg(type, name.toHtmlEscaped(), suffix.toHtmlEscaped()).toUtf8());
+                file.close();
+                QProcess::execute(QStringLiteral("update-mime-database"), {mime});
+                QProcess::startDetached(QStringLiteral("xdg-mime"), {QStringLiteral("default"), chosen->id, type});
+            }
+        }
+    }
     return chosen;
 }
 

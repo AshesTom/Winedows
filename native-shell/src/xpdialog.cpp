@@ -223,9 +223,22 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
                 widget = edit;
             }
         } else if (className.compare(QLatin1String("Link Window"), Qt::CaseInsensitive) == 0 || className.compare(QLatin1String("SysLink"), Qt::CaseInsensitive) == 0) {
-            QString words = text;
-            words.remove(QRegularExpression(QStringLiteral("</?[Aa][^>]*>")));
+            // its <A> parts as links: underlined, in COLOR_HOTLIGHT (Luna's 0, 0, 128), the rest as text
+            QString words;
+            static const QRegularExpression anchor(QStringLiteral("<[Aa]([^>]*)>(.*?)</[Aa]>"));
+            qsizetype at = 0;
+            for (auto it = anchor.globalMatch(text); it.hasNext();) {
+                const QRegularExpressionMatch match = it.next();
+                words += text.mid(at, match.capturedStart() - at).toHtmlEscaped();
+                static const QRegularExpression idAttribute(QStringLiteral("ID=\\\"([^\\\"]*)\\\""), QRegularExpression::CaseInsensitiveOption);
+                const QString id = idAttribute.match(match.captured(1)).captured(1);
+                words += QStringLiteral("<a href=\"%1\" style=\"color:#000080; text-decoration:underline\">%2</a>")
+                             .arg(id.toHtmlEscaped(), match.captured(2).toHtmlEscaped());
+                at = match.capturedEnd();
+            }
+            words += text.mid(at).toHtmlEscaped();
             auto *label = new QLabel(words, parent);
+            label->setTextFormat(Qt::RichText);
             label->setWordWrap(true);
             label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
             widget = label;

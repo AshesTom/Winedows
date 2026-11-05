@@ -3118,20 +3118,24 @@ void FileBrowser::fillItemMenu(QMenu *menu, const QStringList &selected)
         });
         menu->addAction(tr("Open Command &Prompt Here"), this, [path = selected.first()] { programs::openCommandPrompt(path); });
     }
+    // Open With: a submenu of the type's programs and Choose Program..., or "Open With..." (9016)
+    // when the type has none, as shell32's Open With menu has it
     if (!folderItem && selected.size() == 1) {
-        QMenu *with = menu->addMenu(tr("Open &With"));
-        const QList<programs::Program> all = programs::allPrograms();
-        const int shown = qMin<int>(12, int(all.size()));
-        for (int i = 0; i < shown; ++i)
-            with->addAction(programs::iconOf(all[i]), all[i].name, this,
-                            [path = selected.first(), program = all[i]] { programs::launchWith(program, {path}); });
-        if (shown)
-            with->addSeparator();
-        with->addAction(tr("&Choose Program..."), this, [path = selected.first(), this] {
+        const QString path = selected.first();
+        const auto choose = [path, this] {
             if (const auto program = programs::chooseProgram(path, this))
                 programs::launchWith(*program, {path});
-        });
-        with->setEnabled(!all.isEmpty());
+        };
+        const QList<programs::Program> recommended = programs::recommendedFor(path);
+        if (recommended.isEmpty()) {
+            menu->addAction(xpfiles::shellString(9016, "Open With..."), this, choose);
+        } else {
+            QMenu *with = menu->addMenu(xpfiles::shellString(5376, "Open Wit&h"));
+            for (const programs::Program &program : recommended)
+                with->addAction(programs::iconOf(program), program.name, this, [path, program] { programs::launchWith(program, {path}); });
+            with->addSeparator();
+            with->addAction(xpfiles::shellString(5378, "&Choose Program..."), this, choose);
+        }
     }
     // What the Picture and Fax Viewer adds for pictures, in its words
     if (selectedPictures().size() == selected.size()) {

@@ -17,6 +17,7 @@ struct Program
     QString comment;      // its Comment, which XP's Start menu shows as the item's infotip
     QStringList command;
     QStringList categories;
+    QStringList mimeTypes;  // its MimeType: the types it says it opens
 };
 
 // Read each time: the Start menu has what is installed when it opens.
@@ -34,7 +35,9 @@ void launchWith(const Program &program, const QStringList &files);
 // All installed desktop entries, deduplicated by id and sorted by name.
 QList<Program> allPrograms();
 // XP's Open With dialog: returns the chosen program (without starting it), or nullopt.
-std::optional<Program> chooseProgram(const QString &path, QWidget *parent);
+std::optional<Program> chooseProgram(const QString &path, QWidget *parent, bool alwaysFixed = false);
+// The programs whose MimeType holds PATH's type or one it comes from: Open With's recommended ones.
+QList<Program> recommendedFor(const QString &path);
 // Makes PROGRAM the default for PATH's MIME type through xdg-mime.
 void setDefaultFor(const QString &path, const Program &program);
 // Forget the Start menu's launch counts (Customize Start Menu's Clear List).

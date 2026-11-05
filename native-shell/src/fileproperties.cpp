@@ -410,7 +410,7 @@ void show(const QStringList &paths, QWidget *parent)
             change->setEnabled(true);
             QLabel *opens = label(OPENS), *opensIcon = label(OPENS_ICON);
             QObject::connect(change, &QPushButton::clicked, dialog, [dialog, path = first.absoluteFilePath(), opens, opensIcon] {
-                const auto chosen = programs::chooseProgram(path, dialog);
+                const auto chosen = programs::chooseProgram(path, dialog, true);
                 if (!chosen)
                     return;
                 if (opens)
