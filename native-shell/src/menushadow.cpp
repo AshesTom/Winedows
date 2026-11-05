@@ -222,6 +222,9 @@ private:
         // XP's Start panel clears CS_DROPSHADOW while it shows (docs/reverse-status.md, section 13).
         if (qstrcmp(widget->metaObject()->className(), "StartPanel") == 0)
             return false;
+        // Balloons have none either (the user's choice for this shell)
+        if (qstrcmp(widget->metaObject()->className(), "BalloonWindow") == 0)
+            return false;
         return true;
     }
 
