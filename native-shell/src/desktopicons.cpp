@@ -622,6 +622,8 @@ void DesktopIcons::showMenu(int index, QPoint global)
                     FileBrowser::open(path == QLatin1String("::my-computer") ? places::Search
                                                                             : QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
                 });
+            if (path == QLatin1String("::my-computer"))
+                menu->addAction(FileBrowser::manageText(), this, [] { FileBrowser::manageComputer(); });
             // My Computer's Map Network Drive and Disconnect Network Drive (menu 225), greyed as in folder windows
             if (path == QLatin1String("::my-computer")) {
                 menu->addSeparator();

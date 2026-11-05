@@ -71,7 +71,6 @@
 #include <QScrollArea>
 #include <QSortFilterProxyModel>
 #include <QSettings>
-#include <QSysInfo>
 #include <unistd.h>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -2454,7 +2453,7 @@ void FileBrowser::addVirtualHeader(const QString &text)
 
 void FileBrowser::fillNetwork()
 {
-    addVirtualHeader(tr("Network Places"));
+    addVirtualHeader(xpfiles::shellString(4263, "Local Network"));
     const QString folder = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Network");
     QDir().mkpath(folder);
     const QFileInfoList entries = QDir(folder).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name);
@@ -2701,7 +2700,15 @@ void FileBrowser::customizeFolder()
     dialog.exec();
 }
 
-// My Computer's Manage: the desktop's system monitor when it has one, otherwise a summary sheet.
+// My Computer's Manage: XP's runs compmgmt.msc, this the desktop's system monitor when it has one. Its words are
+// mycomput.dll's string 400, which HIVECLS.INF gives the verb.
+QString FileBrowser::manageText()
+{
+    static const std::optional<w4w::PeResources> mycomput = xpfiles::resources(xpfiles::find(QStringLiteral("mycomput.dll")));
+    const QString text = mycomput ? xpfiles::string(*mycomput, 400) : QString();
+    return text.isEmpty() ? QStringLiteral("Mana&ge") : text;
+}
+
 void FileBrowser::manageComputer()
 {
     for (const char *name : {"plasma-systemmonitor", "gnome-system-monitor", "ksysguard", "xfce4-taskmanager"})
@@ -2709,18 +2716,6 @@ void FileBrowser::manageComputer()
             QProcess::startDetached(monitor, {});
             return;
         }
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Computer Management"));
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(tr("System: %1").arg(QSysInfo::prettyProductName()), &dialog));
-    layout->addWidget(new QLabel(tr("Machine: %1").arg(QSysInfo::machineHostName()), &dialog));
-    for (const QStorageInfo &disk : QStorageInfo::mountedVolumes())
-        if (disk.isValid() && disk.isReady() && !disk.isReadOnly())
-            layout->addWidget(new QLabel(tr("%1: %2 free of %3").arg(disk.rootPath(), xpSize(disk.bytesAvailable()), xpSize(disk.bytesTotal())), &dialog));
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    dialog.exec();
 }
 
 void FileBrowser::activate(const QModelIndex &index)
@@ -2791,7 +2786,6 @@ void FileBrowser::updatePane()
             {xpfiles::shellString(STRING_SYSTEM_INFO, "View system information"), fileicons::shell(fileicons::SystemInfo), [] { controlpanel::open(QStringLiteral("system")); }},
             {xpfiles::shellString(STRING_ADD_REMOVE, "Add or remove programs"), fileicons::shell(fileicons::AddRemove), [] { controlpanel::open(QStringLiteral("programs")); }},
             {xpfiles::shellString(STRING_CHANGE, "Change a setting"), fileicons::shell(fileicons::ControlPanel), [this] { navigate(places::ControlPanel); }},
-            {tr("Manage"), fileicons::shell(fileicons::Computer), [this] { manageComputer(); }},
         }});
         others.tasks = {place(documents), place(places::ControlPanel)};
         details.tasks = {{places::title(places::Computer), {}, {}, true}, {tr("System Folder"), {}, {}}};
@@ -2804,11 +2798,11 @@ void FileBrowser::updatePane()
         groups.append(tasks);
         others.tasks = {place(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)), place(documents), place(places::Computer)};
     } else if (m_location == places::Network) {
-        groups.append({tr("Network Tasks"), true, {
-            {tr("Add a network place"), fileicons::shell(fileicons::Folder), [this] { addNetworkPlace(); }},
-            {tr("View network connections"), fileicons::shell(fileicons::ControlPanel), [] { applets::open(QStringLiteral("network")); }},
+        groups.append({xpfiles::shellString(31343, "Network Tasks"), true, {
+            {xpfiles::shellString(31347, "Add a network place"), fileicons::shell(fileicons::Folder), [this] { addNetworkPlace(); }},
+            {xpfiles::shellString(31345, "View network connections"), fileicons::shell(fileicons::ControlPanel), [] { applets::open(QStringLiteral("network")); }},
         }});
-        others.tasks = {place(places::Computer), place(documents)};
+        others.tasks = {place(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)), place(places::Computer), place(documents)};
         m_pane->setGroups(groups);
         return;
     } else if (m_location.startsWith(places::ControlPanel + QLatin1Char('/'))) {
@@ -2912,7 +2906,6 @@ void FileBrowser::updatePane()
         if (m_location != documents)
             others.tasks.append(place(documents));
         others.tasks.append(place(places::Computer));
-        others.tasks.append({tr("Local Disk"), fileicons::shell(fileicons::Drive), [this] { navigate(QStringLiteral("/")); }});
         others.tasks.append(place(places::Network));
         // XP's Details: a picture's preview over its name, then "Label: value" lines
         const auto labelled = [](int label, const char *fallback, const QString &value) {
@@ -3080,7 +3073,6 @@ void FileBrowser::showContextMenu(QPoint global, bool onItem)
             menu->addAction(tr("P&roperties"), this, &FileBrowser::recycleBinProperties);
         if (m_location == places::Computer) {
             menu->addSeparator();
-            menu->addAction(tr("&Manage"), this, &FileBrowser::manageComputer);
             menu->addAction(tr("P&roperties"), this, [] { controlpanel::open(QStringLiteral("system")); });
         }
     }

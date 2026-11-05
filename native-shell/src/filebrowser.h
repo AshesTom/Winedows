@@ -56,6 +56,9 @@ class FileBrowser : public QMainWindow
 public:
     // A window on LOCATION, a path or a virtual folder; the one already there if there is.
     static void open(const QString &location);
+    // My Computer's Manage verb
+    static QString manageText();
+    static void manageComputer();
     // Folder Options changed: every window reads them again.
     static void settingsChanged();
 
@@ -120,7 +123,6 @@ private:
     void showProperties();
     void recycleBinProperties();
     void customizeFolder();
-    void manageComputer();
     void addNetworkPlace();
     void fillNetwork();
     void moveOrCopyTo(bool move);

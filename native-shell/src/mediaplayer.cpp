@@ -1905,7 +1905,13 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         auto *searchRow = new QHBoxLayout;
         auto *search = new QLineEdit(library);
         search->setPlaceholderText(QObject::tr("Search"));
-        auto *newAuto = new QPushButton(QObject::tr("New Auto Playlist..."), library);
+        // wmploc.dll's words: New Auto Playlist (14163), Auto Playlists (2507), the criteria's caption (14168);
+        // its editor's rules (any attribute, restrictions) are not there, only title, artist and album contains
+        const auto loc = [this](int id, const char *fallback) {
+            const QString words = text(id);
+            return words.isEmpty() ? QObject::tr(fallback) : words;
+        };
+        auto *newAuto = new QPushButton(loc(14163, "New Auto Playlist") + QStringLiteral("..."), library);
         searchRow->addWidget(search, 1);
         searchRow->addWidget(newAuto);
         auto *split = new QSplitter(Qt::Horizontal, library);
@@ -1941,7 +1947,7 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
             return item;
         };
         addCategory(QObject::tr("All Music"), 0, QString());
-        auto *automatic = addCategory(QObject::tr("Auto Playlists"), 6, QString());
+        auto *automatic = addCategory(loc(2507, "Auto Playlists"), 6, QString());
         addCategory(QObject::tr("Recently Added"), 1, QString(), automatic);
         addCategory(QObject::tr("Recently Played"), 4, QString(), automatic);
         addCategory(QObject::tr("Most Played"), 5, QString(), automatic);
@@ -2011,10 +2017,11 @@ QWidget *MediaPlayer::taskWidget(QWidget *parent)
         };
         QObject::connect(categories, &QTreeWidget::currentItemChanged, library, [applyFilter] { applyFilter(); });
         QObject::connect(search, &QLineEdit::textChanged, library, [applyFilter] { applyFilter(); });
-        QObject::connect(newAuto, &QPushButton::clicked, library, [library, automatic, addCategory, applyFilter] {
+        QObject::connect(newAuto, &QPushButton::clicked, library, [library, automatic, addCategory, applyFilter, loc] {
             QDialog dialog(library);
-            dialog.setWindowTitle(QObject::tr("New Auto Playlist"));
+            dialog.setWindowTitle(loc(14163, "New Auto Playlist"));
             auto *form = new QFormLayout(&dialog);
+            form->addRow(new QLabel(loc(14168, "Create an auto playlist that includes the following:"), &dialog));
             auto *name = new QLineEdit(&dialog);
             auto *title = new QLineEdit(&dialog);
             auto *artist = new QLineEdit(&dialog);

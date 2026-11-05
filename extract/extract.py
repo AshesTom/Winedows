@@ -121,6 +121,8 @@ FILES = {
     **dict.fromkeys(('hivecls.inf', 'zipfldr.dll', 'msiexec.exe'), 'filetypes'),
     # Image thumbnails and previews in folder windows (and Windows Picture and Fax Viewer).
     'shimgvw.dll': 'shell',
+    # My Computer's Manage verb: its words, string 400 (HIVECLS.INF names it)
+    'mycomput.dll': 'shell',
     # Printers and Faxes: XP's shell32 enumerates printers and follows them
     # through printui.dll, which Wine has as stubs (prefix/extras.py PRINTERS).
     'printui.dll': 'printers',

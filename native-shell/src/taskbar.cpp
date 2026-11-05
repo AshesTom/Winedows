@@ -87,6 +87,10 @@ enum {
 // DragOver's delays (sub_102f663): 250 ms on a button, 500 on the band's empty part, then 10 s more
 const int DRAG_BUTTON_MS = 250, DRAG_BAND_MS = 500, DRAG_AGAIN_MS = 10000;
 const int STRING_TASKBAR = 518, STRING_NO_DROP = 711;
+// A window that wants attention: explorer lights its button on user32's HSHELL_FLASH (0x8006) and unlights it on
+// HSHELL_REDRAW (sub_1004730); user32 flashes ForegroundFlashCount times at CursorBlinkRate, 3 and 530 ms in
+// hivedef.inf. That the button then stays lit is XP's behaviour as seen, not read.
+const int FLASH_MS = 530, FLASH_COUNT = 3;
 const int TRAY_COLLAPSE_MS = 5000;
 // (once the desktop is up: XP posts it from the tray's creation)
 const int START_BALLOON_DELAY_MS = 1500;
@@ -484,6 +488,13 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
         else
             m_scrollRepeat.stop();
     });
+    m_flashTimer.setInterval(FLASH_MS);
+    connect(&m_flashTimer, &QTimer::timeout, this, [this] {
+        m_flashOn = !m_flashOn;
+        if (++m_flashToggles >= 2 * FLASH_COUNT)
+            m_flashTimer.stop();
+        update();
+    });
 
     m_autoHideTimer.setInterval(500);
     connect(&m_autoHideTimer, &QTimer::timeout, this, &Taskbar::checkAutoHide);
@@ -666,8 +677,12 @@ void Taskbar::attentionChanged()
     for (const Task &task : m_windows->tasks())
         if (task.attention)
             attention.insert(task.window);
+    bool started = false;
     for (xcb_window_t window : std::as_const(attention))
-        if (!m_attention.contains(window) && window != m_windows->active()) {
+        if (!m_attention.contains(window)) {
+            started = true;
+            if (window == m_windows->active())
+                continue;
             m_unhidFor.insert(window);
             if (m_hidden)
                 setHidden(false);
@@ -675,13 +690,14 @@ void Taskbar::attentionChanged()
     // the flag goes with the flashing
     m_unhidFor &= attention;
     m_attention = attention;
-    if (attention.isEmpty()) {
+    // a window that starts wanting attention flashes them again from lit
+    if (attention.isEmpty() || started) {
         m_flashTimer.stop();
         m_flashOn = true;
-    } else if (!m_flashTimer.isActive()) {
-        m_flashOn = true;
-        m_flashTimer.start();
+        m_flashToggles = 0;
     }
+    if (started)
+        m_flashTimer.start();
 }
 
 void Taskbar::setHidden(bool hidden, bool animate)
@@ -960,7 +976,9 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     const auto ideal = [&](int count) {
         if (!count)
             return maxWidth;
-        return qMin(maxWidth, effectiveBand / count - (count > 1 ? spacing : 0));
+        // over the bar's rows, as many to a row as the last row needs
+        const int columns = (count + rows - 1) / rows;
+        return qMin(maxWidth, band / columns - (columns > 1 ? spacing : 0));
     };
     int width = maxWidth;
     for (int pass = 0; pass <= programs.size(); ++pass) {
@@ -1043,7 +1061,7 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
     };
     m_scrollRect = m_scrollUp = m_scrollDown = QRect();
     m_scrollPages = 1;
-    if (total > effectiveBand && count > 0) {
+    if (count > 0 && (rows == 1 ? total > band : count > qMax(1, (band + spacing) / qMax(1, step)) * rows)) {
         const int scrollbar = theme()->scaled(renderer ? SCROLL_WIDTH : CLASSIC_SCROLL_WIDTH);
         const int view = qMax(0, band - scrollbar);
         int columns = qMax(1, view / step);
@@ -1059,8 +1077,9 @@ void Taskbar::layoutButtons(int bandStart, int bandEnd)
         place(columns, m_scrollPage);
     } else {
         m_scrollPage = 0;
-        m_scrollColumns = qMax(1, count);
-        place(m_scrollColumns, 0);
+        int columns = qMax(1, qMin(count, (band + spacing) / qMax(1, step)));
+        m_scrollColumns = columns * rows;
+        place(columns, 0);
     }
 }
 

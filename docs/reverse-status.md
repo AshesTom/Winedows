@@ -84,7 +84,7 @@ Binaries: `wmp.dll`, `wmploc.dll`, `wmplayer.exe`. Port: [`wmplayer.cpp`](../nat
 
 | Original feature | Status |
 |---|---|
-| Media Library (tree, lists, search, auto playlists), native code in `wmp.dll` | Partial: the task scans the Music folder into a tree (All Music, Auto Playlists with Recently Added, Recently Played and Most Played, Artist, Album) and a Title/Artist/Album/Length list, filters with the Search box and plays on double-click; plays are counted and timed in the player's settings. Auto Playlists can also hold named queries (title/artist/album contains), saved in `library/autoPlaylists`; wmp.dll's own columns and query syntax are not read |
+| Media Library (tree, lists, search, auto playlists), native code in `wmp.dll` | Partial: the task scans the Music folder into a tree (All Music, Auto Playlists with Recently Added, Recently Played and Most Played, Artist, Album) and a Title/Artist/Album/Length list, filters with the Search box and plays on double-click; plays are counted and timed in the player's settings. Auto Playlists can also hold named queries (title/artist/album contains), saved in `library/autoPlaylists`, under `wmploc.dll`'s words (New Auto Playlist 14163, Auto Playlists 2507, 14168); its editor's other attributes and restrictions (14170), wmp.dll's own columns and query syntax are not there |
 | Media Guide and Radio Tuner (RT_HTML pages of `wmploc.dll`; the online services are gone) | Partial: their offline RT_HTML pages (`OFFLINE_MEDIAGUIDE.HTM`, `OFFLINE_RADIOTUNER.HTM`) are read from `wmploc.dll` and shown in a text browser, with their words and pictures; their scripts and online links are not run |
 | Copy from CD, Copy to CD or Device, CD and DVD playback | Partial: the CD task page says to insert an audio CD; no drive is enumerated and no copy/playback is done |
 | Premium Services | Partial: its `OFFLINE_SUBSCRIPTIONS.HTM` page is read and shown; its scripts and online links are not run |
@@ -179,7 +179,7 @@ and `DesktopIcons::showMenu` in [`desktopicons.cpp`](../native-shell/src/desktop
 | Undo (shell32's undo stack) | Partial: a rename can be undone from Edit > Undo or the background menu (`QFileSystemModel::fileRenamed` remembers the two names); deletes, copies and moves are not in the stack |
 | Full New submenu (Shortcut, Briefcase, Bitmap Image, WordPad Document, Wave Sound, Compressed Folder… from the registry's ShellNew keys) | Partial: Folder, Shortcut (a `.lnk` to a chosen file), Text Document, Bitmap Image (1 x 1 BMP), WordPad Document (empty RTF), Wave Sound (44-byte header), Briefcase (a folder) and Compressed Folder (an empty ZIP) are there; the registry's ShellNew keys are not read and a shortcut is still a link |
 | Auto Arrange in folder windows | Partial: View > Auto Arrange and Align to Grid are checkable and saved as `folder/autoArrange` and `folder/alignToGrid`; with Auto Arrange on icons stay on their grid, off an icon view can be dragged about, and Align to Grid snaps them (positions are not kept) |
-| My Computer: Manage | Partial: the System Tasks' Manage and the background menu open the desktop's system monitor (plasma-systemmonitor, gnome-system-monitor, ksysguard or xfce4-taskmanager), or a summary sheet of the system and mounted volumes; XP's Computer Management tree is not there |
+| My Computer: Manage (HIVECLS.INF: the CLSID's `shell\Manage` verb, words `mycomput.dll,-400`, `mmc.exe /s compmgmt.msc`) | Partial: the desktop's My Computer icon has Manage after Search..., in `mycomput.dll`'s words (extracted from now on; "Mana&ge" until then); it opens the desktop's system monitor (plasma-systemmonitor, gnome-system-monitor, ksysguard or xfce4-taskmanager) when there is one. XP's Computer Management is not there. XP has no Manage in the My Computer window's tasks or background menu |
 | Recycle Bin Properties | Partial: File > Properties or the background menu opens a sheet with "Display delete confirmation dialog" (`fileops::remove` reads it); the drives' quota pages are not there |
 | Real `.lnk` shortcuts | Partial: `fileops::shortcutTarget` reads the Shell Link header, LinkInfo local base path/common suffix or relative path, and opening/resolving the icon uses it; a drive letter is mapped through the Wine prefix's `dosdevices` (`$WINEPREFIX`, else `~/.wine`), and a target on a drive that is not there resolves to nothing; `fileops::createShortcut` writes a Shell Link with LinkInfo's local base path. Its target ID list, relative path and extra data are not written |
 
@@ -210,11 +210,11 @@ Binary: `shimgvw.dll`. Port: `pictures::Viewer` in [`pictures.cpp`](../native-sh
 | Original feature | Status |
 |---|---|
 | Print (Photo Printing Wizard) | Partial: `photowiz.dll` is extracted for its strings and the viewer shows a wizard of its own with Picture Selection (all the folder's pictures, check marks), Printing Options (printer and paper), Layout Selection (full page, 2x2, 3x3, 4x4, Wallet, Contact sheet) and a progress dialog, printing each chosen picture on the page. photowiz.dll's own dialogs 200/201 are not read, but the layout page draws a preview of the chosen grid with the first picture |
-| Help (`ImgPrev.chm`) | Partial: the Help button runs XP's own `ImgPrev.chm` through Wine's `hh.exe` when both are there, otherwise it shows a shortcut summary; the CHM is not read by the port itself |
-| Annotations (409–415, 402, 422, 419) | Partial: a pencil button opens a small annotation bar with Pen, Highlighter, Eraser, Line, Rectangle, Ellipse, Arrow, Text, Stamp (Approved/Draft/Reviewed/Confidential), Undo, Clear and Save; the ink is a transparent image over the picture and Save writes a `(annotated)` copy. XP's own save prompt is missing |
+| Help (`ImgPrev.chm`, named in `shimgvw.dll`) | Partial: the Help button runs XP's own `ImgPrev.chm` through Wine's `hh.exe` when `wine` is on the PATH, otherwise it shows a shortcut summary; the CHM is not read by the port itself |
+| Annotations (409–415, 402, 422, 419) | Partial: for a TIFF, a pencil button opens an annotation bar with XP's tools by their tooltips 409 to 415: Freehand, Highlight, Straight Line, Frame, Solid Rectangle, Text and Attached Note (dragged out, the words typed after); then Undo, Clear and Save, which XP does not have. The ink is a transparent image over the picture and Save writes a `(annotated)` copy, not XP's annotations in the TIFF. Select (402), Delete Annotation and Edit Annotation Info (493, 494), the line width check (219), the save prompt (216), the colours and widths are missing or not measured |
 | Margins and remembered window size | Done: measured on XP's own viewer (`shimgvw.dll` run with rundll32 in Wine): the 22-pixel toolbar sits 8 rows above the client's bottom and the picture's frame 8 rows above the toolbar; on closing XP writes `Bounds` (a RECT) and `Maximize` (a DWORD) under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\ShellImageView`, here `Viewer/Bounds` and `Viewer/Maximize` in `native-explorer.conf` |
 | Animated images (GIF) | Done (played at their own frame delays) |
-| Comparison with the real viewer running in Wine | Done: `shimgvw.dll`'s own viewer ran under Wine (32-bit `rundll32.exe`); its default window is 3/4 of the screen wide and 2/3 high, its toolbar has the same 12 buttons for a bitmap, and it shows no annotation pencil for BMP (TIFF only). The port now opens at that size and hides the pencil for non-TIFF. The title bar itself is the window manager's in both |
+| Comparison with the real viewer running in Wine | Done: `shimgvw.dll`'s own viewer ran under Wine (32-bit `rundll32.exe`); its default window was 3/4 of the screen wide and 2/3 high (not read in `shimgvw.dll`: it may be Wine's own default size), its toolbar has the same 12 buttons for a bitmap, and it shows no annotation pencil for BMP (TIFF only). The port now opens at that size and hides the pencil for non-TIFF. The title bar itself is the window manager's in both |
 
 ---
 
@@ -261,7 +261,7 @@ Binaries: `explorer.exe`, `user32.dll`. Port: [`taskbar.cpp`](../native-shell/sr
 
 | Original feature | Status |
 |---|---|
-| The taskband's extra rows when buttons do not fit even grouped, and its scrollbar's thumb and tracks | Done: `Taskbar/Rows` gives the bar two or three rows, the buttons wrap, and the scrollbar's thumb and tracks page it |
+| The taskband's extra rows when buttons do not fit even grouped, and its scrollbar's thumb and tracks | Partial: `Taskbar/Rows` gives the bar two or three rows of 30 (not measured on XP), the buttons fill a row before the next, and the scrollbar's thumb and tracks page it. XP's scrollbar moves one row at a time (`sub_102de3e`); here a page is all the rows. The thumb's size is not measured |
 | Group visuals checked against XP | Not possible in Wine: XP's explorer never groups there (no exe path for a window) |
 
 
@@ -312,7 +312,7 @@ Binaries: `explorer.exe`, `shell32.dll`, `comctl32.dll` 6.0, `luna.msstyles`. Po
 
 | Original feature | Status |
 |---|---|
-| Task pane entries XP adds: Publish this folder to the Web, Local Disk / Documents / My Network Places in Other Places | Partial: folder windows' Other Places now add Local Disk and My Network Places, and My Network Places is a folder of local network places, GVfs mounts and RT_HTML-free links; Publish this folder to the Web is missing |
+| Task pane entries XP adds: Publish this folder to the Web, Local Disk / Documents / My Network Places in Other Places | Partial: folder windows' Other Places end with My Network Places, and My Network Places is a folder (Local Network, 4263) of the places added with Network Tasks (31343: Add a network place 31347, View network connections 31345) and GVfs mounts, its Other Places Desktop, My Computer and My Documents. Set up a home or small office network (31349), View workgroup computers (31351), Entire Network (9218) and Publish this folder to the Web are missing |
 | The caption under XP's own uxtheme | Not comparable in Wine (Wine draws it) |
 | The toolbar band's remaining differences | Wine's text rendering in the capture; not addressed |
 
@@ -408,7 +408,7 @@ browseui's code; their gaps are in sections 3, 8, 10 and 11.
 
 | Area | Original feature | Evidence |
 |---|---|---|
-| Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx | `sub_1002819`; user32 not reversed | Partial: the button alternates its flash state every 500 ms while `_NET_WM_STATE_DEMANDS_ATTENTION` is set; 500 ms is user32's default, not read from it |
+| Taskbar | Flashing buttons on and off: explorer only mirrors HSHELL_FLASH and HSHELL_REDRAW, the rhythm is user32's FlashWindowEx | `sub_1002819`; user32 not reversed | Partial: when a window starts wanting attention (`_NET_WM_STATE_DEMANDS_ATTENTION`) its button flashes 3 times at 530 ms, `ForegroundFlashCount` and `CursorBlinkRate` in `hivedef.inf` (`sub_1004730` lights the button on HSHELL_FLASH, 0x8006), then stays lit until the window is used; that it ends lit is XP as seen, not read |
 | Taskbar | Closing a hung window from its button's menu: 603 and 604 ("…unable to respond… force it to close?") | Strings 603, 604; Close is `EndTask(window, FALSE, Ctrl held)` (`sub_102fea7`), and a hung window's button menu offers only Close (`sub_102ed44`, `IsHungAppWindow`). Done: Ctrl+Close kills the X client at once; Close sends WM_CLOSE and, if the window is still there after HungAppTimeout (5000, `hivedef.inf`) with no window of its own owned by it (a save question), asks 603 and 604 (Yes/No) under the window's title. X has no IsHungAppWindow; `_NET_WM_PING` is not used. The hung window's reduced menu is missing |
 | Taskbar | Moving and sizing the bar, one auto-hide bar per screen edge (705) | String 705 |
 | Taskbar | The taskband's extra rows (a resized bar) | Section 6 |

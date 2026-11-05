@@ -31,12 +31,8 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QCloseEvent>
-#include <QCoreApplication>
-#include <cmath>
 #include <QImageReader>
 #include <QSettings>
-#include <QImageWriter>
-#include <QInputDialog>
 #include <QImageWriter>
 #include <QInputDialog>
 #include <QKeyEvent>
@@ -559,43 +555,31 @@ Viewer::Viewer(const QString &path)
     auto *annotationRow = new QHBoxLayout(m_annotationBar);
     annotationRow->setContentsMargins(4, 2, 4, 2);
     annotationRow->setSpacing(4);
-    const auto addAnnotation = [this, annotationRow](const QString &text, int tool, const QColor &colour, int width) {
+    // XP's annotation tools for a TIFF, by shimgvw.dll's tooltips 409 to 415; its Select (402) and the
+    // annotations' own menu (493, 494) are not there. The colours and widths are not measured.
+    const auto addAnnotation = [this, annotationRow](int string, const char *fallback, int tool, const QColor &colour, int width) {
         auto *button = new QToolButton(m_annotationBar);
-        button->setText(text);
+        const QString tip = viewerString(string, fallback);
+        button->setText(QString(tip).remove(QLatin1String("New ")).remove(QLatin1String(" Annotation")));
+        button->setToolTip(tip);
         button->setAutoRaise(true);
         annotationRow->addWidget(button);
         connect(button, &QToolButton::clicked, this, [this, tool, colour, width] {
             m_inkTool = tool;
             m_inkColour = colour;
             m_inkWidth = width;
-            m_inkEraser = tool == InkEraser;
         });
     };
-    addAnnotation(tr("Pen"), InkPen, Qt::black, 3);
-    addAnnotation(tr("Highlighter"), InkHighlighter, QColor(255, 220, 0, 150), 12);
-    addAnnotation(tr("Eraser"), InkEraser, Qt::transparent, 20);
-    addAnnotation(tr("Line"), InkLine, Qt::black, 3);
-    addAnnotation(tr("Rectangle"), InkRectangle, Qt::black, 3);
-    addAnnotation(tr("Ellipse"), InkEllipse, Qt::black, 3);
-    addAnnotation(tr("Arrow"), InkArrow, Qt::black, 3);
-    addAnnotation(tr("Text"), InkText, Qt::black, 3);
-    auto *stamp = new QToolButton(m_annotationBar);
-    stamp->setText(tr("Stamp"));
-    annotationRow->addWidget(stamp);
-    connect(stamp, &QToolButton::clicked, this, [this] {
-        bool ok = false;
-        const QString text = QInputDialog::getItem(this, tr("Stamp"), tr("Stamp:"),
-                                                   {tr("Approved"), tr("Draft"), tr("Reviewed"), tr("Confidential")}, 0, true, &ok);
-        if (ok && !text.isEmpty()) {
-            m_inkTool = InkStamp;
-            m_inkStamp = text;
-            m_inkColour = QColor(200, 0, 0);
-            m_inkWidth = 3;
-            m_inkEraser = false;
-        }
-    });
+    addAnnotation(409, "New Freehand Annotation", InkFreehand, Qt::black, 3);
+    addAnnotation(410, "New Highlight Annotation", InkHighlight, QColor(255, 255, 0, 128), 12);
+    addAnnotation(411, "New Straight Line Annotation", InkLine, Qt::black, 3);
+    addAnnotation(412, "New Frame Annotation", InkFrame, Qt::black, 3);
+    addAnnotation(413, "New Solid Rectangle Annotation", InkSolidRectangle, Qt::black, 3);
+    addAnnotation(414, "New Text Annotation", InkText, Qt::black, 3);
+    addAnnotation(415, "New Attached Note Annotation", InkNote, Qt::black, 3);
     auto *undo = new QToolButton(m_annotationBar);
     undo->setText(tr("Undo"));
+    undo->setAutoRaise(true);
     annotationRow->addWidget(undo);
     connect(undo, &QToolButton::clicked, this, [this] {
         if (m_inkUndo.isEmpty())
@@ -605,6 +589,7 @@ Viewer::Viewer(const QString &path)
     });
     auto *clear = new QToolButton(m_annotationBar);
     clear->setText(tr("Clear"));
+    clear->setAutoRaise(true);
     annotationRow->addWidget(clear);
     connect(clear, &QToolButton::clicked, this, [this] {
         if (m_ink.isNull())
@@ -617,6 +602,7 @@ Viewer::Viewer(const QString &path)
     });
     auto *save = new QToolButton(m_annotationBar);
     save->setText(tr("Save"));
+    save->setAutoRaise(true);
     annotationRow->addWidget(save);
     connect(save, &QToolButton::clicked, this, &Viewer::saveAnnotations);
     m_annotationBar->adjustSize();
@@ -941,23 +927,13 @@ void Viewer::command(int id)
         break;
     }
     case VIEW_HELP: {
-        // XP's own ImgPrev.chm, through Wine's Help viewer when both are there; otherwise the
-        // shortcut summary.
+        // XP's own ImgPrev.chm (shimgvw.dll names it), through Wine's hh.exe when Wine is there, as the tour
+        // runs; otherwise the shortcut summary.
         const QString chm = xpfiles::find(QStringLiteral("imgprev.chm"));
-        QString wine = QStandardPaths::findExecutable(QStringLiteral("wine"));
-        if (wine.isEmpty()) {
-            for (const QString &candidate : {QStringLiteral("/../../wine-install/bin/wine"), QStringLiteral("/../../wine-build/loader/wine")}) {
-                const QString path = QDir::cleanPath(QCoreApplication::applicationDirPath() + candidate);
-                if (QFileInfo(path).isExecutable()) {
-                    wine = path;
-                    break;
-                }
-            }
-        }
+        const QString wine = QStandardPaths::findExecutable(QStringLiteral("wine"));
         if (!chm.isEmpty() && !wine.isEmpty()) {
-            QString path = QStringLiteral("Z:") + chm;
-            path.replace(QLatin1Char('/'), QLatin1Char('\\'));
-            QProcess::startDetached(wine, {QStringLiteral("C:\\windows\\syswow64\\hh.exe"), path}, QDir::homePath());
+            QProcess::startDetached(wine, {QStringLiteral("hh.exe"), QStringLiteral("Z:") + QString(chm).replace(QLatin1Char('/'), QLatin1Char('\\'))},
+                                    QDir::homePath());
             break;
         }
         QMessageBox::information(this, viewerString(VIEW_HELP, "Help"),
@@ -1082,7 +1058,7 @@ void Viewer::paintEvent(QPaintEvent *)
     painter.drawImage(imageRect(), m_image);
     if (!m_ink.isNull())
         painter.drawImage(imageRect(), m_ink);
-    if (m_inkDrawing && (m_inkTool == InkLine || m_inkTool == InkRectangle || m_inkTool == InkEllipse || m_inkTool == InkArrow)) {
+    if (m_inkDrawing && m_inkTool != InkFreehand) {
         painter.save();
         painter.setClipRect(QRect(0, 0, width(), height() - m_toolbar->height() - margin - ShellTheme::instance()->scaled(PICTURE_TOOLBAR_GAP)));
         const QRect rect = imageRect();
@@ -1114,24 +1090,26 @@ void Viewer::drawInkShape(QPainter &painter, const QPointF &from, const QPointF 
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     painter.setBrush(Qt::NoBrush);
+    const QRectF box = QRectF(from, to).normalized();
     switch (m_inkTool) {
     case InkLine:
         painter.drawLine(from, to);
         break;
-    case InkRectangle:
-        painter.drawRect(QRectF(from, to).normalized());
+    case InkFrame:
+        painter.drawRect(box);
         break;
-    case InkEllipse:
-        painter.drawEllipse(QRectF(from, to).normalized());
+    case InkSolidRectangle:
+    case InkHighlight:
+        painter.fillRect(box, m_inkColour);
         break;
-    case InkArrow: {
-        painter.drawLine(from, to);
-        const double angle = std::atan2(to.y() - from.y(), to.x() - from.x());
-        const double length = qMax(8.0, m_inkWidth * 4.0);
-        for (double side : {-0.5, 0.5})
-            painter.drawLine(to, to - QPointF(std::cos(angle + side) * length, std::sin(angle + side) * length));
+    case InkText:
+    case InkNote:
+        // the box the words go in; a note is a yellow sheet
+        if (m_inkTool == InkNote)
+            painter.fillRect(box, QColor(255, 255, 225));
+        painter.setPen(QPen(Qt::gray, 1, Qt::DotLine));
+        painter.drawRect(box);
         break;
-    }
     default:
         break;
     }
@@ -1201,9 +1179,8 @@ void Viewer::mousePressEvent(QMouseEvent *event)
             m_inkUndo.removeFirst();
         m_inkFrom = m_inkTo = m_inkLast = inkPoint(event->position().toPoint());
         m_inkDrawing = true;
-        if (m_inkTool == InkPen || m_inkTool == InkHighlighter || m_inkTool == InkEraser) {
+        if (m_inkTool == InkFreehand) {
             QPainter painter(&m_ink);
-            painter.setCompositionMode(m_inkEraser ? QPainter::CompositionMode_Clear : QPainter::CompositionMode_SourceOver);
             painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             painter.drawPoint(m_inkFrom);
         }
@@ -1223,29 +1200,21 @@ void Viewer::mouseReleaseEvent(QMouseEvent *event)
 {
     if (m_annotating && m_inkDrawing && event->button() == Qt::LeftButton) {
         m_inkDrawing = false;
-        if (m_inkTool == InkText) {
+        const QRectF box = QRectF(m_inkFrom, m_inkTo).normalized();
+        if (m_inkTool == InkText || m_inkTool == InkNote) {
             bool ok = false;
-            const QString text = QInputDialog::getText(this, tr("Text"), tr("Text:"), QLineEdit::Normal, QString(), &ok);
+            const QString text = QInputDialog::getMultiLineText(this, viewerString(m_inkTool == InkText ? 414 : 415, ""), QString(), QString(), &ok);
             if (ok && !text.isEmpty()) {
                 QPainter painter(&m_ink);
-                QFont font(QStringLiteral("Tahoma"));
-                font.setPointSizeF(qMax(8.0, m_inkWidth * 3.0));
-                painter.setFont(font);
+                if (m_inkTool == InkNote)
+                    painter.fillRect(box, QColor(255, 255, 225));
+                painter.setFont(QFont(QStringLiteral("Arial"), 12));
                 painter.setPen(m_inkColour);
-                painter.drawText(m_inkFrom, text);
+                painter.drawText(box.adjusted(2, 2, -2, -2), Qt::TextWordWrap, text);
+            } else {
+                m_ink = m_inkUndo.takeLast();
             }
-        } else if (m_inkTool == InkStamp) {
-            QPainter painter(&m_ink);
-            QFont font(QStringLiteral("Tahoma"));
-            font.setPointSizeF(qMax(9.0, m_inkWidth * 4.0));
-            font.setBold(true);
-            painter.setFont(font);
-            const QFontMetrics metrics(font);
-            const QRect box(QPoint(int(m_inkFrom.x()), int(m_inkFrom.y())), metrics.size(Qt::TextSingleLine, m_inkStamp) + QSize(16, 10));
-            painter.setPen(QPen(m_inkColour, 2));
-            painter.drawRect(box);
-            painter.drawText(box, Qt::AlignCenter, m_inkStamp);
-        } else if (m_inkTool != InkPen && m_inkTool != InkHighlighter && m_inkTool != InkEraser) {
+        } else if (m_inkTool != InkFreehand) {
             QPainter painter(&m_ink);
             drawInkShape(painter, m_inkFrom, m_inkTo);
         }
@@ -1259,9 +1228,8 @@ void Viewer::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_annotating && m_inkDrawing && (event->buttons() & Qt::LeftButton)) {
         const QPointF at = inkPoint(event->position().toPoint());
-        if (m_inkTool == InkPen || m_inkTool == InkHighlighter || m_inkTool == InkEraser) {
+        if (m_inkTool == InkFreehand) {
             QPainter painter(&m_ink);
-            painter.setCompositionMode(m_inkEraser ? QPainter::CompositionMode_Clear : QPainter::CompositionMode_SourceOver);
             painter.setPen(QPen(m_inkColour, m_inkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             painter.drawLine(m_inkLast, at);
             m_inkLast = at;

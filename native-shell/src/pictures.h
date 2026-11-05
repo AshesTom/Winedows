@@ -137,7 +137,8 @@ private:
     void toggleAnnotations(bool on);
     void saveAnnotations();
     QPointF inkPoint(QPoint at) const;
-    enum InkTool { InkPen, InkHighlighter, InkEraser, InkLine, InkRectangle, InkEllipse, InkArrow, InkText, InkStamp };
+    // the TIFF annotation kinds: Freehand follows the mouse, the others are dragged out from corner to corner
+    enum InkTool { InkFreehand, InkHighlight, InkLine, InkFrame, InkSolidRectangle, InkText, InkNote };
     void drawInkShape(QPainter &painter, const QPointF &from, const QPointF &to) const;
 
     QStringList m_paths;
@@ -161,10 +162,9 @@ private:
     QImage m_ink;
     QPointF m_inkFrom, m_inkTo, m_inkLast;
     int m_inkWidth = 3;
-    int m_inkTool = InkPen;
-    bool m_inkEraser = false, m_inkDrawing = false;
+    int m_inkTool = InkFreehand;
+    bool m_inkDrawing = false;
     QColor m_inkColour = Qt::black;
-    QString m_inkStamp;
     QList<QImage> m_inkUndo;
 };
 
