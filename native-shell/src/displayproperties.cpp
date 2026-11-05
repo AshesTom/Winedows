@@ -7,6 +7,7 @@
 #include "x11.h"
 #include "session.h"
 #include "sessiondialog.h"
+#include "contexthelp.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
@@ -63,6 +64,30 @@ const int DIALOG_DESKTOP = 29952;
 // Customize Desktop: shell32's Desktop Items sheet, its General page (the four icons' check boxes, the list of
 // icons, Change Icon and Restore Default, the cleanup) and its Web page
 const int DIALOG_DESKTOP_ITEMS = 29953, DIALOG_DESKTOP_WEB = 29954, STRING_DESKTOP_ITEMS = 30371;
+
+// The aHelpIds tables of themeui.dll's pages and of shell32's Desktop pages, shown with display.hlp
+// on WM_HELP and WM_CONTEXTMENU: each control and its help number, -1 for none.
+const QString DISPLAY_HLP = QStringLiteral("display.hlp");
+const QList<QPair<int, int>> HELP_THEMES = {   // 0x5ba67130, themeui, dialog 1000
+    {1103, 51190}, {1101, 51191}, {1102, 51192}, {1104, -1}, {1105, 51191}, {1106, 51190}, {1107, 51196},
+    {1108, 51197}};
+const QList<QPair<int, int>> HELP_APPEARANCE = {   // 0x5ba621a8, themeui, dialog 1001
+    {1110, 51220}, {1111, 51221}, {1112, 51221}, {1113, 51224}, {1114, 51224}, {1115, 51226}, {1116, 51226},
+    {1118, 51227}, {1117, 51228}};
+const QList<QPair<int, int>> HELP_SCREEN_SAVER = {   // 0x5ba64828, themeui, dialog 1015
+    {1844, -1}, {1300, 4111}, {1316, 4112}, {1322, 4112}, {1306, 4112}, {1307, 4112}, {1304, 4113}, {1303, 4114},
+    {1302, 4115}, {1317, -1}, {1320, 4110}, {1314, 4117}, {1318, -1}};
+const QList<QPair<int, int>> HELP_SETTINGS = {   // 0x5ba64cb8, themeui, dialog 1007
+    {1812, 4064}, {1819, 4064}, {1801, 4064}, {1820, 4065}, {1800, 4065}, {1811, 4065}, {1817, 4066}, {1807, 4066},
+    {1813, 4066}, {1818, 4067}, {1808, 4067}, {1815, 4067}, {1816, 4067}, {1814, 4067}, {1805, 4068}, {1806, 4072},
+    {1822, 4073}, {1821, 4074}, {1802, 4069}};
+const QList<QPair<int, int>> HELP_DESKTOP = {   // 0x7c9e53e8, shell32, dialog 29952
+    {30056, 4001}, {30048, 4001}, {30049, 4002}, {30050, 4181}, {30055, 4003}, {30051, 4003}, {30053, 4000},
+    {30057, 4182}, {30054, 4182}};
+const QList<QPair<int, int>> HELP_DESKTOP_ITEMS = {   // 0x7c9e5580, shell32, dialogs 29953 and 29954
+    {30097, 4502}, {30064, 4502}, {30065, 4503}, {30066, 4504}, {30067, 4505}, {30073, 4506}, {30088, 51235},
+    {30077, 51235}, {30078, 51235}, {30080, 51235}, {30081, 51235}, {30089, 51241}, {30068, 51241}, {30070, 51242},
+    {30071, 51243}, {30096, 4502}, {30017, 51245}, {30016, 51245}, {30018, 51246}, {30099, 51247}, {30098, 51247}};
 const int ITEMS_DOCUMENTS = 30077, ITEMS_COMPUTER = 30078, ITEMS_NETWORK = 30080, ITEMS_INTERNET = 30081, ITEMS_ICONS = 30068;
 const int DESKTOP_LIST = 30048, DESKTOP_BROWSE = 30049, DESKTOP_CUSTOMIZE = 30050, DESKTOP_POSITION = 30051, DESKTOP_PREVIEW = 30053, DESKTOP_COLOUR = 30054, DESKTOP_LIST_LABEL = 30056;
 const int SHELL_CENTER = 30236, SHELL_NONE_WALLPAPER = 30300;
@@ -495,6 +520,7 @@ QWidget *DisplayProperties::themesPage()
     auto *page = new QWidget;
     if (themeui()) {
         const xpdialog::Page dialog = xpdialog::build(*themeui(), DIALOG_THEMES, page);
+        contexthelp::attach(dialog, HELP_THEMES, DISPLAY_HLP);
         m_theme = qobject_cast<QComboBox *>(dialog.controls.value(THEME_COMBO));
         if (QWidget *save = dialog.controls.value(THEME_SAVE))
             save->setEnabled(false);
@@ -670,8 +696,10 @@ static void showDesktopItems(QWidget *owner)
     auto *tabs = new xpdialog::SheetTabs(&dialog);
     auto *general = new QWidget;
     const xpdialog::Page page = xpdialog::build(*shell32(), DIALOG_DESKTOP_ITEMS, general);
+    contexthelp::attach(page, HELP_DESKTOP_ITEMS, DISPLAY_HLP);
     auto *web = new QWidget;
     const xpdialog::Page webPage = xpdialog::build(*shell32(), DIALOG_DESKTOP_WEB, web);
+    contexthelp::attach(webPage, HELP_DESKTOP_ITEMS, DISPLAY_HLP);
     xpdialog::greyControls(page);
     xpdialog::greyControls(webPage);
     tabs->addTab(general, page.caption.isEmpty() ? QObject::tr("General") : page.caption);
@@ -791,6 +819,7 @@ QWidget *DisplayProperties::desktopPage()
     if (shell32()) {
         // shell32's dialog: its list (a one-column report list view), its preview, its colour button
         const xpdialog::Page dialog = xpdialog::build(*shell32(), DIALOG_DESKTOP, page);
+        contexthelp::attach(dialog, HELP_DESKTOP, DISPLAY_HLP);
         if (QWidget *place = dialog.controls.value(DESKTOP_LIST)) {
             m_wallpapers = new QListWidget(page);
             m_wallpapers->setGeometry(place->geometry());
@@ -884,6 +913,7 @@ QWidget *DisplayProperties::appearancePage()
     auto *page = new QWidget;
     if (themeui()) {
         const xpdialog::Page dialog = xpdialog::build(*themeui(), DIALOG_APPEARANCE, page);
+        contexthelp::attach(dialog, HELP_APPEARANCE, DISPLAY_HLP);
         m_style = qobject_cast<QComboBox *>(dialog.controls.value(APPEARANCE_STYLE));
         m_colour = qobject_cast<QComboBox *>(dialog.controls.value(APPEARANCE_COLOUR));
         m_size = qobject_cast<QComboBox *>(dialog.controls.value(APPEARANCE_SIZE));
@@ -956,6 +986,7 @@ QWidget *DisplayProperties::screenSaverPage()
     const int minutes = settings.value(QStringLiteral("screenSaverMinutes"), 0).toInt();
     if (themeui()) {
         const xpdialog::Page dialog = xpdialog::build(*themeui(), DIALOG_SCREEN_SAVER, page);
+        contexthelp::attach(dialog, HELP_SCREEN_SAVER, DISPLAY_HLP);
         m_saver = qobject_cast<QComboBox *>(dialog.controls.value(SAVER_COMBO));
         for (int id : {SAVER_SETTINGS, SAVER_PREVIEW, SAVER_PASSWORD, SAVER_POWER})
             if (QWidget *control = dialog.controls.value(id))
@@ -1027,6 +1058,7 @@ QWidget *DisplayProperties::settingsPage()
     QLabel *name = nullptr;
     if (themeui()) {
         const xpdialog::Page dialog = xpdialog::build(*themeui(), DIALOG_SETTINGS, page);
+        contexthelp::attach(dialog, HELP_SETTINGS, DISPLAY_HLP);
         m_resolution = qobject_cast<QSlider *>(dialog.controls.value(SETTINGS_SLIDER));
         m_resolutionText = qobject_cast<QLabel *>(dialog.controls.value(SETTINGS_TEXT));
         quality = qobject_cast<QComboBox *>(dialog.controls.value(SETTINGS_QUALITY));

@@ -4,6 +4,7 @@
 #include "fileicons.h"
 #include "programs.h"
 #include "theme.h"
+#include "contexthelp.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
@@ -38,6 +39,24 @@ namespace {
 
 // shell32's templates and their controls
 const int DIALOG_FILE = 1041, DIALOG_SEVERAL = 1042, DIALOG_VERSION = 1043, DIALOG_FOLDER = 1044;
+
+// The aHelpIds tables in shell32.dll for its dialogs, shown with windows.hlp (WinHelpW without a
+// file) on WM_HELP and WM_CONTEXTMENU: each control and its help number, -1 for none.
+const QList<QPair<int, int>> HELP_FILE = {   // 0x7c9c29e8, dialog 1041 (with a flag of the page set, 0x7c9c3a28: 13075 then has 4867)
+    {13095, -1}, {13096, -1}, {13097, -1}, {13057, 4779}, {13156, 4708}, {13155, 475102}, {13080, 4709},
+    {13059, 4709}, {13152, 4857}, {13153, 4857}, {13089, 4711}, {13065, 4711}, {13081, 4710}, {13064, 4710},
+    {13106, 4702}, {13107, 4702}, {13088, 4781}, {14113, 4781}, {13092, 4747}, {13072, 4747}, {13093, 4713},
+    {13073, 4713}, {13094, 4714}, {13074, 4714}, {13091, 28548}, {13075, 4715}, {13076, 4717}, {13077, 4716},
+    {13154, 4858}, {14425, 4865}, {13111, 4866}, {14423, 4866}};
+const QList<QPair<int, int>> HELP_FOLDER = {   // 0x7c9e2918, dialogs 1042 and 1044
+    {13095, -1}, {13096, -1}, {13057, 4779}, {14113, 4780}, {13080, 4709}, {13059, 4709}, {13089, 4711},
+    {13065, 4711}, {13081, 4710}, {13064, 4710}, {13106, 4702}, {13107, 4702}, {13091, 28548}, {13075, 4715},
+    {13076, 4717}, {13077, 4716}, {13154, 4858}};
+const QList<QPair<int, int>> HELP_VERSION = {   // 0x7c9dd400, dialog 1043
+    {13139, 4720}, {13140, 4720}, {13141, 4720}, {13136, 4700}, {13137, 4700}, {13138, 4700}};
+const QList<QPair<int, int>> HELP_ATTRIBUTES = {   // 0x7c9e28a8, dialogs 1054 and 1055
+    {13057, -1}, {13157, -1}, {13166, -1}, {13077, 4716}, {13158, 4859}, {13105, 4701}, {13159, 4860},
+    {13154, 4706}};
 const int ICON = 13057, NAME = 13156, COUNT = 14113, TYPE = 13059, OPENS_ICON = 13108, OPENS = 13153, CHANGE = 13155, LOCATION = 13065,
           SIZE = 13064, ON_DISK = 13106, CONTAINS = 14113, CREATED = 13072, MODIFIED = 13073, ACCESSED = 13074, READ_ONLY = 13075,
           HIDDEN = 13076, ARCHIVE = 13077, ADVANCED = 13154;
@@ -273,6 +292,7 @@ QWidget *versionPage(const VersionInfo &info, QString *caption)
 {
     auto *page = new QWidget;
     const xpdialog::Page dialog = xpdialog::build(*shell32(), DIALOG_VERSION, page);
+    contexthelp::attach(dialog, HELP_VERSION);
     *caption = dialog.caption;
     const auto set = [&](int id, const QString &value) {
         if (auto *label = qobject_cast<QLabel *>(dialog.controls.value(id)))
@@ -319,6 +339,7 @@ void showAdvanced(QWidget *parent, bool folder)
         return;
     QDialog dialog(parent);
     const xpdialog::Page page = xpdialog::build(*shell32(), folder ? 1055 : 1054, &dialog);
+    contexthelp::attach(page, HELP_ATTRIBUTES);
     dialog.setWindowTitle(page.caption);
     for (QWidget *control : std::as_const(page.controls))
         if (qobject_cast<QCheckBox *>(control) || (qobject_cast<QPushButton *>(control) && control != page.controls.value(1) && control != page.controls.value(2)))
@@ -345,6 +366,7 @@ void show(const QStringList &paths, QWidget *parent)
     auto *tabs = new xpdialog::SheetTabs(dialog);
     auto *general = new QWidget;
     const xpdialog::Page page = xpdialog::build(*shell32(), one ? (folder ? DIALOG_FOLDER : DIALOG_FILE) : DIALOG_SEVERAL, general);
+    contexthelp::attach(page, one && !folder ? HELP_FILE : HELP_FOLDER);
     const auto label = [&](int id) { return qobject_cast<QLabel *>(page.controls.value(id)); };
     const auto set = [&](int id, const QString &value) {
         if (QLabel *line = label(id))

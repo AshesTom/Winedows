@@ -4,6 +4,7 @@
 #include "xpfiles.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QFile>
 #include <QHash>
 #include <QHelpEvent>
@@ -95,8 +96,14 @@ struct Run
 {
     QByteArray text;   // Windows-1252, as the file and the raster font have it
     bool bold = false;
+    QString face;      // a TrueType face; empty for MS Sans Serif, drawn from its raster font
+    bool sameFont(const Run &other) const { return bold == other.bold && face == other.face; }
 };
-using Paragraph = QList<Run>;
+// its runs, and the space above it in pixels (the paragraph's space before, in half points)
+struct Paragraph : QList<Run>
+{
+    int above = 0;
+};
 
 // A WinHelp 4 file (the format HCW writes): its internal files, the topics that |CTXOMAP numbers,
 // and their paragraphs as runs of regular and bold text.
@@ -174,8 +181,19 @@ private:
         const QByteArray fonts = file(QStringLiteral("|FONT"));
         const int count = u16(fonts, 2), offset = u16(fonts, 6);
         // the old descriptor: attributes (1 bold), half points, family, face, colours
-        for (int i = 0; i < count; ++i)
-            m_bold.append(offset + i * 11 < fonts.size() && (uchar(fonts.at(offset + i * 11)) & 1));
+        const int faces = u16(fonts, 0), faceOffset = u16(fonts, 4);
+        const int faceSize = faces ? (offset - faceOffset) / faces : 0;
+        for (int i = 0; i < count; ++i) {
+            const qint64 at = offset + i * 11;
+            Run font;
+            font.bold = at < fonts.size() && (uchar(fonts.at(at)) & 1);
+            const qint64 name = faceOffset + qint64(u16(fonts, at + 3)) * faceSize;
+            const QByteArray face = fonts.mid(name, faceSize);
+            font.face = QString::fromLatin1(face.left(face.indexOf('\0') < 0 ? face.size() : face.indexOf('\0')));
+            if (font.face == QLatin1String("MS Sans Serif"))
+                font.face.clear();
+            m_fonts.append(font);
+        }
     }
 
     // Hall compression's phrases: their lengths bit-coded in |PhrIndex, their bytes in |PhrImage.
@@ -307,9 +325,13 @@ private:
         i += 2;
         if (bits & 0x1)
             scanLong(data1, i);
+        int above = 0;
         for (int field : {0x2, 0x4, 0x8, 0x10, 0x20, 0x40})
-            if (bits & field)
-                scanInt(data1, i);
+            if (bits & field) {
+                const int value = scanInt(data1, i);
+                if (field == 0x2)
+                    above = qRound(value * 96 / 144.0);
+            }
         if (bits & 0x100)
             i += 3;
         if (bits & 0x200) {
@@ -320,14 +342,17 @@ private:
         }
         const QList<QByteArray> pieces = data2.split('\0');
         Paragraph paragraph;
-        bool bold = false;
+        paragraph.above = above;
+        Run font = m_fonts.value(0);
         const auto add = [&](const QByteArray &text) {
             if (text.isEmpty())
                 return;
-            if (!paragraph.isEmpty() && paragraph.last().bold == bold)
+            if (!paragraph.isEmpty() && paragraph.last().sameFont(font)) {
                 paragraph.last().text += text;
-            else
-                paragraph.append({text, bold});
+            } else {
+                paragraph.append(font);
+                paragraph.last().text = text;
+            }
         };
         for (int piece = 0; i < data1.size(); ++piece) {
             add(pieces.value(piece));
@@ -336,7 +361,7 @@ private:
                 break;
             switch (command) {
             case 0x80:
-                bold = m_bold.value(u16(data1, i));
+                font = m_fonts.value(u16(data1, i));
                 i += 2;
                 break;
             case 0x81:
@@ -376,7 +401,7 @@ private:
 
     QByteArray m_data;
     QHash<QString, qint64> m_files;
-    QList<bool> m_bold;
+    QList<Run> m_fonts;   // the file's fonts, without text
     QList<QByteArray> m_phrases;
     std::map<quint32, QList<Paragraph>> m_topics;
     QHash<qint32, quint32> m_map;
@@ -501,7 +526,10 @@ public:
         setProperty("win4wineShadow", true);   // its own shadow, not the menus'
         setAttribute(Qt::WA_DeleteOnClose);
         layOut(paragraphs);
-        const QSize box(m_textWidth + LEFT + RIGHT + 4, m_lines.size() * PITCH + TOP + BOTTOM + 4);
+        int textHeight = 0;
+        for (int gap : std::as_const(m_gaps))
+            textHeight += gap + PITCH;
+        const QSize box(m_textWidth + LEFT + RIGHT + 4, textHeight + TOP + BOTTOM + 4);
         resize(box + QSize(SHADOW, SHADOW));
         QPoint place = at;
         if (QScreen *screen = QGuiApplication::screenAt(at)) {
@@ -534,15 +562,16 @@ protected:
         painter.fillRect(box, Qt::black);
         painter.fillRect(box.adjusted(1, 1, -1, -1), QColor(INNER));
         painter.fillRect(box.adjusted(2, 2, -2, -2), QColor(FILL));
-        const RasterFont &font = popupFont();
         int y = 2 + TOP;
-        for (const QList<Word> &line : std::as_const(m_lines)) {
+        for (qsizetype i = 0; i < m_lines.size(); ++i) {
+            const QList<Word> &line = m_lines.at(i);
+            y += m_gaps.at(i);
             int x = 2 + LEFT;
             for (const Word &word : line) {
                 for (const Run &run : word.runs)
                     for (const char c : run.text) {
-                        font.draw(painter, x, y, uchar(c), run.bold);
-                        x += font.advance(uchar(c), run.bold);
+                        draw(painter, x, y, c, run);
+                        x += advance(c, run);
                     }
             }
             y += PITCH;
@@ -552,14 +581,53 @@ protected:
     void keyPressEvent(QKeyEvent *) override { close(); }
 
 private:
+    // A TrueType face at the help file's 8 points: GDI's 11-pixel em, without smoothing, its
+    // baseline on the raster font's
+    static QFont trueType(const Run &run)
+    {
+        QFont font(run.face);
+        font.setPixelSize(11);
+        font.setBold(run.bold);
+        font.setStyleStrategy(QFont::NoAntialias);
+        font.setHintingPreference(QFont::PreferFullHinting);
+        return font;
+    }
+
+    // Windows-1252, the files' and the raster font's code page
+    static QString unicode(char c)
+    {
+        static const char16_t high[32] = {0x20ac, 0x81, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, 0x2c6, 0x2030, 0x160,
+                                          0x2039, 0x152, 0x8d, 0x17d, 0x8f, 0x90, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
+                                          0x2013, 0x2014, 0x2dc, 0x2122, 0x161, 0x203a, 0x153, 0x9d, 0x17e, 0x178};
+        const uchar code = uchar(c);
+        return QString(QChar(code >= 0x80 && code < 0xa0 ? high[code - 0x80] : char16_t(code)));
+    }
+
+    static int advance(char c, const Run &run)
+    {
+        if (run.face.isEmpty())
+            return popupFont().advance(uchar(c), run.bold);
+        return QFontMetrics(trueType(run)).horizontalAdvance(unicode(c));
+    }
+
+    static void draw(QPainter &painter, int x, int y, char c, const Run &run)
+    {
+        if (run.face.isEmpty()) {
+            popupFont().draw(painter, x, y, uchar(c), run.bold);
+            return;
+        }
+        painter.setFont(trueType(run));
+        painter.setPen(Qt::black);
+        painter.drawText(x, y + popupFont().ascent(), unicode(c));
+    }
+
     // Words and the spaces after them, wrapped at WRAP; a line break or a new paragraph starts a line.
     void layOut(const QList<Paragraph> &paragraphs)
     {
-        const RasterFont &font = popupFont();
         const auto measure = [&](const Run &run) {
             int width = 0;
             for (const char c : run.text)
-                width += font.advance(uchar(c), run.bold);
+                width += advance(c, run);
             return width;
         };
         for (const Paragraph &paragraph : paragraphs) {
@@ -582,15 +650,21 @@ private:
                     }
                     if (c == ' ')
                         space = true;
-                    if (word.runs.isEmpty() || word.runs.last().bold != run.bold)
-                        word.runs.append({QByteArray(), run.bold});
+                    if (word.runs.isEmpty() || !word.runs.last().sameFont(run)) {
+                        word.runs.append(run);
+                        word.runs.last().text.clear();
+                    }
                     word.runs.last().text += c;
                 }
             words.append(word);
             QList<Word> line;
             int lineWidth = 0;
+            // the first paragraph's space is in TOP, as XP's measures have it
+            int gap = m_lines.isEmpty() ? 0 : paragraph.above;
             const auto finish = [&] {
                 m_lines.append(line);
+                m_gaps.append(gap);
+                gap = 0;
                 m_textWidth = qMax(m_textWidth, lineWidth);
                 line.clear();
                 lineWidth = 0;
@@ -619,6 +693,7 @@ private:
     }
 
     QList<QList<Word>> m_lines;
+    QList<int> m_gaps;   // the space above each line: a paragraph's above its first
     int m_textWidth = 0;
     QImage m_beneath;
 };
@@ -641,13 +716,13 @@ public:
         auto *widget = static_cast<QWidget *>(object);
         switch (event->type()) {
         case QEvent::QueryWhatsThis:
-            if (helped(widget)) {
+            if (helped(widget, QCursor::pos())) {
                 event->accept();
                 return true;
             }
             break;
         case QEvent::WhatsThis:
-            if (QWidget *control = helped(widget)) {
+            if (QWidget *control = helped(widget, static_cast<QHelpEvent *>(event)->globalPos())) {
                 // Qt's own text would end the mode: this popup does too, as XP's WinHelp ends it
                 QWhatsThis::leaveWhatsThisMode();
                 showFor(control, static_cast<QHelpEvent *>(event)->globalPos());
@@ -662,7 +737,7 @@ public:
                 return true;
             }
             if (static_cast<QKeyEvent *>(event)->key() == Qt::Key_F1 && widget == QApplication::focusWidget())
-                if (QWidget *control = helped(widget)) {
+                if (QWidget *control = helped(widget, QPoint())) {
                     showFor(control, control->mapToGlobal(QPoint(control->width() / 2, control->height())));
                     return true;
                 }
@@ -674,11 +749,22 @@ public:
     }
 
 private:
-    static QWidget *helped(QWidget *widget)
+    // The control or the nearest of its parents with a help number; else a hidden or greyed control
+    // of the window under AT (a page's widget of its own in the place of XP's, or one that Qt's
+    // clicks pass over, as XP's ChildWindowFromPoint does not)
+    static QWidget *helped(QWidget *widget, const QPoint &at)
     {
+        QWidget *window = widget ? widget->window() : nullptr;
         for (; widget; widget = widget->isWindow() ? nullptr : widget->parentWidget())
             if (widget->property(HELP_ID).isValid())
                 return widget;
+        if (!window || at.isNull())
+            return nullptr;
+        const QList<QWidget *> controls = window->findChildren<QWidget *>();
+        for (QWidget *control : controls)
+            if ((control->isHidden() || !control->isEnabled()) && control->property(HELP_ID).isValid() && control->parentWidget()
+                && control->parentWidget()->isVisible() && QRect(control->mapToGlobal(QPoint(0, 0)), control->size()).contains(at))
+                return control;
         return nullptr;
     }
 

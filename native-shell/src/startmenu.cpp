@@ -4,6 +4,7 @@
 #include "applets.h"
 #include "balloon.h"
 
+#include "contexthelp.h"
 #include "xpdialog.h"
 #include <functional>
 #include <QTimer>
@@ -60,6 +61,11 @@ const int ACTIVATE_DELAY_MS = 100;
 // How long XP's menus wait before they change (SPI_GETMENUSHOWDELAY's default)
 const int CASCADE_DELAY_MS = 400;
 const int DIALOG_RUN = 1003, RUN_COMMAND = 12298, RUN_SEPARATE_MEMORY = 12306, RUN_BROWSE = 12288, STRING_BROWSE_TITLE = 9015, RUN_HISTORY = 26;
+
+// The aHelpIds tables in shell32.dll for its dialogs, shown with windows.hlp (WinHelpW without a
+// file) on WM_HELP and WM_CONTEXTMENU: each control and its help number, -1 for none.
+const QList<QPair<int, int>> HELP_RUN = {   // 0x7c9d4260, dialog 1003
+    {12297, -1}, {12289, -1}, {12305, 6002}, {12298, 6002}, {12306, 6003}, {12288, 28496}, {1, 6022}, {2, 6023}};
 const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXPLORER_RUN_TITLE = 722, EXPLORER_INTERNET = 7024, EXPLORER_MAIL = 7025;
 // The panel's own names, with their access keys (My Recent &Documents, &Control Panel); the other places'
 // are shell32's, which have none.
@@ -235,6 +241,7 @@ void showRunDialog()
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowFlag(Qt::WindowContextHelpButtonHint, true);
     const xpdialog::Page page = xpdialog::build(*shell, DIALOG_RUN, dialog);
+    contexthelp::attach(page, HELP_RUN);
     dialog->setWindowTitle(page.caption);
     // It is there for 16-bit programs, and XP only shows it for them.
     if (QWidget *memory = page.controls.value(RUN_SEPARATE_MEMORY))
