@@ -2141,21 +2141,45 @@ void SkinView::mousePressEvent(QMouseEvent *event)
         const QPoint at = window()->mapFromGlobal(event->globalPosition().toPoint());
         const QRect frame = window()->rect();
         Qt::Edges edges;
-        if (isResizable() && isWindow()) {
+        if (isResizable() && isWindow() && !window()->isMaximized()) {
             if (at.x() < 4) edges |= Qt::LeftEdge;
             if (at.x() >= frame.width() - 4) edges |= Qt::RightEdge;
             if (at.y() < 4) edges |= Qt::TopEdge;
             if (at.y() >= frame.height() - 4) edges |= Qt::BottomEdge;
         }
-        if (edges)
-            window()->windowHandle()->startSystemResize(edges);
-        else if (target)
-            window()->windowHandle()->startSystemMove();
+        // wmp.dll sends itself WM_SYSCOMMAND SC_MOVE | HTCAPTION, except when maximized (GetWindowPlacement).
+        // A window manager without _NET_WM_MOVERESIZE (bridge-wm) refuses the system's move: the view moves it.
+        QWindow *handle = window()->windowHandle();
+        if (edges ? !handle->startSystemResize(edges) : target && !window()->isMaximized() && !handle->startSystemMove()) {
+            m_frameEdges = edges ? edges : Qt::Edges(Qt::TopEdge | Qt::BottomEdge | Qt::LeftEdge | Qt::RightEdge);
+            m_frameMoving = !edges;
+            m_framePress = event->globalPosition().toPoint();
+            m_frameGeometry = window()->geometry();
+        }
     }
 }
 
 void SkinView::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_frameEdges && (event->buttons() & Qt::LeftButton)) {
+        const QPoint delta = event->globalPosition().toPoint() - m_framePress;
+        if (m_frameMoving) {
+            window()->move(m_frameGeometry.topLeft() + delta);
+            return;
+        }
+        const QSize minimum = window()->minimumSize();
+        QRect r = m_frameGeometry;
+        if (m_frameEdges & Qt::LeftEdge)
+            r.setLeft(qMin(r.left() + delta.x(), r.right() + 1 - minimum.width()));
+        if (m_frameEdges & Qt::RightEdge)
+            r.setRight(qMax(r.right() + delta.x(), r.left() - 1 + minimum.width()));
+        if (m_frameEdges & Qt::TopEdge)
+            r.setTop(qMin(r.top() + delta.y(), r.bottom() + 1 - minimum.height()));
+        if (m_frameEdges & Qt::BottomEdge)
+            r.setBottom(qMax(r.bottom() + delta.y(), r.top() - 1 + minimum.height()));
+        window()->setGeometry(r);
+        return;
+    }
     if (m_playlistDragFrom >= 0 && m_pressed && m_pressed->tag == QLatin1String("playlist") && (event->buttons() & Qt::LeftButton)) {
         const int row = playlistRow(m_pressed, event->position().toPoint());
         if (row >= 0 && row != m_playlistDragFrom) {
@@ -2186,6 +2210,7 @@ void SkinView::mouseReleaseEvent(QMouseEvent *event)
     m_pressed = nullptr;
     m_pressedButton = -1;
     m_playlistDragFrom = -1;
+    m_frameEdges = {};
     if (!pressed) {
         update();
         return;

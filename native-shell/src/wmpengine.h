@@ -217,6 +217,11 @@ private:
     Element *m_pressed = nullptr;
     int m_playlistSelected = -1, m_playlistTop = 0, m_playlistDragFrom = -1;
     int m_pressedButton = -1;
+    // the window's move or size when the window manager does not do it
+    Qt::Edges m_frameEdges;
+    bool m_frameMoving = false;
+    QPoint m_framePress;
+    QRect m_frameGeometry;
     QTimer m_timer;                            // view.timerInterval
     QTimer m_animation;                        // moveTo, alphaBlendTo, scrolling text
     QTimer m_shapeTimer;
