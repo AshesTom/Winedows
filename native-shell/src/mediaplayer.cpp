@@ -1573,11 +1573,15 @@ wmp::SkinView *MediaPlayer::bandPopup(const QString &skinName)
     popup->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint | Qt::WindowDoesNotAcceptFocus);
     popup->setAttribute(Qt::WA_ShowWithoutActivating);
     popup->setAttribute(Qt::WA_DeleteOnClose);
-    // (the bar holds the band: X knows where it is, Qt does not)
+    // wmpband.dll's sub_4c4b1d9d: at the band's left, against the taskbar window's edge that faces
+    // the screen (above a bar whose top is past 1, else under it). The bar holds the band: X knows
+    // where both are, Qt does not.
     const QRect band = x11::frameGeometry(m_band->winId());
+    const QList<quint32> site = x11::property32(x11::root(), x11::atom("_WIN4WINE_WMP_BAND_SITE"));
+    const QRect bar = site.isEmpty() ? band : x11::frameGeometry(site.first());
     const QSize size = popup->preferredSize();
     const QScreen *screen = QGuiApplication::screenAt(band.center()) ? QGuiApplication::screenAt(band.center()) : QGuiApplication::primaryScreen();
-    const int y = band.center().y() > screen->geometry().center().y() ? band.top() - size.height() : band.bottom() + 1;
+    const int y = bar.top() - screen->geometry().top() > 1 ? bar.top() - size.height() : bar.bottom() + 1;
     popup->setGeometry(QRect(QPoint(band.left(), y), size));
     return popup;
 }

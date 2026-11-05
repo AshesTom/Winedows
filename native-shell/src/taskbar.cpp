@@ -149,6 +149,8 @@ const Part TASK_TOOLBAR{QStringLiteral("toolbar"), {}, {}, 0, QStringLiteral("ta
 // the hot frame from 104, the task band 4 after the last button.
 const Part QUICK_BUTTON{QStringLiteral("toolbar"), QStringLiteral("button"), {}, 1, QStringLiteral("taskbar")};
 const int QUICK_WIDTH = 23, QUICK_ICON_X = 3, QUICK_ICON_Y = 7, QUICK_BAND_END = 4;
+// Windows Media Player's band: its right edge and its bottom from the rebar's (measured on XP's)
+const int MEDIA_BAND_END = 4, MEDIA_BAND_BELOW = 2;
 // View > Large Icons, measured on XP's taskbar: the 32-pixel icons, a button every 39 pixels (32 + 7, as 16 + 7
 // for the small ones), the icon 3 in and 7 down as the small ones; the bar grows from 30 to 46 rows (the
 // icon and 14, as 16 and 14 make 30), under the unlocked bar's 4 sizing rows.
@@ -1027,18 +1029,22 @@ void Taskbar::relayout()
                     chevronSize)
             : QRect(QPoint(m_trayRect.x() + first, (barHeight() - chevronSize.height()) / 2), chevronSize);
 
-    int bandEnd = (m_chevronRect.isNull() || !renderer ? m_trayRect.x() : m_chevronRect.x()) - theme()->scaled(BAND_END);
-    // the media player's band, right of the task band, with a gripper of its own when unlocked
+    const int rebarEnd = m_chevronRect.isNull() || !renderer ? m_trayRect.x() : m_chevronRect.x();
+    int bandEnd = rebarEnd - theme()->scaled(BAND_END);
+    // The media player's band, right of the task band, as XP's rebar places WMP9DeskBand on a bar of
+    // 30: its skin ends 4 before the notification area, at the bottom of a band window 2 short of the
+    // bar; the band's gripper is in a header of 10 just left of it, and the task band stops 4 before
+    // that header, like before the rebar's end.
     m_mediaBand = QRect();
     if (m_mediaContainer) {
         const QSize size = m_mediaContainer->size();
-        m_mediaBand = QRect(QPoint(bandEnd - size.width(), (barHeight() - size.height()) / 2), size);
-        m_mediaContainer->move(m_mediaBand.topLeft());
-        bandEnd = m_mediaBand.x() - theme()->scaled(QUICK_BAND_END);
-        if (header) {
-            m_grippers.append(QRect(bandEnd - header, 0, header, barHeight()));
-            bandEnd -= header;
-        }
+        m_mediaBand = QRect(QPoint(rebarEnd - theme()->scaled(MEDIA_BAND_END) - size.width(),
+                                   barHeight() - theme()->scaled(MEDIA_BAND_BELOW) - size.height()),
+                            size);
+        m_mediaContainer->move(m_mediaBand.topLeft() + QPoint(0, m_top));
+        if (header)
+            m_grippers.append(QRect(m_mediaBand.x() - header, 0, header, barHeight()));
+        bandEnd = m_mediaBand.x() - header - theme()->scaled(BAND_END);
     }
     layoutButtons(bandStart, bandEnd);
     m_tray->balloons()->iconsChanged();
@@ -2080,25 +2086,30 @@ void Taskbar::showTaskbarMenu(QPoint at, bool tray, bool band)
             });
         }
         if (toolbars) {
-            auto *links = toolbars->addAction(tr("&Links"));
-            links->setCheckable(true);
-            links->setChecked(m_settings.linksBand);
-            connect(links, &QAction::triggered, this, [](bool on) {
-                TaskbarSettings settings = TaskbarSettings::load();
-                settings.linksBand = on;
-                settings.save();
-            });
+            // browseui's band site menu puts the deskbands first, as the component categories list
+            // them (by CLSID: Windows Media Player's {0A4286EA-...} before Links' {0E5CBF21-...})
+            QAction *top = toolbars->actions().value(0);
             // the deskband wmpband.dll registers, by its name (its string 101)
             QString mediaName = tr("Windows Media Player");
             if (const auto band = xpfiles::resources(xpfiles::find(QStringLiteral("wmpband.dll"))))
                 if (const QString name = xpfiles::string(*band, 101); !name.isEmpty())
                     mediaName = name;
-            auto *media = toolbars->addAction(mediaName);
+            auto *media = new QAction(mediaName, toolbars);
+            toolbars->insertAction(top, media);
             media->setCheckable(true);
             media->setChecked(m_settings.mediaPlayerBand);
             connect(media, &QAction::triggered, this, [](bool on) {
                 TaskbarSettings settings = TaskbarSettings::load();
                 settings.mediaPlayerBand = on;
+                settings.save();
+            });
+            auto *links = new QAction(tr("&Links"), toolbars);
+            toolbars->insertAction(top, links);
+            links->setCheckable(true);
+            links->setChecked(m_settings.linksBand);
+            connect(links, &QAction::triggered, this, [](bool on) {
+                TaskbarSettings settings = TaskbarSettings::load();
+                settings.linksBand = on;
                 settings.save();
             });
             QAction *first = menu->actions().value(0);
