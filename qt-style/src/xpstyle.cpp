@@ -690,6 +690,17 @@ void XpStyle::drawControl(ControlElement element, const QStyleOption *option, QP
         if (draw(painter, option->rect, QStringLiteral("header"), QStringLiteral("headeritem"), QStringLiteral("normal"), 1))
             return;
         break;
+    case CE_ProgressBar:
+        // (the base style takes its own frame off the contents, not asking this one)
+        if (const auto *bar = qstyleoption_cast<const QStyleOptionProgressBar *>(option); bar && !bar->textVisible) {
+            QStyleOptionProgressBar whole = *bar;
+            whole.rect = subElementRect(SE_ProgressBarGroove, bar, widget);
+            drawControl(CE_ProgressBarGroove, &whole, painter, widget);
+            whole.rect = subElementRect(SE_ProgressBarContents, bar, widget);
+            drawControl(CE_ProgressBarContents, &whole, painter, widget);
+            return;
+        }
+        break;
     case CE_ProgressBarGroove:
     case CE_ProgressBarContents:
         if (const auto *bar = qstyleoption_cast<const QStyleOptionProgressBar *>(option)) {
@@ -1110,6 +1121,16 @@ void XpStyle::drawSlider(const QStyleOptionSlider *slider, QPainter *painter, co
             QProxyStyle::drawComplexControl(CC_Slider, &copy, painter, widget);
         }
     }
+}
+
+QRect XpStyle::subElementRect(SubElement element, const QStyleOption *option, const QWidget *widget) const
+{
+    // comctl32's progress bar draws its track over the client area and its chunks in the track's
+    // content rectangle (drawProgress takes it off): the contents are the whole bar, not a frame less
+    if (themed() && (element == SE_ProgressBarContents || element == SE_ProgressBarGroove))
+        if (const auto *bar = qstyleoption_cast<const QStyleOptionProgressBar *>(option); bar && !bar->textVisible)
+            return option->rect;
+    return QProxyStyle::subElementRect(element, option, widget);
 }
 
 QRect XpStyle::subControlRect(ComplexControl control, const QStyleOptionComplex *option, SubControl sc,
