@@ -25,11 +25,14 @@
 #include <QStyleOptionTab>
 #include <QVBoxLayout>
 #include <QFont>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QTimerEvent>
 #include <QtEndian>
 
 #include <algorithm>
+#include <functional>
 
 namespace xpdialog {
 namespace {
@@ -187,7 +190,10 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
                 widget = frame;
             } else {
                 auto *label = new QLabel(text, parent);
-                label->setWordWrap(true);
+                // SS_LEFTNOWORDWRAP keeps to its line; SS_NOPREFIX shows what it is given as it is
+                label->setWordWrap(kind != 0x0c);
+                if (controlStyle & 0x80)
+                    label->setTextFormat(Qt::PlainText);
                 label->setAlignment(controlStyle & 1 ? Qt::AlignHCenter | Qt::AlignTop : Qt::AlignLeft | Qt::AlignTop);
                 // A picture of the file, by its number: SS_BITMAP or SS_ICON
                 if (titleOrdinal && (kind == 0x0e || kind == 0x03)) {
@@ -223,6 +229,12 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
             label->setWordWrap(true);
             label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
             widget = label;
+        } else if (className.compare(QLatin1String("SysAnimate32"), Qt::CaseInsensitive) == 0) {
+            widget = new Animation(controlStyle, parent);
+        } else if (className.compare(QLatin1String("msctls_progress32"), Qt::CaseInsensitive) == 0) {
+            auto *bar = new QProgressBar(parent);
+            bar->setTextVisible(false);
+            widget = bar;
         } else if (className.compare(QLatin1String("msctls_trackbar32"), Qt::CaseInsensitive) == 0) {
             auto *slider = new QSlider(Qt::Horizontal, parent);
             slider->setTickPosition(QSlider::TicksBelow);
@@ -240,6 +252,10 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
             const int down = QFontMetrics(group->font()).height() / 2;
             group->setGeometry(group->geometry().adjusted(0, down, 0, 0));
         }
+        // its window name, when the template gives one, is the AVI it opens (in its place: without
+        // ACS_CENTER it then takes the frame's size)
+        if (auto *animation = dynamic_cast<Animation *>(widget); animation && titleOrdinal)
+            animation->open(pe, titleOrdinal);
         // WS_VISIBLE and WS_DISABLED
         widget->setVisible(controlStyle & 0x10000000);
         widget->setEnabled(!(controlStyle & 0x08000000));
@@ -248,9 +264,225 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
     }
     // A label's "&" only means something with a control to go to; without, it would be shown.
     for (QWidget *control : std::as_const(page.controls))
-        if (auto *label = qobject_cast<QLabel *>(control); label && !label->buddy() && label->text().contains(QLatin1Char('&')))
+        if (auto *label = qobject_cast<QLabel *>(control); label && !label->buddy() && label->textFormat() != Qt::PlainText && label->text().contains(QLatin1Char('&')))
             label->setText(QString(label->text()).replace(QStringLiteral("&&"), QStringLiteral("\x01")).remove(QLatin1Char('&')).replace(QLatin1Char('\x01'), QLatin1Char('&')));
     return page;
+}
+
+// comctl32's animate control (its window procedure sub_300338bd, the reader at sub_30087308)
+namespace {
+const quint32 ACS_CENTER = 1, ACS_TRANSPARENT = 2, ACS_AUTOPLAY = 4;
+// how long to wait, hidden, before looking again (the step's negative answer)
+const int HIDDEN_WAIT = 4000;
+
+quint32 le32(const QByteArray &data, qsizetype at)
+{
+    return at >= 0 && at + 4 <= data.size() ? qFromLittleEndian<quint32>(data.constData() + at) : 0;
+}
+}
+
+Animation::Animation(quint32 style, QWidget *parent)
+    : QWidget(parent)
+    , m_style(style)
+{
+}
+
+bool Animation::open(const w4w::PeResources &pe, int id)
+{
+    stop();
+    m_frames.clear();
+    m_palette.clear();
+    m_decoded = -1;
+    const QByteArray avi = pe.find(QStringLiteral("AVI"), QString::number(id));
+    if (avi.size() < 12 || !avi.startsWith("RIFF") || avi.mid(8, 4) != "AVI ")
+        return false;
+    int total = 0;
+    bool video = false;
+    // the chunks in order, into the LISTs; avih gives the frames, their size and their time
+    // (dwMicroSecPerFrame / 1000), the video stream's strf the format and its colours
+    std::function<void(qsizetype, qsizetype)> walk = [&](qsizetype at, qsizetype end) {
+        while (at + 8 <= end && at + 8 <= avi.size()) {
+            const QByteArray id = avi.mid(at, 4);
+            const qsizetype size = le32(avi, at + 4);
+            const qsizetype body = at + 8;
+            if (id == "LIST" || id == "RIFF") {
+                walk(body + 4, qMin(body + size, avi.size()));
+            } else if (id == "avih" && size >= 40) {
+                m_rate = int(le32(avi, body) / 1000);
+                total = int(le32(avi, body + 16));
+                m_size = QSize(int(le32(avi, body + 32)), int(le32(avi, body + 36)));
+            } else if (id == "strh" && size >= 4) {
+                video = avi.mid(body, 4) == "vids";
+            } else if (id == "strf" && video && m_palette.isEmpty() && size >= 40) {
+                const quint32 compression = le32(avi, body + 16);
+                const int bits = qFromLittleEndian<quint16>(avi.constData() + body + 14);
+                if (le32(avi, body) != 40 || compression > 1 || bits != 8
+                    || int(le32(avi, body + 4)) != m_size.width() || int(le32(avi, body + 8)) != m_size.height())
+                    return;
+                m_rle = compression == 1;
+                quint32 colours = le32(avi, body + 32);
+                if (!colours || colours > 256)
+                    colours = 256;
+                for (quint32 i = 0; i < colours && body + 40 + 4 * i + 4 <= avi.size(); ++i)
+                    m_palette.append(0xff000000u | (le32(avi, body + 40 + 4 * i) & 0xffffff));
+            } else if (id.size() == 4 && (id.endsWith("db") || id.endsWith("dc"))) {
+                m_frames.append(avi.mid(body, size));
+            }
+            at = body + size + (size & 1);
+        }
+    };
+    walk(12, avi.size());
+    if (m_palette.isEmpty() || m_size.isEmpty() || m_frames.isEmpty())
+        return false;
+    if (total > 0 && total < m_frames.size())
+        m_frames.resize(total);
+    if (!(m_style & ACS_CENTER))
+        resize(m_size);
+    m_shown = m_current = m_from = 0;
+    update();
+    if (m_style & ACS_AUTOPLAY)
+        play(0, -1, -1);
+    return true;
+}
+
+void Animation::play(int from, int to, int repeat)
+{
+    stop();
+    const int count = int(m_frames.size());
+    if (!count)
+        return;
+    // as the control clamps them: FROM to the last frame, TO to the frames there are
+    if (from >= count)
+        from = count - 1;
+    if (to == -1 || to >= count)
+        to = count - 1;
+    to = qMax(0, to);
+    m_repeat = repeat;
+    m_to = to;
+    if (from >= 0)
+        m_current = m_from = from;
+    m_shown = m_current;
+    update();
+    if (m_from != m_to && m_repeat != 0)
+        m_timer = startTimer(m_rate, Qt::PreciseTimer);
+}
+
+void Animation::stop()
+{
+    if (m_timer)
+        killTimer(m_timer);
+    m_timer = 0;
+}
+
+void Animation::timerEvent(QTimerEvent *event)
+{
+    if (event->timerId() != m_timer)
+        return QWidget::timerEvent(event);
+    killTimer(m_timer);
+    m_timer = 0;
+    // sub_30033442: unseen, it starts over and looks again later; seen, it draws the frame and steps
+    if (!isVisible()) {
+        m_current = m_from;
+        if (m_repeat != 0)
+            m_timer = startTimer(m_rate + HIDDEN_WAIT, Qt::PreciseTimer);
+        return;
+    }
+    m_shown = m_current;
+    update();
+    if (m_current < m_to) {
+        ++m_current;
+    } else {
+        if (m_repeat > 0)
+            --m_repeat;
+        if (m_repeat != 0)
+            m_current = m_from;
+    }
+    if (m_repeat != 0)
+        m_timer = startTimer(m_rate, Qt::PreciseTimer);
+}
+
+QRect Animation::frameRect() const
+{
+    if (!(m_style & ACS_CENTER))
+        return QRect(QPoint(0, 0), m_size);
+    return QRect(QPoint((width() - m_size.width()) / 2, (height() - m_size.height()) / 2), m_size);
+}
+
+// The frames as the reader keeps them: each one drawn over the last (an RLE frame's skips and its
+// early end leave what was there), starting again from the first frame to go back.
+bool Animation::decodeTo(int frame)
+{
+    if (frame < 0 || frame >= m_frames.size())
+        return false;
+    const int width = m_size.width(), height = m_size.height();
+    if (m_decoded < 0 || frame < m_decoded) {
+        m_pixels = QByteArray(qsizetype(width) * height, '\0');
+        m_decoded = -1;
+    }
+    auto *pixels = reinterpret_cast<uchar *>(m_pixels.data());
+    for (int f = m_decoded + 1; f <= frame; ++f) {
+        const QByteArray &data = m_frames.at(f);
+        const auto *in = reinterpret_cast<const uchar *>(data.constData());
+        const qsizetype size = data.size();
+        if (!m_rle) {
+            const qsizetype stride = (qsizetype(width) + 3) & ~3;
+            for (int y = 0; y < height && stride * (y + 1) <= size; ++y)
+                memcpy(pixels + qsizetype(height - 1 - y) * width, in + stride * y, width);
+            continue;
+        }
+        // BI_RLE8 from the bottom row: runs, and after a 0 the end of a row (0), of the picture (1),
+        // a move (2, dx, dy) or so many bytes as they are (padded to a word)
+        int x = 0, y = 0;
+        auto put = [&](uchar value) {
+            if (x < width && y < height)
+                pixels[qsizetype(height - 1 - y) * width + x] = value;
+            ++x;
+        };
+        for (qsizetype i = 0; i + 1 < size;) {
+            const int count = in[i], value = in[i + 1];
+            i += 2;
+            if (count) {
+                for (int n = 0; n < count; ++n)
+                    put(uchar(value));
+            } else if (value == 0) {
+                x = 0;
+                ++y;
+            } else if (value == 1) {
+                break;
+            } else if (value == 2) {
+                if (i + 1 >= size)
+                    break;
+                x += in[i];
+                y += in[i + 1];
+                i += 2;
+            } else {
+                for (int n = 0; n < value && i + n < size; ++n)
+                    put(in[i + n]);
+                i += value + (value & 1);
+            }
+        }
+    }
+    m_decoded = frame;
+    return true;
+}
+
+void Animation::paintEvent(QPaintEvent *)
+{
+    // sub_300333b5: the parent's static brush over the control, then the frame
+    QPainter painter(this);
+    painter.fillRect(rect(), palette().window());
+    if (!decodeTo(m_shown))
+        return;
+    QImage image(reinterpret_cast<const uchar *>(m_pixels.constData()), m_size.width(), m_size.height(), m_size.width(),
+                 QImage::Format_Indexed8);
+    QList<QRgb> colours = m_palette;
+    colours.resize(256, 0xff000000u);
+    // ACS_TRANSPARENT: the colour of the frame's first pixel (its lower left) shows the background
+    // (not checked on XP)
+    if ((m_style & ACS_TRANSPARENT) && !m_pixels.isEmpty())
+        colours[uchar(m_pixels.at(qsizetype(m_size.height() - 1) * m_size.width()))] = 0;
+    image.setColorTable(colours);
+    painter.drawImage(frameRect().topLeft(), image);
 }
 
 void greyControls(const Page &page)

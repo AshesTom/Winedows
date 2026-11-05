@@ -1681,6 +1681,9 @@ void MediaPlayer::minimizeDialog()
     QDialog dialog;
     const xpdialog::Page page = xpdialog::build(*m_loc, 1226, &dialog);
     dialog.setWindowTitle(page.caption.isEmpty() ? text(102) : page.caption);
+    // wmp.dll opens AVI 1229 into the animate control 1228, which plays it at once (ACS_AUTOPLAY)
+    if (auto *animation = dynamic_cast<xpdialog::Animation *>(page.controls.value(1228)))
+        animation->open(*m_loc, 1229);
     QCheckBox *again = nullptr;
     for (QWidget *control : page.controls) {
         if (auto *box = qobject_cast<QCheckBox *>(control))

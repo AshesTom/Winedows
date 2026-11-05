@@ -32,6 +32,38 @@ int unitY(int value);
 // Everything that can be used on PAGE is greyed: a page of XP's with nothing behind it here.
 void greyControls(const Page &page);
 
+// comctl32's SysAnimate32: an AVI resource (8-bit BI_RGB or BI_RLE8, the only ones its reader takes)
+// played on a timer of the file's frame time. ACS_CENTER keeps the control's size and centres the
+// frame; without it the control takes the frame's size. ACS_AUTOPLAY plays on open, without end.
+class Animation : public QWidget
+{
+public:
+    explicit Animation(quint32 style, QWidget *parent = nullptr);
+    // the resource of type "AVI" named ID in PE
+    bool open(const w4w::PeResources &pe, int id);
+    // Animate_Play: FROM to TO (-1 the last frame), REPEAT times (-1 without end)
+    void play(int from = 0, int to = -1, int repeat = -1);
+    void stop();
+    int frameCount() const { return int(m_frames.size()); }
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void timerEvent(QTimerEvent *event) override;
+
+private:
+    bool decodeTo(int frame);
+    QRect frameRect() const;
+
+    quint32 m_style;
+    QList<QByteArray> m_frames;
+    QList<QRgb> m_palette;
+    QSize m_size;
+    bool m_rle = false;
+    QByteArray m_pixels;            // the frame decoded last, its rows from the top, an index each
+    int m_decoded = -1;
+    int m_shown = 0, m_current = 0, m_from = 0, m_to = 0, m_repeat = 0, m_rate = 0, m_timer = 0;
+};
+
 // XP's tabs: on as many rows as they need, the rows evened out and the selected tab's at the
 // bottom, as comctl32's SysTabControl32 with TCS_MULTILINE has them.
 class SheetTabs : public QWidget
