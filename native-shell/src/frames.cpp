@@ -10,11 +10,13 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRegion>
 #include <QSet>
+#include <QWindow>
 #include <QtMath>
 
 using w4w::Part;
@@ -619,6 +621,15 @@ void FrameManager::readWindows()
         if (!frame) {
             frame = new FrameWindow(this, client, title);
             m_frames.insert(client, frame);
+            // A client of this process (its dialogs) is the frame's transient parent: a modal
+            // dialog then blocks its owner's frame, as Qt blocks every other window, but not its own.
+            const QWindowList windows = QGuiApplication::allWindows();
+            for (QWindow *window : windows)
+                if (window->handle() && quint32(window->winId()) == client) {
+                    frame->winId();
+                    frame->windowHandle()->setTransientParent(window);
+                    break;
+                }
             // bridge-wm keeps it unmapped until frames.tsv pairs it with its client.
             frame->show();
             // Its client may not move again: its place comes from the file as it is.
