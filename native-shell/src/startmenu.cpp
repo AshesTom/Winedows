@@ -36,6 +36,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QProcess>
 #include <QScreen>
@@ -995,10 +996,30 @@ void StartPanel::build(QPoint bottomLeft)
     for (const QString &id : pinnedIds)
         if (const auto program = programs::find(id))
             pinnedPrograms.append(*program);
-    const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0) + int(pinnedPrograms.size());
-    const int recentPrograms = qBound(0, panelSettings.panelMinMFU, 30);
-    const int leftHeight = theme->scaled((classic ? CLASSIC_TOP : LEFT_TOP) + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + recentPrograms * LEFT_SMALL + LEFT_LINE) + moreHeight;
-    const int bodyHeight = std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(classic ? CLASSIC_BODY_END : BODY_END), leftHeight});
+    int recentPrograms = qBound(0, panelSettings.panelMinMFU, 30);
+    const auto programsHeight = [&] {
+        const int pinned = (browser ? 1 : 0) + (mail ? 1 : 0) + int(pinnedPrograms.size());
+        return theme->scaled((classic ? CLASSIC_TOP : LEFT_TOP) + pinned * LEFT_BIG + (pinned ? LEFT_LINE : 0) + recentPrograms * LEFT_SMALL + LEFT_LINE) + moreHeight;
+    };
+    // explorer.exe's sub_101cc15: the panes get the room between the Start button and the monitor's edge
+    // less the user and Log Off panes (All Programs' band too for the programs); what does not fit is
+    // left out, most used programs first, then the pinned ones, and sub_101ca03 says so (8231, 8232)
+    const QScreen *monitor = QGuiApplication::screenAt(bottomLeft) ? QGuiApplication::screenAt(bottomLeft) : QGuiApplication::primaryScreen();
+    const int room = bottomLeft.y() - monitor->geometry().top() - userHeight - logoffHeight;
+    m_itemsLeftOut = y - userHeight + theme->scaled(classic ? CLASSIC_BODY_END : BODY_END) > room;
+    while (programsHeight() > room && (recentPrograms || !pinnedPrograms.isEmpty())) {
+        if (recentPrograms)
+            --recentPrograms;
+        else
+            pinnedPrograms.removeLast();
+        m_itemsLeftOut = true;
+    }
+    const int leftHeight = programsHeight();
+    // (the places pane gets that room too: the places below it are not shown)
+    const int bodyHeight = qMin(std::max({theme->scaled(BODY_MIN), y - userHeight + theme->scaled(classic ? CLASSIC_BODY_END : BODY_END), leftHeight}),
+                                qMax(room, leftHeight));
+    m_items.erase(std::remove_if(m_items.begin(), m_items.end(), [&](const Item &item) { return item.rect.bottom() >= userHeight + bodyHeight; }),
+                  m_items.end());
     m_right.setHeight(bodyHeight);
 
     m_user = QRect(0, 0, width, userHeight);
@@ -1010,6 +1031,31 @@ void StartPanel::build(QPoint bottomLeft)
     // The left column: the default browser and mail, then the most used programs
     y = m_left.y() + theme->scaled(classic ? CLASSIC_TOP : LEFT_TOP);
     const auto launcher = [](const programs::Program &program) { return [program] { programs::launch(program); }; };
+    // A pinned or most used item whose program is gone: sub_1040e22 asks ShellMessageBox(MB_YESNO) 8224
+    // under the item's name, and Yes takes it off its list
+    const auto listed = [](const programs::Program &program, bool isPinned) {
+        return [program, isPinned] {
+            const QString command = program.command.value(0);
+            if (programs::find(program.id) && (!QStandardPaths::findExecutable(command).isEmpty() || QFileInfo(command).isExecutable())) {
+                programs::launch(program);
+                return;
+            }
+            const QString question = explorerString(8224, "The item you selected is unavailable.  It might have been moved, renamed, "
+                                                          "or removed.  Do you want to remove it from the list?");
+            // (MB_YESNO alone: no icon)
+            QMessageBox box(QMessageBox::NoIcon, program.name, question, QMessageBox::Yes | QMessageBox::No);
+            if (box.exec() != QMessageBox::Yes)
+                return;
+            if (isPinned) {
+                QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);
+                QStringList pinned = settings.value(QStringLiteral("StartMenu/Pinned")).toStringList();
+                pinned.removeAll(program.id);
+                settings.setValue(QStringLiteral("StartMenu/Pinned"), pinned);
+            } else {
+                programs::removeUse(program.id);
+            }
+        };
+    };
     if (browser) {
         addLeft(y, explorerString(EXPLORER_INTERNET, "Internet"), browser->name, programs::iconOf(*browser), launcher(*browser), true);
         tip(TIP_INTERNET);
@@ -1027,7 +1073,7 @@ void StartPanel::build(QPoint bottomLeft)
         y += theme->scaled(LEFT_LINE);
     }
     for (const programs::Program &program : std::as_const(pinnedPrograms)) {
-        addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
+        addLeft(y, program.name, {}, programs::iconOf(program), listed(program, true), false);
         m_items.last().tip = program.comment;
         m_items.last().programId = program.id;
     }
@@ -1039,7 +1085,7 @@ void StartPanel::build(QPoint bottomLeft)
             continue;
         if (added++ >= recentPrograms)
             break;
-        addLeft(y, program.name, {}, programs::iconOf(program), launcher(program), false);
+        addLeft(y, program.name, {}, programs::iconOf(program), listed(program, false), false);
         m_items.last().tip = program.comment;
         m_items.last().programId = program.id;
     }
@@ -2000,10 +2046,31 @@ QStringList StartPanel::newPrograms() const
 // stem on All Programs' middle row; it closes itself after 10 s
 void StartPanel::showEvent(QShowEvent *)
 {
-    if (m_classicMenu || newPrograms().isEmpty())
+    if (m_classicMenu)
         return;
     const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe")));
     if (!explorer)
+        return;
+    // sub_101ca03: once in the shell's life, the same tooltip with a title and TTI_INFO at the
+    // programs pane's bottom middle, closed after 10 s as the other
+    static bool leftOutShown = false;
+    if (m_itemsLeftOut && !leftOutShown) {
+        leftOutShown = true;
+        BalloonTip tip;
+        tip.kind = BalloonTip::Info;
+        tip.title = xpfiles::string(*explorer, 8231);
+        tip.text = xpfiles::string(*explorer, 8232);
+        tip.sound = false;
+        auto *balloon = new BalloonWindow(tip);
+        balloon->setAttribute(Qt::WA_DeleteOnClose);
+        balloon->place(QRect(mapToGlobal(QPoint(m_left.center().x(), m_left.bottom() + 1)), QSize(1, 1)));
+        connect(balloon, &BalloonWindow::clicked, balloon, &QWidget::close);
+        connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
+        QTimer::singleShot(10000, balloon, &QWidget::close);
+        m_leftOutBalloon = balloon;
+        balloon->show();
+    }
+    if (newPrograms().isEmpty())
         return;
     BalloonTip tip;
     tip.title = xpfiles::string(*explorer, 8229);
@@ -2023,6 +2090,8 @@ void StartPanel::hideEvent(QHideEvent *)
 {
     if (m_newProgramsBalloon)
         m_newProgramsBalloon->close();
+    if (m_leftOutBalloon)
+        m_leftOutBalloon->close();
     hideInfoTip();
     closeCascades(0);
     Q_EMIT closed();
