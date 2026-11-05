@@ -20,6 +20,7 @@ add_executable(explorer
     src/calculator.cpp src/calculator.h
     src/console.cpp src/console.h
     src/contexthelp.cpp src/contexthelp.h
+    src/editmenu.cpp src/editmenu.h
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
     src/filebrowser.cpp src/filebrowser.h

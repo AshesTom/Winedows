@@ -13,6 +13,7 @@
 #include <QMessageBox>
 #include "filebrowser.h"
 #include "frames.h"
+#include "editmenu.h"
 #include "menushadow.h"
 #include "notepad.h"
 #include "notifications.h"
@@ -102,6 +103,7 @@ int main(int argc, char **argv)
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
     QApplication app(argc, argv);
     menushadow::install();
+    editmenu::install();
     app.setApplicationName(QStringLiteral("explorer"));
     app.setQuitOnLastWindowClosed(false);
 
