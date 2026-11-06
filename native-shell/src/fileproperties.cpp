@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "fileproperties.h"
 
+#include "displayproperties.h"
+#include "filebrowser.h"
 #include "fileicons.h"
+#include "foldercustomize.h"
+#include "pictures.h"
 #include "programs.h"
 #include "theme.h"
 #include "contexthelp.h"
@@ -9,11 +13,14 @@
 #include "xpfiles.h"
 
 #include <QAbstractButton>
+#include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDialog>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QIcon>
@@ -21,15 +28,20 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLocale>
+#include <QMessageBox>
 #include <QMimeDatabase>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QThreadPool>
 #include <QTimer>
 #include <QtEndian>
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <cmath>
 #include <sys/stat.h>
@@ -76,6 +88,20 @@ const VersionKey VERSION_KEYS[] = {{"Comments", 8752}, {"CompanyName", 8753}, {"
                                    {"OriginalFilename", 8757}, {"PrivateBuild", 8758}, {"ProductName", 8759}, {"ProductVersion", 8760},
                                    {"SpecialBuild", 8761}, {"FileVersion", 8765}};
 const int STRING_LANGUAGE = 8763;
+
+// The Customize page (dialog 1124, its procedure 0x7cae1dd5): the template, its subfolders box, the
+// folder picture's buttons and preview (an icon, a picture or Generating preview...), the icon's
+const int DIALOG_CUSTOMIZE = 1124, CUSTOMIZE_TYPE = 14176, CUSTOMIZE_SUBFOLDERS = 14177, CUSTOMIZE_RESTORE = 14179,
+          CUSTOMIZE_ICON_PREVIEW = 14180, CUSTOMIZE_PICTURE = 14181, CUSTOMIZE_CHOOSE = 14182, CUSTOMIZE_CHANGE_ICON = 14183,
+          CUSTOMIZE_ICON = 14184, CUSTOMIZE_GENERATING = 14185;
+const QList<QPair<int, int>> HELP_CUSTOMIZE = {   // 0x7c9c35b0, with filefold.hlp
+    {14176, 10005}, {14177, 10006}, {14182, 10007}, {14179, 10008}, {14183, 10009}, {14180, -1}, {14181, -1},
+    {14184, -1}, {14187, -1}, {14186, -1}};
+// Customize (the question's caption), Generating preview..., the question when folder tasks are off
+// (0x7cae0e9e), Change Icon for %s Folder, and Choose Picture's filter and title (0x7cae1c90)
+const int STRING_CUSTOMIZE = 29993, STRING_GENERATING = 29994, STRING_TASKS_OFF = 29996, STRING_CHANGE_ICON = 17153,
+          STRING_IMAGES = 9007, STRING_BROWSE = 9015;
+const int PREVIEW_SIDE = 96;   // the thumbnail and the icon 0x7cae1519 asks for
 
 const std::optional<w4w::PeResources> &shell32()
 {
@@ -351,9 +377,205 @@ void showAdvanced(QWidget *parent, bool folder)
     dialog.exec();
 }
 
+// What the Customize page shows and Apply writes
+struct Customize : std::enable_shared_from_this<Customize>
+{
+    QString folder;
+    QWidget *page = nullptr;
+    xpdialog::Page controls;
+    QComboBox *type = nullptr;
+    QAbstractButton *subfolders = nullptr;
+    QString shownType, logo, shownLogo;
+    bool shownSubfolders = false;
+    std::optional<foldercustomize::Icon> icon;
+    bool iconChanged = false;
+    int previews = 0;
+    std::function<void()> changed;
+
+    QLabel *label(int id) const { return qobject_cast<QLabel *>(controls.controls.value(id)); }
+    void setChanged() const
+    {
+        if (changed)
+            changed();
+    }
+
+    // 0x7cae1785 and its thread 0x7cae1519: Generating preview..., then the folder's thumbnail as the
+    // choice would make it, else its icon
+    void preview()
+    {
+        const int wanted = ++previews;
+        const auto show = [this](int which) {
+            for (const auto &[id, shown] : {std::pair{CUSTOMIZE_GENERATING, 0}, {CUSTOMIZE_ICON_PREVIEW, 1}, {CUSTOMIZE_PICTURE, 2}})
+                if (QLabel *control = label(id))
+                    control->setVisible(shown == which);
+        };
+        if (QLabel *generating = label(CUSTOMIZE_GENERATING))
+            generating->setText(text(STRING_GENERATING, "Generating preview..."));
+        show(0);
+        const QString picture = logo.isEmpty() ? foldercustomize::picture(folder, false) : QDir(folder).absoluteFilePath(logo);
+        std::weak_ptr<Customize> self = weak_from_this();
+        QPointer<QWidget> guard(page);
+        QThreadPool::globalInstance()->start([self, guard, wanted, show, folder = folder, picture] {
+            const QImage image = pictures::folderImage(folder, PREVIEW_SIDE, picture);
+            QMetaObject::invokeMethod(qApp, [self, guard, wanted, show, image] {
+                const auto customize = self.lock();
+                if (!guard || !customize || customize->previews != wanted)
+                    return;
+                if (!image.isNull()) {
+                    if (QLabel *control = customize->label(CUSTOMIZE_PICTURE))
+                        control->setPixmap(QPixmap::fromImage(image));
+                    show(2);
+                } else {
+                    if (QLabel *control = customize->label(CUSTOMIZE_ICON_PREVIEW))
+                        control->setPixmap(customize->folderIcon().pixmap(PREVIEW_SIDE, PREVIEW_SIDE));
+                    show(1);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+
+    QIcon folderIcon() const
+    {
+        if (iconChanged && !icon)
+            return fileicons::shell(fileicons::Folder);
+        if (iconChanged)
+            if (const auto pe = xpfiles::resources(xpfiles::find(icon->file))) {
+                QIcon chosen;
+                for (const int size : {16, 32, 48})
+                    if (const QImage image = xpfiles::icon(*pe, icon->group, size); !image.isNull())
+                        chosen.addPixmap(QPixmap::fromImage(image));
+                return chosen;
+            }
+        return fileicons::forFile(QFileInfo(folder));
+    }
+
+    void changeIcon(QWidget *sheet)
+    {
+        foldercustomize::Icon chosen = icon.value_or(foldercustomize::Icon{QStringLiteral("shell32.dll"), QString()});
+        bool restored = false;
+        const QString title = text(STRING_CHANGE_ICON, "Change Icon for %s Folder").replace(QLatin1String("%s"), QFileInfo(folder).fileName());
+        if (!pickIcon(sheet, title, &chosen.file, &chosen.group, &restored))
+            return;
+        icon = restored ? std::nullopt : std::optional(chosen);
+        iconChanged = true;
+        if (QLabel *control = label(CUSTOMIZE_ICON))
+            control->setPixmap(folderIcon().pixmap(32, 32));
+        setChanged();
+    }
+
+    // Choose Picture: shell32's open dialog in the folder (0x7cab7097 with 9006, 9007, 9015 and
+    // OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY)
+    void choosePicture(QWidget *sheet)
+    {
+        const QStringList filter = text(STRING_IMAGES, "Images#*.jpg;*.jpeg;*.gif;*.png;*.bmp#").split(QLatin1Char('#'), Qt::SkipEmptyParts);
+        QString qtFilter;
+        for (qsizetype i = 0; i + 1 < filter.size(); i += 2)
+            qtFilter += (qtFilter.isEmpty() ? QString() : QStringLiteral(";;")) + filter[i] + QStringLiteral(" (") + QString(filter[i + 1]).replace(QLatin1Char(';'), QLatin1Char(' ')) + QLatin1Char(')');
+        const QString chosen = QFileDialog::getOpenFileName(sheet, text(STRING_BROWSE, "Browse"), folder, qtFilter);
+        if (chosen.isEmpty())
+            return;
+        logo = chosen;
+        preview();
+        setChanged();
+    }
+
+    void apply(QWidget *sheet)
+    {
+        const QString chosenType = type ? type->currentData().toString() : shownType;
+        const bool all = subfolders && subfolders->isChecked();
+        bool done = false;
+        if (chosenType != shownType || logo != shownLogo || all != shownSubfolders) {
+            // 0x7cae0e9e: a template shows in the folder's tasks, which Folder Options may have turned off
+            const QString settings = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf");
+            if (chosenType != shownType && QSettings(settings, QSettings::IniFormat).value(QStringLiteral("classicFolders"), false).toBool()
+                && QMessageBox::question(sheet, text(STRING_CUSTOMIZE, "Customize"),
+                                         text(STRING_TASKS_OFF, "Folder tasks must be enabled to see your changes.  Would you like to turn it on?"))
+                       == QMessageBox::Yes) {
+                QSettings(settings, QSettings::IniFormat).setValue(QStringLiteral("classicFolders"), false);
+                FileBrowser::settingsChanged();
+            }
+            foldercustomize::apply(folder, chosenType, logo, all);
+            shownType = chosenType;
+            shownLogo = logo;
+            shownSubfolders = all;
+            done = true;
+        }
+        if (iconChanged) {
+            foldercustomize::setIcon(folder, icon);
+            iconChanged = false;
+            done = true;
+        }
+        if (done)
+            FileBrowser::folderCustomized(folder);
+    }
+};
+
+// The page's state at WM_INITDIALOG (0x7cae1a74): the templates with the folder's selected (0x7cae116e),
+// its Logo and preview (0x7cae1a2f), its icon (0x7cae0ddb) and the subfolders box (0x7cae12c3)
+std::shared_ptr<Customize> customizePage(const QString &folder, QString *caption)
+{
+    auto customize = std::make_shared<Customize>();
+    customize->folder = folder;
+    customize->page = new QWidget;
+    customize->controls = xpdialog::build(*shell32(), DIALOG_CUSTOMIZE, customize->page);
+    contexthelp::attach(customize->controls, HELP_CUSTOMIZE, QStringLiteral("filefold.hlp"));
+    *caption = customize->controls.caption.isEmpty() ? text(STRING_CUSTOMIZE, "Customize") : customize->controls.caption;
+    const QString given = foldercustomize::folderType(folder);
+    customize->shownType = given.isEmpty() ? FileBrowser::folderTemplate(folder) : given;
+    if ((customize->type = qobject_cast<QComboBox *>(customize->controls.controls.value(CUSTOMIZE_TYPE)))) {
+        for (const foldercustomize::Template &entry : foldercustomize::TEMPLATES)
+            customize->type->addItem(text(entry.string, entry.name), QLatin1String(entry.name));
+        const int row = customize->type->findData(customize->shownType, Qt::UserRole, Qt::MatchFixedString);
+        customize->type->setCurrentIndex(qMax(0, row));
+        customize->shownType = customize->type->currentData().toString();
+    }
+    if ((customize->subfolders = qobject_cast<QAbstractButton *>(customize->controls.controls.value(CUSTOMIZE_SUBFOLDERS))))
+        customize->subfolders->setChecked(customize->shownSubfolders = foldercustomize::typeInherited(folder));
+    customize->logo = customize->shownLogo = foldercustomize::logo(folder);
+    customize->icon = foldercustomize::icon(folder);
+    if (QLabel *icon = customize->label(CUSTOMIZE_ICON))
+        icon->setPixmap(customize->folderIcon().pixmap(32, 32));
+    for (const int id : {CUSTOMIZE_ICON_PREVIEW, CUSTOMIZE_PICTURE})
+        if (QLabel *preview = customize->label(id))
+            preview->setAlignment(Qt::AlignCenter);
+    customize->preview();
+
+    std::weak_ptr<Customize> self = customize;
+    if (customize->type)
+        QObject::connect(customize->type, &QComboBox::activated, customize->page, [self] {
+            if (const auto that = self.lock())
+                that->setChanged();
+        });
+    if (customize->subfolders)
+        QObject::connect(customize->subfolders, &QAbstractButton::toggled, customize->page, [self] {
+            if (const auto that = self.lock())
+                that->setChanged();
+        });
+    if (auto *choose = qobject_cast<QPushButton *>(customize->controls.controls.value(CUSTOMIZE_CHOOSE)))
+        QObject::connect(choose, &QPushButton::clicked, customize->page, [self, choose] {
+            if (const auto that = self.lock())
+                that->choosePicture(choose->window());
+        });
+    // Restore Default: no Logo, the folder's own thumbnail
+    if (auto *restore = qobject_cast<QPushButton *>(customize->controls.controls.value(CUSTOMIZE_RESTORE)))
+        QObject::connect(restore, &QPushButton::clicked, customize->page, [self] {
+            if (const auto that = self.lock()) {
+                that->logo.clear();
+                that->preview();
+                that->setChanged();
+            }
+        });
+    if (auto *change = qobject_cast<QPushButton *>(customize->controls.controls.value(CUSTOMIZE_CHANGE_ICON)))
+        QObject::connect(change, &QPushButton::clicked, customize->page, [self, change] {
+            if (const auto that = self.lock())
+                that->changeIcon(change->window());
+        });
+    return customize;
+}
+
 } // namespace
 
-void show(const QStringList &paths, QWidget *parent)
+void show(const QStringList &paths, QWidget *parent, Page start)
 {
     if (paths.isEmpty() || !shell32())
         return;
@@ -465,6 +687,15 @@ void show(const QStringList &paths, QWidget *parent)
             tabs->addTab(versionWidget, caption.isEmpty() ? QObject::tr("Version") : caption);
         }
 
+    std::shared_ptr<Customize> customize;
+    if (folder && foldercustomize::customizable(first.absoluteFilePath())) {
+        QString caption;
+        customize = customizePage(first.absoluteFilePath(), &caption);
+        tabs->addTab(customize->page, caption);
+        if (start == CustomizePage)
+            tabs->setCurrentIndex(1);
+    }
+
     if (one && !folder) {
         // XP's Summary page is a document page; here its fields are the file's, with the document
         // properties left empty where Linux has no equivalent.
@@ -495,6 +726,8 @@ void show(const QStringList &paths, QWidget *parent)
         QObject::connect(name, &QLineEdit::textEdited, dialog, changed);
     if (readOnly)
         QObject::connect(readOnly, &QAbstractButton::toggled, dialog, changed);
+    if (customize)
+        customize->changed = changed;   // PSM_CHANGED (0x7cae1430)
     // A rename, and Read-only as the owner's, group's and others' write permissions
     // What the sheet stands for, which Apply changes
     struct State
@@ -503,7 +736,9 @@ void show(const QStringList &paths, QWidget *parent)
         bool readOnly;
     };
     auto state = std::make_shared<State>(State{paths, allReadOnly});
-    const auto applyChanges = [state, name, readOnly, apply, dialog, one] {
+    const auto applyChanges = [state, name, readOnly, apply, dialog, one, customize] {
+        if (customize)
+            customize->apply(dialog);
         if (readOnly && readOnly->isChecked() != state->readOnly) {
             for (const QString &path : std::as_const(state->paths)) {
                 QFile file(path);

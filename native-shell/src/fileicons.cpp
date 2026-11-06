@@ -3,6 +3,7 @@
 
 #include "programs.h"
 #include "fileops.h"
+#include "foldercustomize.h"
 #include "theme.h"
 #include "xpfiles.h"
 
@@ -116,6 +117,16 @@ QIcon forFile(const QFileInfo &file)
     if (file.isDir()) {
         if (file.isRoot())
             return shell(Drive);
+        // Customize's Change Icon
+        if (const auto chosen = foldercustomize::icon(file.absoluteFilePath()))
+            if (const auto pe = xpfiles::resources(xpfiles::find(chosen->file))) {
+                QIcon icon;
+                for (const int size : {16, 32, 48})
+                    if (const QImage image = xpfiles::icon(*pe, chosen->group, size); !image.isNull())
+                        icon.addPixmap(QPixmap::fromImage(image));
+                if (!icon.isNull())
+                    return icon;
+            }
         return shell(placeIcon(file.absoluteFilePath()));
     }
     if (file.suffix().compare(QLatin1String("lnk"), Qt::CaseInsensitive) == 0) {

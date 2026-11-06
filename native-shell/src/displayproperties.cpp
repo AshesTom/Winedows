@@ -635,8 +635,13 @@ static void fillIconChoices(QListWidget *list, const QString &file, int size)
 
 static bool pickDesktopIcon(QWidget *parent, IconChoice *choice)
 {
+    return pickIcon(parent, QObject::tr("Change Icon"), &choice->file, &choice->group);
+}
+
+bool pickIcon(QWidget *parent, const QString &title, QString *chosenFile, QString *chosenGroup, bool *restored)
+{
     QDialog dialog(parent);
-    dialog.setWindowTitle(QObject::tr("Change Icon"));
+    dialog.setWindowTitle(title);
     auto *layout = new QVBoxLayout(&dialog);
     auto *list = new QListWidget(&dialog);
     list->setViewMode(QListView::IconMode);
@@ -651,16 +656,28 @@ static bool pickDesktopIcon(QWidget *parent, IconChoice *choice)
     auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
     ok->setDefault(true);
     buttons->addWidget(browse);
+    if (restored) {
+        *restored = false;
+        auto *restore = new QPushButton(QObject::tr("&Restore Defaults"), &dialog);
+        buttons->addWidget(restore);
+        QObject::connect(restore, &QPushButton::clicked, &dialog, [&dialog, restored] {
+            *restored = true;
+            dialog.accept();
+        });
+    }
     buttons->addStretch(1);
     buttons->addWidget(ok);
     buttons->addWidget(cancel);
     layout->addLayout(buttons);
-    QString file = choice->file.isEmpty() ? QStringLiteral("shell32.dll") : choice->file;
+    QString file = chosenFile->isEmpty() ? QStringLiteral("shell32.dll") : *chosenFile;
     fillIconChoices(list, file, 32);
     if (list->count() == 0 && file != QLatin1String("shell32.dll"))
         fillIconChoices(list, QStringLiteral("shell32.dll"), 32);
     if (list->count())
         list->setCurrentRow(0);
+    for (int row = 0; row < list->count(); ++row)
+        if (list->item(row)->text() == *chosenGroup)
+            list->setCurrentRow(row);
     QObject::connect(browse, &QPushButton::clicked, &dialog, [&] {
         const QString chosen = QFileDialog::getOpenFileName(&dialog, QObject::tr("Change Icon"), QDir::rootPath(),
                                                             QObject::tr("Programs and libraries (*.dll *.exe *.ocx *.icl);;All files (*)"));
@@ -673,14 +690,18 @@ static bool pickDesktopIcon(QWidget *parent, IconChoice *choice)
     });
     QObject::connect(ok, &QPushButton::clicked, &dialog, &QDialog::accept);
     QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted || !list->currentItem())
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+    if (restored && *restored)
+        return true;
+    if (!list->currentItem())
         return false;
     const QString value = list->currentItem()->data(Qt::UserRole).toString();
     const qsizetype bar = value.lastIndexOf(QLatin1Char('|'));
     if (bar <= 0)
         return false;
-    choice->file = value.left(bar);
-    choice->group = value.mid(bar + 1);
+    *chosenFile = value.left(bar);
+    *chosenGroup = value.mid(bar + 1);
     return true;
 }
 

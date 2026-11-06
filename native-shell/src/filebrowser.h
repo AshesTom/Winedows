@@ -66,6 +66,10 @@ public:
     static void settingsChanged();
     // Folder Options' Reset All Folders: every folder's own view forgotten, as is Apply to All's
     static void resetFolderViews();
+    // The Customize page: the template (a FolderType name) the folder's type is shown as, Documents
+    // for the types it does not offer; and its windows, its parent's and its subfolders' read again.
+    static QString folderTemplate(const QString &folder);
+    static void folderCustomized(const QString &folder);
 
     FileBrowser(const QString &location);
     void navigate(const QString &location, bool remember = true);

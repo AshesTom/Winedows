@@ -31,6 +31,8 @@ QSize dimensions(const QString &path);
 QImage load(const QString &path, QSize box);
 // The pictures of a folder in name order
 QStringList picturesIn(const QString &folder);
+// A folder's thumbnail in a square of SIDE: PICTURE alone, else up to four of its pictures two by two
+QImage folderImage(const QString &folder, int side, const QString &picture);
 
 // The buttons of shimgvw.dll's strips: the viewer's toolbar and the slide show's
 enum ViewerButton { ZoomIn = 2, ZoomOut = 3, BestFit = 5, ActualSize = 6, SlideShowButton = 8, PreviousImage = 9, NextImage = 10,

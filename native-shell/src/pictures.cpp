@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "pictures.h"
 
+#include "foldercustomize.h"
 #include "theme.h"
 #ifdef XP_PRINTING
 #include <QPrintDialog>
@@ -93,9 +94,15 @@ const QSet<QString> &suffixes()
     return known;
 }
 
-// Up to four pictures in a square of SIDE, two by two, for a folder
-QImage folderImage(const QString &folder, int side)
+} // namespace
+
+// A folder's thumbnail in a square of SIDE: PICTURE alone (Customize's, or its folder.jpg: 0x7ca39615),
+// else up to four of its pictures two by two
+QImage folderImage(const QString &folder, int side, const QString &picture)
 {
+    if (!picture.isEmpty())
+        if (const QImage image = load(picture, QSize(side, side)); !image.isNull())
+            return image;
     const QStringList found = picturesIn(folder).mid(0, FOLDER_PICTURES);
     if (found.isEmpty())
         return {};
@@ -110,8 +117,6 @@ QImage folderImage(const QString &folder, int side)
     }
     return image;
 }
-
-} // namespace
 
 bool isPicture(const QString &path)
 {
@@ -422,7 +427,7 @@ QImage Thumbnails::get(const QString &path, int side)
     }();
     QPointer<Thumbnails> self(this);
     pool->start([self, path, side, key, folder] {
-        const QImage image = folder ? folderImage(path, side) : load(path, QSize(side, side));
+        const QImage image = folder ? folderImage(path, side, foldercustomize::picture(path)) : load(path, QSize(side, side));
         QMetaObject::invokeMethod(Thumbnails::instance(), [self, path, key, image] {
             if (!self)
                 return;

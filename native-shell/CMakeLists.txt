@@ -29,6 +29,7 @@ add_executable(explorer
     src/fileicons.cpp src/fileicons.h
     src/fileops.cpp src/fileops.h
     src/fileproperties.cpp src/fileproperties.h
+    src/foldercustomize.cpp src/foldercustomize.h
     src/notepad.cpp src/notepad.h
     src/pictures.cpp src/pictures.h
     src/searchcompanion.cpp src/searchcompanion.h

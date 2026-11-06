@@ -109,3 +109,7 @@ private:
     QList<QSize> m_modes;
     QSize m_mode;
 };
+
+// shell32's PickIconDlg: an icon group of FILE (shell32.dll when empty), the choice back in FILE and GROUP.
+// RESTORED, when given, adds Restore Defaults, which accepts with it set.
+bool pickIcon(QWidget *parent, const QString &title, QString *file, QString *group, bool *restored = nullptr);

@@ -4,6 +4,7 @@
 #include "applets.h"
 #include "controlpanel.h"
 #include "fileicons.h"
+#include "foldercustomize.h"
 #include "folderoptions.h"
 #include "fileops.h"
 #include "pictures.h"
@@ -647,26 +648,23 @@ QImage typeArt(int type, TypeArt which)
 }
 
 // The folders' "bags" (XP's ShellNoRoam\Bags): each folder's type, view and Folders bar
-QString bagsPath()
-{
-    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer-bags.conf");
-}
+using foldercustomize::bagsPath;
+using foldercustomize::bagKey;
 
-QString bagKey(const QString &folder, const char *value)
-{
-    return QString::fromLatin1(folder.toUtf8().toBase64(QByteArray::Base64UrlEncoding)) + QLatin1Char('/') + QLatin1String(value);
-}
-
-// A type the folder was given: Customize This Folder's template, else what its bag keeps (desktop.ini's
-// FolderType on XP, which 0x7ca2c3c9 reads first), else XP's special folders' own; -1 for none
+// A type the folder was given: the Customize page's FolderType (its own or inherited), the template an
+// earlier version of this shell kept, else what its bag keeps (desktop.ini's FolderType on XP, which
+// 0x7ca2c3c9 reads first), else XP's special folders' own; -1 for none
 int givenFolderType(const QString &folder)
 {
-    static const QHash<QString, int> templates{{QStringLiteral("Documents"), TypeDocuments}, {QStringLiteral("Pictures"), TypePictures},
-                                               {QStringLiteral("Photo Album"), TypePhotoAlbum}, {QStringLiteral("Music"), TypeMusic},
-                                               {QStringLiteral("Videos"), TypeVideos}};
+    static const QHash<QString, int> names{{QStringLiteral("documents"), TypeDocuments}, {QStringLiteral("pictures"), TypePictures},
+                                           {QStringLiteral("photoalbum"), TypePhotoAlbum}, {QStringLiteral("music"), TypeMusic},
+                                           {QStringLiteral("musicartist"), TypeMusicArtist}, {QStringLiteral("musicalbum"), TypeMusicAlbum},
+                                           {QStringLiteral("videos"), TypeVideos}};
+    if (const auto found = names.constFind(foldercustomize::folderType(folder).toLower()); found != names.cend())
+        return *found;
     const QString chosen = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("folder/template/") + folder).toString();
-    if (templates.contains(chosen))
-        return templates.value(chosen);
+    if (const auto found = names.constFind(chosen.toLower().remove(QLatin1Char(' '))); found != names.cend())
+        return *found;
     const QVariant stored = QSettings(bagsPath(), QSettings::IniFormat).value(bagKey(folder, "type"));
     if (stored.isValid())
         return qBound(0, stored.toInt(), int(TypeCommonDocuments));
@@ -2087,6 +2085,11 @@ void FileBrowser::buildMenus()
             m_details->setColumnHidden(column, hidden.contains(QString::number(column)));
     });
     detailsAction->setEnabled(true);
+    // Customize This Folder, which shell32 offers only where its page goes (0x7caa3d31)
+    QAction *customizeAction = view->addAction(tr("Customi&ze This Folder..."), this, &FileBrowser::customizeFolder);
+    connect(view, &QMenu::aboutToShow, this, [this, customizeAction] {
+        customizeAction->setVisible(foldercustomize::customizable(currentFolder()));
+    });
     QAction *groupsAction = view->addAction(tr("Show in &Groups"));
     groupsAction->setCheckable(true);
     groupsAction->setChecked(m_groups);
@@ -2101,6 +2104,15 @@ void FileBrowser::buildMenus()
     const struct { int string; const char *fallback; int column; } orders[] = {{8976, "Name", 0}, {8978, "Size", 1}, {8979, "Type", 2}, {8980, "Date Modified", 3}};
     for (const auto &order : orders)
         arrange->addAction(xpfiles::shellString(order.string, order.fallback), this, [this, column = order.column] { m_details->sortByColumn(column, Qt::AscendingOrder); });
+    // XP's order: Show in Groups within Arrange Icons by, then Choose Details and Customize This Folder apart
+    view->removeAction(groupsAction);
+    arrange->addSeparator();
+    arrange->addAction(groupsAction);
+    view->removeAction(detailsAction);
+    view->removeAction(customizeAction);
+    view->addSeparator();
+    view->addAction(detailsAction);
+    view->addAction(customizeAction);
     view->addSeparator();
     QMenu *go = view->addMenu(tr("&Go To"));
     go->addAction(tr("&Back"), this, [this] { if (m_backButton->isEnabled()) m_backButton->click(); });
@@ -3062,51 +3074,53 @@ void FileBrowser::openPath(const QString &path)
     programs::open(path);
 }
 
-// XP's Customize This Folder template: its wizard's templates, kept for this folder (or its
-// subfolders), which change whether the picture tasks and Filmstrip apply.
+// The File menu's Customize This Folder: the folder's Properties on its Customize page, as XP opens them
 void FileBrowser::customizeFolder()
 {
     const QString folder = currentFolder();
-    if (folder.isEmpty())
-        return;
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Customize This Folder"));
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(tr("Choose a template for this folder:"), &dialog));
-    auto *templates = new QComboBox(&dialog);
-    templates->addItem(tr("(None)"), QString());
-    templates->addItem(tr("Documents"), QStringLiteral("Documents"));
-    templates->addItem(tr("Pictures"), QStringLiteral("Pictures"));
-    templates->addItem(tr("Photo Album"), QStringLiteral("Photo Album"));
-    templates->addItem(tr("Music"), QStringLiteral("Music"));
-    templates->addItem(tr("Videos"), QStringLiteral("Videos"));
-    QSettings settings(settingsPath(), QSettings::IniFormat);
-    const QString current = settings.value(QStringLiteral("folder/template/") + folder).toString();
-    const int index = templates->findData(current);
-    templates->setCurrentIndex(index < 0 ? 0 : index);
-    layout->addWidget(templates);
-    auto *subfolders = new QCheckBox(tr("Also apply this template to all subfolders"), &dialog);
-    layout->addWidget(subfolders);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        const QString chosen = templates->currentData().toString();
-        const auto apply = [&settings, chosen](const QString &path) {
-            if (chosen.isEmpty())
-                settings.remove(QStringLiteral("folder/template/") + path);
-            else
-                settings.setValue(QStringLiteral("folder/template/") + path, chosen);
-        };
-        apply(folder);
-        if (subfolders->isChecked())
-            for (const QFileInfo &child : QDir(folder).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
-                apply(child.absoluteFilePath());
-        settings.sync();
-        dialog.accept();
-        navigate(m_location, false);
-    });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    dialog.exec();
+    if (!folder.isEmpty())
+        fileproperties::show({folder}, this, fileproperties::CustomizePage);
+}
+
+QString FileBrowser::folderTemplate(const QString &folder)
+{
+    int type = givenFolderType(folder);
+    if (type < 0) {
+        QDir::Filters filter = QDir::AllEntries | QDir::NoDotAndDotDot;
+        if (QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("showHidden"), false).toBool())
+            filter |= QDir::Hidden;
+        type = folderType(folder, QDir(folder).entryInfoList(filter, QDir::Name | QDir::DirsFirst));
+    }
+    switch (type) {
+    case TypePictures: case TypeMyPictures:
+        return QStringLiteral("Pictures");
+    case TypePhotoAlbum:
+        return QStringLiteral("PhotoAlbum");
+    case TypeMusic: case TypeMyMusic:
+        return QStringLiteral("Music");
+    case TypeMusicArtist:
+        return QStringLiteral("MusicArtist");
+    case TypeMusicAlbum:
+        return QStringLiteral("MusicAlbum");
+    case TypeVideos: case TypeMyVideos: case TypeVideoAlbum:
+        return QStringLiteral("Videos");
+    default:
+        return QStringLiteral("Documents");
+    }
+}
+
+// What 0x7cae0f6b asks of the windows on the folder: here they, and those on its parent (its
+// thumbnail) and on its subfolders (their inherited type), are listed again.
+void FileBrowser::folderCustomized(const QString &folder)
+{
+    const QString parent = QFileInfo(folder).path();
+    pictures::Thumbnails::instance()->forget(folder);
+    for (QWidget *widget : QApplication::topLevelWidgets())
+        if (auto *window = qobject_cast<FileBrowser *>(widget)) {
+            const QString location = window->m_location;
+            if (location == folder || location == parent || location.startsWith(folder + QLatin1Char('/')))
+                window->navigate(location, false);
+        }
 }
 
 // My Computer's Manage: XP's runs compmgmt.msc, this the desktop's system monitor when it has one. Its words are
@@ -3694,8 +3708,10 @@ void FileBrowser::fillBackgroundMenu(QMenu *menu, const QString &folder)
             configureList(m_list, shownView());
         });
     }
-    if (QAction *customize = items.value(CMD_CUSTOMIZE))
+    if (QAction *customize = items.value(CMD_CUSTOMIZE)) {
+        customize->setVisible(foldercustomize::customizable(folder));
         connect(customize, &QAction::triggered, this, &FileBrowser::customizeFolder);
+    }
     if (QAction *align = items.value(CMD_ALIGN)) {
         align->setCheckable(true);
         align->setChecked(m_alignToGrid);
