@@ -57,7 +57,7 @@ const int VIEWER_STRIP = 105, SLIDE_STRIP = 109;
 // The slide show's pace, and how long its toolbar and pointer stay after the mouse stops
 const int SLIDE_SECONDS = 5, TOOLBAR_SECONDS = 3;
 // Pictures read for a folder's thumbnail, and how many of its files are looked at to call it a picture folder
-const int FOLDER_PICTURES = 4, FOLDER_SAMPLE = 200;
+const int FOLDER_PICTURES = 4;
 
 const std::optional<w4w::PeResources> &viewer()
 {
@@ -156,23 +156,180 @@ QStringList picturesIn(const QString &folder)
     return found;
 }
 
-bool isPictureFolder(const QString &folder)
+#ifdef XP_PRINTING
+// photowiz.dll's Photo Printing Wizard: pick pictures, a printer and a layout, then print; PATHS are the
+// pictures it lists, CHECKED those it starts with.
+void printWizard(const QStringList &paths, const QStringList &checked, QWidget *parent)
 {
-    if (folder.isEmpty() || folder.startsWith(QLatin1String("::")))
-        return false;
-    const QString mine = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    if (!mine.isEmpty() && mine != QDir::homePath() && (folder == mine || folder.startsWith(mine + QLatin1Char('/'))))
-        return true;
-    // XP customizes a folder by what it holds: pictures for the most part
-    int files = 0, found = 0;
-    const QFileInfoList entries = QDir(folder).entryInfoList(QDir::Files);
-    for (const QFileInfo &entry : entries) {
-        if (++files > FOLDER_SAMPLE)
-            break;
-        found += suffixes().contains(entry.suffix().toLower());
+    if (paths.isEmpty())
+        return;
+    const auto photo = [](int id, const char *fallback) {
+        const auto resources = xpfiles::resources(xpfiles::find(QStringLiteral("photowiz.dll")));
+        // the shell's string reader numbers the string blocks from 1, so these IDs are 16 above
+        // the ones it finds
+        const QString text = resources ? xpfiles::string(*resources, id - 16) : QString();
+        return text.isEmpty() ? QObject::tr(fallback) : text;
+    };
+    QWizard wizard(parent);
+    wizard.setWindowTitle(photo(2016, "Photo Printing Wizard"));
+    wizard.setWizardStyle(QWizard::ClassicStyle);
+    wizard.setOption(QWizard::NoBackButtonOnStartPage, true);
+    wizard.setButtonText(QWizard::FinishButton, QObject::tr("Print"));
+    auto *selection = new QWizardPage;
+    selection->setTitle(photo(2017, "Picture Selection"));
+    auto *selectionLayout = new QVBoxLayout(selection);
+    selectionLayout->addWidget(new QLabel(photo(2018, "Pictures with check marks will be printed.  To print all pictures, click Select All."), selection));
+    auto *pictures = new QListWidget(selection);
+    for (const QString &path : std::as_const(paths)) {
+        auto *item = new QListWidgetItem(QFileInfo(path).fileName(), pictures);
+        item->setData(Qt::UserRole, path);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(checked.contains(path) ? Qt::Checked : Qt::Unchecked);
     }
-    return found > 0 && found * 2 >= qMin(files, FOLDER_SAMPLE);
+    selectionLayout->addWidget(pictures, 1);
+    auto *all = new QPushButton(QObject::tr("Select All"), selection);
+    selectionLayout->addWidget(all, 0, Qt::AlignLeft);
+    QObject::connect(all, &QPushButton::clicked, pictures, [pictures] {
+        bool unchecked = false;
+        for (int i = 0; i < pictures->count(); ++i)
+            if (pictures->item(i)->checkState() != Qt::Checked)
+                unchecked = true;
+        for (int i = 0; i < pictures->count(); ++i)
+            pictures->item(i)->setCheckState(unchecked ? Qt::Checked : Qt::Unchecked);
+    });
+    wizard.addPage(selection);
+
+    auto *options = new QWizardPage;
+    options->setTitle(photo(2019, "Printing Options"));
+    auto *optionsLayout = new QVBoxLayout(options);
+    optionsLayout->addWidget(new QLabel(photo(2020, "Select the printer and paper you want to use."), options));
+    auto *printerBox = new QComboBox(options);
+    const QList<QPrinterInfo> printers = QPrinterInfo::availablePrinters();
+    for (const QPrinterInfo &info : printers)
+        printerBox->addItem(info.printerName());
+    if (printerBox->count() == 0 && !QPrinterInfo::defaultPrinterName().isEmpty())
+        printerBox->addItem(QPrinterInfo::defaultPrinterName());
+    auto *paperBox = new QComboBox(options);
+    for (const QPageSize::PageSizeId id : {QPageSize::A4, QPageSize::Letter, QPageSize::Legal, QPageSize::A5, QPageSize::B5})
+        paperBox->addItem(QPageSize(id).name(), int(id));
+    optionsLayout->addWidget(new QLabel(QObject::tr("Printer:"), options));
+    optionsLayout->addWidget(printerBox);
+    optionsLayout->addWidget(new QLabel(QObject::tr("Paper:"), options));
+    optionsLayout->addWidget(paperBox);
+    optionsLayout->addStretch(1);
+    wizard.addPage(options);
+
+    auto *layoutPage = new QWizardPage;
+    layoutPage->setTitle(photo(2021, "Layout Selection"));
+    auto *layoutLayout = new QVBoxLayout(layoutPage);
+    layoutLayout->addWidget(new QLabel(photo(2022, "Select a layout from the choices below."), layoutPage));
+    auto *layoutBox = new QComboBox(layoutPage);
+    layoutBox->addItem(photo(2039, "Full page print"), QSize(1, 1));
+    layoutBox->addItem(QObject::tr("2 by 2"), QSize(2, 2));
+    layoutBox->addItem(QObject::tr("3 by 3"), QSize(3, 3));
+    layoutBox->addItem(QObject::tr("4 by 4"), QSize(4, 4));
+    layoutBox->addItem(QObject::tr("Wallet"), QSize(4, 5));
+    layoutBox->addItem(QObject::tr("Contact sheet"), QSize(6, 7));
+    layoutLayout->addWidget(layoutBox);
+    auto *preview = new QLabel(layoutPage);
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setFrameShape(QFrame::Box);
+    preview->setMinimumSize(220, 160);
+    layoutLayout->addWidget(preview, 1);
+    const auto drawPreview = [preview, layoutBox, image = load(checked.value(0, paths.first()), QSize(1600, 1600))] {
+        QPixmap page(260, 190);
+        page.fill(Qt::white);
+        QPainter painter(&page);
+        painter.setPen(QPen(QColor(120, 120, 120), 1));
+        painter.drawRect(page.rect().adjusted(6, 6, -7, -7));
+        const QSize cells = layoutBox->currentData().toSize();
+        const QRectF sheet = page.rect().adjusted(14, 14, -14, -14);
+        const qreal gap = 3;
+        const QSizeF cell((sheet.width() - gap * (cells.width() - 1)) / cells.width(),
+                          (sheet.height() - gap * (cells.height() - 1)) / cells.height());
+        for (int row = 0; row < cells.height(); ++row)
+            for (int column = 0; column < cells.width(); ++column) {
+                const QRectF box(sheet.x() + column * (cell.width() + gap), sheet.y() + row * (cell.height() + gap),
+                                 cell.width(), cell.height());
+                painter.fillRect(box, QColor(242, 242, 242));
+                painter.drawRect(box);
+                if (row == 0 && column == 0 && !image.isNull()) {
+                    QSize fit = image.size();
+                    fit.scale(box.size().toSize(), Qt::KeepAspectRatio);
+                    const QRect target(int(box.center().x() - fit.width() / 2), int(box.center().y() - fit.height() / 2), fit.width(), fit.height());
+                    painter.drawImage(target, image);
+                }
+            }
+        painter.end();
+        preview->setPixmap(page);
+    };
+    QObject::connect(layoutBox, &QComboBox::currentIndexChanged, layoutPage, [drawPreview] { drawPreview(); });
+    drawPreview();
+    wizard.addPage(layoutPage);
+
+    if (wizard.exec() != QDialog::Accepted)
+        return;
+    QStringList chosen;
+    for (int i = 0; i < pictures->count(); ++i)
+        if (pictures->item(i)->checkState() == Qt::Checked)
+            chosen.append(pictures->item(i)->data(Qt::UserRole).toString());
+    if (chosen.isEmpty())
+        return;
+    QPrinter printer(QPrinter::HighResolution);
+    if (!printerBox->currentText().isEmpty())
+        printer.setPrinterName(printerBox->currentText());
+    printer.setPageSize(QPageSize(QPageSize::PageSizeId(paperBox->currentData().toInt())));
+    const QSize cells = layoutBox->currentData().toSize();
+    QProgressDialog progress(photo(2028, "Printing page %1 of %2..."), QObject::tr("Cancel"), 0, chosen.size(), parent);
+    progress.setWindowTitle(photo(2034, "Please Wait"));
+    progress.setWindowModality(Qt::WindowModal);
+    QPainter painter;
+    if (!painter.begin(&printer)) {
+        QMessageBox::warning(parent, photo(2016, "Photo Printing Wizard"), photo(3017, "The wizard cannot print your pictures because an error occurred:"));
+        return;
+    }
+    const QRect page = painter.viewport();
+    const int margin = qMin(page.width(), page.height()) / 40;
+    const int gap = margin / 4;
+    const QSize cell((page.width() - 2 * margin - (cells.width() - 1) * gap) / cells.width(),
+                     (page.height() - 2 * margin - (cells.height() - 1) * gap) / cells.height());
+    int slot = 0;
+    int pageNumber = 1;
+    for (int i = 0; i < chosen.size(); ++i) {
+        if (progress.wasCanceled())
+            break;
+        progress.setValue(i);
+        progress.setLabelText(photo(2028, "Printing page %1 of %2...").arg(pageNumber).arg((chosen.size() + cells.width() * cells.height() - 1)
+                                                                                            / (cells.width() * cells.height())));
+        QApplication::processEvents();
+        QImageReader reader(chosen[i]);
+        reader.setAutoTransform(true);
+        QImage image = reader.read();
+        if (image.isNull())
+            continue;
+        if (slot == 0 && pageNumber > 1)
+            printer.newPage();
+        const int column = slot % cells.width(), row = slot / cells.width();
+        QSize size = image.size();
+        size.scale(cell, Qt::KeepAspectRatio);
+        const QRect target(page.x() + margin + column * (cell.width() + gap) + (cell.width() - size.width()) / 2,
+                           page.y() + margin + row * (cell.height() + gap) + (cell.height() - size.height()) / 2,
+                           size.width(), size.height());
+        painter.drawImage(target, image);
+        if (++slot >= cells.width() * cells.height()) {
+            slot = 0;
+            ++pageNumber;
+        }
+    }
+    painter.end();
+    progress.setValue(chosen.size());
+    QMessageBox::information(parent, photo(2016, "Photo Printing Wizard"), photo(3028, "You have successfully printed your pictures."));
 }
+#else
+void printWizard(const QStringList &, const QStringList &, QWidget *)
+{
+}
+#endif
 
 QIcon viewerIcon(int index)
 {
@@ -759,170 +916,8 @@ void Viewer::command(int id)
         break;
     case VIEW_PRINT: {
 #ifdef XP_PRINTING
-        // photowiz.dll's Photo Printing Wizard: pick pictures, a printer and a layout, then print.
-        if (m_image.isNull() || m_paths.isEmpty())
-            break;
-        const auto photo = [](int id, const char *fallback) {
-            const auto resources = xpfiles::resources(xpfiles::find(QStringLiteral("photowiz.dll")));
-            // the shell's string reader numbers the string blocks from 1, so these IDs are 16 above
-            // the ones it finds
-            const QString text = resources ? xpfiles::string(*resources, id - 16) : QString();
-            return text.isEmpty() ? QObject::tr(fallback) : text;
-        };
-        QWizard wizard(this);
-        wizard.setWindowTitle(photo(2016, "Photo Printing Wizard"));
-        wizard.setWizardStyle(QWizard::ClassicStyle);
-        wizard.setOption(QWizard::NoBackButtonOnStartPage, true);
-        wizard.setButtonText(QWizard::FinishButton, QObject::tr("Print"));
-        auto *selection = new QWizardPage;
-        selection->setTitle(photo(2017, "Picture Selection"));
-        auto *selectionLayout = new QVBoxLayout(selection);
-        selectionLayout->addWidget(new QLabel(photo(2018, "Pictures with check marks will be printed.  To print all pictures, click Select All."), selection));
-        auto *pictures = new QListWidget(selection);
-        for (const QString &path : std::as_const(m_paths)) {
-            auto *item = new QListWidgetItem(QFileInfo(path).fileName(), pictures);
-            item->setData(Qt::UserRole, path);
-            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(path == m_paths.value(m_index) ? Qt::Checked : Qt::Unchecked);
-        }
-        selectionLayout->addWidget(pictures, 1);
-        auto *all = new QPushButton(QObject::tr("Select All"), selection);
-        selectionLayout->addWidget(all, 0, Qt::AlignLeft);
-        QObject::connect(all, &QPushButton::clicked, pictures, [pictures] {
-            bool unchecked = false;
-            for (int i = 0; i < pictures->count(); ++i)
-                if (pictures->item(i)->checkState() != Qt::Checked)
-                    unchecked = true;
-            for (int i = 0; i < pictures->count(); ++i)
-                pictures->item(i)->setCheckState(unchecked ? Qt::Checked : Qt::Unchecked);
-        });
-        wizard.addPage(selection);
-
-        auto *options = new QWizardPage;
-        options->setTitle(photo(2019, "Printing Options"));
-        auto *optionsLayout = new QVBoxLayout(options);
-        optionsLayout->addWidget(new QLabel(photo(2020, "Select the printer and paper you want to use."), options));
-        auto *printerBox = new QComboBox(options);
-        const QList<QPrinterInfo> printers = QPrinterInfo::availablePrinters();
-        for (const QPrinterInfo &info : printers)
-            printerBox->addItem(info.printerName());
-        if (printerBox->count() == 0 && !QPrinterInfo::defaultPrinterName().isEmpty())
-            printerBox->addItem(QPrinterInfo::defaultPrinterName());
-        auto *paperBox = new QComboBox(options);
-        for (const QPageSize::PageSizeId id : {QPageSize::A4, QPageSize::Letter, QPageSize::Legal, QPageSize::A5, QPageSize::B5})
-            paperBox->addItem(QPageSize(id).name(), int(id));
-        optionsLayout->addWidget(new QLabel(QObject::tr("Printer:"), options));
-        optionsLayout->addWidget(printerBox);
-        optionsLayout->addWidget(new QLabel(QObject::tr("Paper:"), options));
-        optionsLayout->addWidget(paperBox);
-        optionsLayout->addStretch(1);
-        wizard.addPage(options);
-
-        auto *layoutPage = new QWizardPage;
-        layoutPage->setTitle(photo(2021, "Layout Selection"));
-        auto *layoutLayout = new QVBoxLayout(layoutPage);
-        layoutLayout->addWidget(new QLabel(photo(2022, "Select a layout from the choices below."), layoutPage));
-        auto *layoutBox = new QComboBox(layoutPage);
-        layoutBox->addItem(photo(2039, "Full page print"), QSize(1, 1));
-        layoutBox->addItem(QObject::tr("2 by 2"), QSize(2, 2));
-        layoutBox->addItem(QObject::tr("3 by 3"), QSize(3, 3));
-        layoutBox->addItem(QObject::tr("4 by 4"), QSize(4, 4));
-        layoutBox->addItem(QObject::tr("Wallet"), QSize(4, 5));
-        layoutBox->addItem(QObject::tr("Contact sheet"), QSize(6, 7));
-        layoutLayout->addWidget(layoutBox);
-        auto *preview = new QLabel(layoutPage);
-        preview->setAlignment(Qt::AlignCenter);
-        preview->setFrameShape(QFrame::Box);
-        preview->setMinimumSize(220, 160);
-        layoutLayout->addWidget(preview, 1);
-        const auto drawPreview = [preview, layoutBox, image = m_image] {
-            QPixmap page(260, 190);
-            page.fill(Qt::white);
-            QPainter painter(&page);
-            painter.setPen(QPen(QColor(120, 120, 120), 1));
-            painter.drawRect(page.rect().adjusted(6, 6, -7, -7));
-            const QSize cells = layoutBox->currentData().toSize();
-            const QRectF sheet = page.rect().adjusted(14, 14, -14, -14);
-            const qreal gap = 3;
-            const QSizeF cell((sheet.width() - gap * (cells.width() - 1)) / cells.width(),
-                              (sheet.height() - gap * (cells.height() - 1)) / cells.height());
-            for (int row = 0; row < cells.height(); ++row)
-                for (int column = 0; column < cells.width(); ++column) {
-                    const QRectF box(sheet.x() + column * (cell.width() + gap), sheet.y() + row * (cell.height() + gap),
-                                     cell.width(), cell.height());
-                    painter.fillRect(box, QColor(242, 242, 242));
-                    painter.drawRect(box);
-                    if (row == 0 && column == 0 && !image.isNull()) {
-                        QSize fit = image.size();
-                        fit.scale(box.size().toSize(), Qt::KeepAspectRatio);
-                        const QRect target(int(box.center().x() - fit.width() / 2), int(box.center().y() - fit.height() / 2), fit.width(), fit.height());
-                        painter.drawImage(target, image);
-                    }
-                }
-            painter.end();
-            preview->setPixmap(page);
-        };
-        QObject::connect(layoutBox, &QComboBox::currentIndexChanged, layoutPage, [drawPreview] { drawPreview(); });
-        drawPreview();
-        wizard.addPage(layoutPage);
-
-        if (wizard.exec() != QDialog::Accepted)
-            break;
-        QStringList chosen;
-        for (int i = 0; i < pictures->count(); ++i)
-            if (pictures->item(i)->checkState() == Qt::Checked)
-                chosen.append(pictures->item(i)->data(Qt::UserRole).toString());
-        if (chosen.isEmpty())
-            break;
-        QPrinter printer(QPrinter::HighResolution);
-        if (!printerBox->currentText().isEmpty())
-            printer.setPrinterName(printerBox->currentText());
-        printer.setPageSize(QPageSize(QPageSize::PageSizeId(paperBox->currentData().toInt())));
-        const QSize cells = layoutBox->currentData().toSize();
-        QProgressDialog progress(photo(2028, "Printing page %1 of %2..."), QObject::tr("Cancel"), 0, chosen.size(), this);
-        progress.setWindowTitle(photo(2034, "Please Wait"));
-        progress.setWindowModality(Qt::WindowModal);
-        QPainter painter;
-        if (!painter.begin(&printer)) {
-            QMessageBox::warning(this, photo(2016, "Photo Printing Wizard"), photo(3017, "The wizard cannot print your pictures because an error occurred:"));
-            break;
-        }
-        const QRect page = painter.viewport();
-        const int margin = qMin(page.width(), page.height()) / 40;
-        const int gap = margin / 4;
-        const QSize cell((page.width() - 2 * margin - (cells.width() - 1) * gap) / cells.width(),
-                         (page.height() - 2 * margin - (cells.height() - 1) * gap) / cells.height());
-        int slot = 0;
-        int pageNumber = 1;
-        for (int i = 0; i < chosen.size(); ++i) {
-            if (progress.wasCanceled())
-                break;
-            progress.setValue(i);
-            progress.setLabelText(photo(2028, "Printing page %1 of %2...").arg(pageNumber).arg((chosen.size() + cells.width() * cells.height() - 1)
-                                                                                                / (cells.width() * cells.height())));
-            QApplication::processEvents();
-            QImageReader reader(chosen[i]);
-            reader.setAutoTransform(true);
-            QImage image = reader.read();
-            if (image.isNull())
-                continue;
-            if (slot == 0 && pageNumber > 1)
-                printer.newPage();
-            const int column = slot % cells.width(), row = slot / cells.width();
-            QSize size = image.size();
-            size.scale(cell, Qt::KeepAspectRatio);
-            const QRect target(page.x() + margin + column * (cell.width() + gap) + (cell.width() - size.width()) / 2,
-                               page.y() + margin + row * (cell.height() + gap) + (cell.height() - size.height()) / 2,
-                               size.width(), size.height());
-            painter.drawImage(target, image);
-            if (++slot >= cells.width() * cells.height()) {
-                slot = 0;
-                ++pageNumber;
-            }
-        }
-        painter.end();
-        progress.setValue(chosen.size());
-        QMessageBox::information(this, photo(2016, "Photo Printing Wizard"), photo(3028, "You have successfully printed your pictures."));
+        if (!m_image.isNull() && !m_paths.isEmpty())
+            printWizard(m_paths, {m_paths.value(m_index)}, this);
 #endif
         break;
     }

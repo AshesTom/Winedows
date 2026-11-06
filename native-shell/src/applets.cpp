@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "applets.h"
+#include "folderoptions.h"
 
 #include "fileicons.h"
 #include "filebrowser.h"
@@ -653,45 +654,10 @@ void showUsers()
     sheet->show();
 }
 
+// shell32's Folder Options (folderoptions.cpp); from here, without a folder to apply a view from
 void showFolderOptions()
 {
-    const QString path = settingsPath("native-explorer.conf");
-    QSettings settings(path, QSettings::IniFormat);
-    auto *classicFolders = new QRadioButton;
-    auto *tasks = new QRadioButton;
-    auto *hidden = new QCheckBox;
-    auto *sheet = new Sheet(QObject::tr("Folder Options"), [=]() -> bool {
-        QSettings write(path, QSettings::IniFormat);
-        write.setValue(QStringLiteral("classicFolders"), classicFolders->isChecked());
-        write.setValue(QStringLiteral("showHidden"), hidden->isChecked());
-        write.sync();
-        FileBrowser::settingsChanged();
-        return true;
-    });
-    auto *general = new QWidget;
-    auto *generalLayout = new QVBoxLayout(general);
-    auto *group = new QGroupBox(QObject::tr("Tasks"), general);
-    auto *groupLayout = new QVBoxLayout(group);
-    tasks->setText(QObject::tr("Show &common tasks in folders"));
-    classicFolders->setText(QObject::tr("Use Windows c&lassic folders"));
-    tasks->setParent(group);
-    classicFolders->setParent(group);
-    (settings.value(QStringLiteral("classicFolders"), false).toBool() ? classicFolders : tasks)->setChecked(true);
-    groupLayout->addWidget(tasks);
-    groupLayout->addWidget(classicFolders);
-    generalLayout->addWidget(group);
-    generalLayout->addStretch(1);
-    general->setMinimumSize(378, 320);
-    sheet->tabs->addTab(general, QObject::tr("General"));
-    auto *view = new QWidget;
-    auto *viewLayout = new QVBoxLayout(view);
-    hidden->setText(QObject::tr("Show &hidden files and folders"));
-    hidden->setChecked(settings.value(QStringLiteral("showHidden"), false).toBool());
-    hidden->setParent(view);
-    viewLayout->addWidget(hidden);
-    viewLayout->addStretch(1);
-    sheet->tabs->addTab(view, QObject::tr("View"));
-    sheet->show();
+    folderoptions::show(nullptr);
 }
 
 void showPrograms()

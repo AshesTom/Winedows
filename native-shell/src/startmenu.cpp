@@ -5,6 +5,11 @@
 #include "balloon.h"
 
 #include "contexthelp.h"
+#include "controlpanel.h"
+#include "desktopicons.h"
+#include "fileops.h"
+#include "fileproperties.h"
+#include "shellmenus.h"
 #include "xpdialog.h"
 #include <functional>
 #include <QTimer>
@@ -70,6 +75,8 @@ const int EXPLORER_HELP = 7021, EXPLORER_SEARCH = 7020, EXPLORER_RUN = 7023, EXP
 // The panel's own names, with their access keys (My Recent &Documents, &Control Panel); the other places'
 // are shell32's, which have none.
 const int EXPLORER_RECENT = 8236, EXPLORER_CONTROL_PANEL = 8234;
+// explorer.exe's Show on Desktop, the desktop icons' places' "delete" verb
+const int STRING_SHOW_ON_DESKTOP = 8272;
 // explorer.exe's infotips: the places', the pinned programs', All Programs', Log Off's and Turn Off's
 const int TIP_DOCUMENTS = 300, TIP_RECENT = 301, TIP_MUSIC = 302, TIP_PICTURES = 303, TIP_COMPUTER = 304, TIP_CONNECT = 306,
           TIP_CONTROL_PANEL = 307, TIP_SEARCH = 7000, TIP_HELP = 7001, TIP_RUN = 7003, TIP_INTERNET = 7004, TIP_MAIL = 7005,
@@ -599,6 +606,97 @@ void StartPanel::addPlace(int &y, int iconId, const QString &text, bool bold, st
     y += height;
 }
 
+void StartPanel::showPlaceMenu(const Item &item, QPoint global)
+{
+    // The place's own shortcut menu, as XP's in Wine shows it: its folder's verbs, then shell32's item
+    // menu 210 with only Copy and Rename (My Computer: Map Network Drive and Disconnect, no Copy), then
+    // Properties. For the places that are also desktop icons (explorer.exe's table of
+    // {450D8FBA...} My Documents, {20D04FE0...} My Computer, {208D2C60...} My Network Places),
+    // sub_103f228 turns the "delete" verb into 8272 "&Show on Desktop", checked unless
+    // HideDesktopIcons\NewStartPanel hides the icon, and sub_103f25c flips that value and posts
+    // WM_COMMAND 0xa220 to the desktop, which shows the change.
+    using namespace shellmenus;
+    const bool computer = item.folder == QLatin1String("::my-computer");
+    const bool documents = item.folder == QLatin1String("::my-documents");
+    const QString path = computer ? places::Computer : documents ? xdgDir(QStandardPaths::DocumentsLocation) : item.folder;
+    std::optional<DesktopItem> desktopItem;
+    if (computer)
+        desktopItem = DesktopItem::Computer;
+    else if (documents)
+        desktopItem = DesktopItem::Documents;
+    QMenu menu;
+    QAction *open = menu.addAction(shellString(STRING_OPEN, "&Open"));
+    menu.setDefaultAction(open);
+    QFont bold = open->font();
+    bold.setBold(true);
+    open->setFont(bold);
+    QAction *explore = menu.addAction(shellString(STRING_EXPLORE, "E&xplore"));
+    QAction *search = menu.addAction(shellString(STRING_SEARCH, "S&earch..."));
+    QAction *prompt = desktopItem ? nullptr : menu.addAction(tr("Open Command &Prompt Here"));
+    QAction *showOnDesktop = nullptr, *copy = nullptr;
+    QHash<int, QAction *> properties;
+    if (shell32()) {
+        if (computer) {
+            // Map Network Drive and Disconnect Network Drive (menu 225), greyed as in folder windows
+            menu.addSeparator();
+            for (QAction *action : xpprogram::fillMenu(&menu, *shell32(), 225))
+                action->setEnabled(false);
+        }
+        menu.addSeparator();
+        const QHash<int, QAction *> edit = xpprogram::fillMenu(&menu, *shell32(), MENU_ITEM);
+        for (auto it = edit.begin(); it != edit.end(); ++it) {
+            if (it.key() == CMD_COPY && !computer)
+                copy = it.value();
+            else if (it.key() == CMD_DELETE && desktopItem) {
+                showOnDesktop = it.value();
+                showOnDesktop->setText(explorerString(STRING_SHOW_ON_DESKTOP, "&Show on Desktop"));
+                showOnDesktop->setCheckable(true);
+                showOnDesktop->setChecked(desktopItemShown(*desktopItem));
+            } else if (it.key() == CMD_RENAME) {
+                it.value()->setEnabled(false);   // the panel renames nothing in place here
+            } else {
+                menu.removeAction(it.value());
+            }
+        }
+        properties = xpprogram::fillMenu(&menu, *shell32(), MENU_PROPERTIES);
+        // the lines the removed items leave: none first, last or twice
+        QAction *previous = nullptr;
+        for (QAction *action : menu.actions()) {
+            if (action->isSeparator() && (!previous || previous->isSeparator()))
+                menu.removeAction(action);
+            else
+                previous = action;
+        }
+        if (previous && previous->isSeparator())
+            menu.removeAction(previous);
+    }
+    QAction *chosen = menu.exec(global);
+    if (!chosen)
+        return;
+    if (chosen == showOnDesktop) {
+        setDesktopItemShown(*desktopItem, showOnDesktop->isChecked());
+        return;
+    }
+    close();
+    if (chosen == open) {
+        if (item.action)
+            item.action();
+    } else if (chosen == explore) {
+        FileBrowser::explore(path);
+    } else if (chosen == search) {
+        FileBrowser::search(computer ? places::Search : path);
+    } else if (prompt && chosen == prompt) {
+        programs::openCommandPrompt(path);
+    } else if (copy && chosen == copy) {
+        fileops::copyToClipboard({path}, false);
+    } else if (chosen == properties.value(CMD_PROPERTIES)) {
+        if (computer)
+            controlpanel::open(QStringLiteral("system"));
+        else
+            fileproperties::show({path}, nullptr);
+    }
+}
+
 // "All Programs" and its arrow (the style's picture at its own size, as XP draws it), together in the
 // middle of the column, under its line
 QRect StartPanel::moreArrow() const
@@ -628,6 +726,11 @@ QRect StartPanel::moreBand() const
     return m_more.adjusted(0, ShellTheme::instance()->scaled(ShellTheme::instance()->renderer() ? 1 : 2), 0, 0);
 }
 
+QString startMenuFolder()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
+}
+
 namespace {
 // command 503, the Help and Support Center: Linux's own when it has one
 void openHelpCenter()
@@ -637,11 +740,6 @@ void openHelpCenter()
             QProcess::startDetached(help, {});
             return;
         }
-}
-
-QString startMenuFolder()
-{
-    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/win4wine/Start Menu");
 }
 
 // The classic start menu's order of the Start Menu folder's entries, by file name; an empty list is
@@ -935,6 +1033,7 @@ void StartPanel::build(QPoint bottomLeft)
     const auto tip = [this](int id) { m_items.last().tip = explorerString(id, ""); };
     if (shown("Documents")) {
         addPlace(y, ICON_DOCUMENTS, shellString(SHELL_DOCUMENTS, "My Documents"), true, opens(xdgDir(QStandardPaths::DocumentsLocation)));
+        m_items.last().folder = QStringLiteral("::my-documents");
         tip(TIP_DOCUMENTS);
     }
     if (shown("Recent") && panelSettings.panelRecentDocs) {
@@ -944,10 +1043,12 @@ void StartPanel::build(QPoint bottomLeft)
     }
     if (shown("Pictures")) {
         addPlace(y, ICON_PICTURES, shellString(SHELL_PICTURES, "My Pictures"), true, opens(xdgDir(QStandardPaths::PicturesLocation)));
+        m_items.last().folder = xdgDir(QStandardPaths::PicturesLocation);
         tip(TIP_PICTURES);
     }
     if (shown("Music")) {
         addPlace(y, ICON_MUSIC, shellString(SHELL_MUSIC, "My Music"), true, opens(xdgDir(QStandardPaths::MusicLocation)));
+        m_items.last().folder = xdgDir(QStandardPaths::MusicLocation);
         tip(TIP_MUSIC);
     }
     if (shown("Favorites") && panelSettings.panelFavorites) {
@@ -956,6 +1057,7 @@ void StartPanel::build(QPoint bottomLeft)
     }
     if (shown("Computer")) {
         addPlace(y, ICON_COMPUTER, shellString(SHELL_COMPUTER, "My Computer"), true, opens(QStringLiteral("file:///")));
+        m_items.last().folder = QStringLiteral("::my-computer");
         tip(TIP_COMPUTER);
     }
     Item separator;
@@ -1648,6 +1750,11 @@ void StartPanel::mouseReleaseEvent(QMouseEvent *event)
     const QPoint global = event->globalPosition().toPoint();
     if (event->button() == Qt::RightButton) {
         const QPoint at = event->position().toPoint();
+        for (const Item &item : std::as_const(m_items))
+            if (!item.separator && !item.folder.isEmpty() && item.rect.contains(at)) {
+                showPlaceMenu(item, global);
+                return;
+            }
         for (const Item &item : std::as_const(m_items))
             if (!item.separator && !item.programId.isEmpty() && item.rect.contains(at)) {
                 QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf"), QSettings::IniFormat);

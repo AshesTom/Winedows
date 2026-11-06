@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "desktopicons.h"
+#include "folderoptions.h"
 
 #include "fileicons.h"
 
@@ -298,7 +299,7 @@ void DesktopIcons::reload()
     for (const QFileInfo &file : files) {
         Item item;
         item.path = file.absoluteFilePath();
-        item.name = file.fileName();
+        item.name = folderoptions::shownName(file);
         if (file.suffix() == QLatin1String("desktop")) {
             if (const auto program = programs::fromFile(item.path); program && !program->name.isEmpty())
                 item.name = program->name;
@@ -600,9 +601,18 @@ void DesktopIcons::showMenu(int index, QPoint global)
         open->setFont(bold);
         const bool folder = item.trash || item.shell || QFileInfo(path).isDir();
         if (folder && path != QLatin1String("::internet"))
-            menu->addAction(xpfiles::shellString(STRING_EXPLORE, "E&xplore"), this, [this, path, find] {
-                if (const int i = find(path); i >= 0)
-                    this->open(m_items[i]);
+            menu->addAction(xpfiles::shellString(STRING_EXPLORE, "E&xplore"), this, [path] {
+                // the folder Open shows, with the Folders bar
+                if (path == QLatin1String("::my-documents"))
+                    FileBrowser::explore(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+                else if (path == QLatin1String("::my-computer"))
+                    FileBrowser::explore(places::Computer);
+                else if (path == QLatin1String("::my-network-places"))
+                    FileBrowser::explore(places::Network);
+                else if (path == QLatin1String(TRASH_KEY))
+                    FileBrowser::explore(places::RecycleBin);
+                else
+                    FileBrowser::explore(path);
             });
         if (!shell32()) {
             menu->popup(global);

@@ -58,6 +58,8 @@ private:
 
 // XP's Run dialog
 void showRunDialog();
+// The user's Start Menu folder (XP's CSIDL_STARTMENU), whose own entries the classic menu shows
+QString startMenuFolder();
 
 class StartPanel : public QWidget
 {
@@ -118,6 +120,7 @@ private:
         QString tip;      // its infotip
         QString programId; // a most-used program's desktop-entry id, for Remove from This List
         QString path;      // a Start Menu folder entry, for dragging it to another place
+        QString folder;    // a place's folder (or ::my-computer), for its shortcut menu
         bool bold = false, separator = false, enabled = true, arrow = false;
         std::function<void()> action;
         std::function<QList<MenuEntry>()> children;
@@ -142,6 +145,8 @@ private:
     static void etch(QPainter &painter, const QRect &rect);
     void addLeft(int &y, const QString &text, const QString &subtitle, const QIcon &icon, std::function<void()> action, bool big);
     void addPlace(int &y, int iconId, const QString &text, bool bold, std::function<void()> action, bool arrow = false);
+    // A place's shortcut menu: shell32's for its folder, with explorer.exe's Show on Desktop
+    void showPlaceMenu(const Item &item, QPoint global);
     void paintPane(QPainter &painter, const char *part, const QRect &rect, const QColor &fallback);
     void track(QPoint global);
     void switchCascade();

@@ -51,6 +51,9 @@
 #include <QWindow>
 
 #include <functional>
+
+#include <grp.h>
+#include <unistd.h>
 #include <iterator>
 
 using w4w::Part;
@@ -96,6 +99,8 @@ const int FLASH_MS = 530, FLASH_COUNT = 3;
 const int TRAY_COLLAPSE_MS = 5000;
 // (once the desktop is up: XP posts it from the tray's creation)
 const int START_BALLOON_DELAY_MS = 1500;
+// The Start button's menu: Open All Users, Explore All Users, Properties
+const int STRING_OPEN_ALL_USERS = 718, STRING_EXPLORE_ALL_USERS = 719, STRING_START_PROPERTIES = 720;
 const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START_BALLOON = 801, START_BALLOON_MS = 10000;
 // XP's first-logon balloons are post-boot reminders (sub_101389f, sub_101343b): explorer.exe files them under
 // PostBootReminders and shell32's PostBootReminder shows them one after the other, in the keys' order
@@ -169,7 +174,7 @@ enum { CMD_VIEW_LOGOS = 3, CMD_VIEW_LARGE = 1, CMD_VIEW_SMALL = 2, CMD_OPEN_FOLD
 // shell32.dll's item menu (210) and the commands it carries out here
 const int MENU_ITEM = 210;
 enum { CMD_ITEM_CUT = 24, CMD_ITEM_COPY = 25, CMD_ITEM_DELETE = 17 };
-const int STRING_OPEN = 8496;
+const int STRING_OPEN = 8496, STRING_EXPLORE = 8502, STRING_SEARCH = 8503;
 const int ICON_SHOW_DESKTOP = 3;
 // Unlocked: the sizing bar above (TaskBar.SizingBarBottom, 4 rows on XP's) and each band's gripper
 const Part SIZING_BAR{QStringLiteral("taskbar"), QStringLiteral("sizingbarbottom"), {}, 1, {}};
@@ -1823,6 +1828,10 @@ void Taskbar::mouseReleaseEvent(QMouseEvent *event)
             runLinkItem(hit.index);
         return;
     }
+    if (hit.kind == Hit::Start && event->button() == Qt::RightButton) {
+        showStartButtonMenu(event->globalPosition().toPoint());
+        return;
+    }
     if (hit.kind == Hit::Quick && hit.index < m_quickItems.size()) {
         if (event->button() == Qt::LeftButton && pressed == hit)
             runQuickItem(hit.index);
@@ -2539,6 +2548,64 @@ void Taskbar::showQuickItemMenu(int index, QPoint at)
     menu->popup(m_settings.position == 1 ? at : at - QPoint(0, menu->sizeHint().height()));
 }
 
+namespace {
+// All Users' Start menu (CSIDL_COMMON_STARTMENU): the programs every user has, the system's own
+// desktop entries
+QString commonStartMenu()
+{
+    const QString own = QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation);
+    for (const QString &folder : QStandardPaths::standardLocations(QStandardPaths::ApplicationsLocation))
+        if (folder != own && QFileInfo(folder).isDir())
+            return folder;
+    return QString();
+}
+
+// shell32's IsUserAnAdmin: a member of the group that may administer the system
+bool userIsAdmin()
+{
+    const int count = getgroups(0, nullptr);
+    QList<gid_t> groups(qMax(count, 0));
+    if (count <= 0 || getgroups(count, groups.data()) != count)
+        return false;
+    for (gid_t id : std::as_const(groups))
+        if (const group *entry = getgrgid(id))
+            for (const char *name : {"wheel", "sudo", "admin"})
+                if (qstrcmp(entry->gr_name, name) == 0)
+                    return true;
+    return false;
+}
+} // namespace
+
+void Taskbar::showStartButtonMenu(QPoint at)
+{
+    // explorer.exe's sub_1033b53: the Start Menu folder's verbs (QueryContextMenu with CMF_VERBSONLY),
+    // Properties (720) on the sheet's Start Menu page, then, unless REST_NOCOMMONGROUPS, for an
+    // administrator with an All Users Start menu, a line, Open All Users (718) and Explore All Users
+    // (719), which run "explorer.exe [/e,] <folder>". XP's in Wine shows Open, Explore, Open Command
+    // Prompt Here, Properties; XP's hivecls.inf adds Directory's Search... after Explore.
+    const QString folder = startMenuFolder();
+    QDir().mkpath(folder);
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    QAction *open = menu->addAction(xpfiles::shellString(STRING_OPEN, "&Open"), this, [folder] { FileBrowser::open(folder); });
+    menu->setDefaultAction(open);
+    QFont bold = open->font();
+    bold.setBold(true);
+    open->setFont(bold);
+    menu->addAction(xpfiles::shellString(STRING_EXPLORE, "E&xplore"), this, [folder] { FileBrowser::explore(folder); });
+    menu->addAction(xpfiles::shellString(STRING_SEARCH, "S&earch..."), this, [folder] { FileBrowser::search(folder); });
+    menu->addAction(tr("Open Command &Prompt Here"), this, [folder] { programs::openCommandPrompt(folder); });
+    menu->addAction(xpfiles::explorerString(STRING_START_PROPERTIES, "P&roperties"), this,
+                    [] { TaskbarProperties::showTab(TaskbarProperties::StartMenuTab); });
+    if (const QString common = commonStartMenu(); !common.isEmpty() && userIsAdmin()) {
+        menu->addSeparator();
+        menu->addAction(xpfiles::explorerString(STRING_OPEN_ALL_USERS, "O&pen All Users"), this, [common] { FileBrowser::open(common); });
+        menu->addAction(xpfiles::explorerString(STRING_EXPLORE_ALL_USERS, "E&xplore All Users"), this, [common] { FileBrowser::explore(common); });
+    }
+    // TrackPopupMenu at the pointer
+    menu->popup(at);
+}
+
 void Taskbar::dragEnterEvent(QDragEnterEvent *event)
 {
     // anything dragged: over the task buttons it brings windows forward
@@ -2841,7 +2908,7 @@ void Taskbar::hotkey(int key, int modifiers)
         break;
     case HOTKEY_EXPLORE:
         // sub_103adad: CSIDL_DRIVES (0x11) with the "explore" verb
-        FileBrowser::open(places::Computer);
+        FileBrowser::explore(places::Computer);
         break;
     case HOTKEY_FIND_FILES:
         FileBrowser::open(places::Search);

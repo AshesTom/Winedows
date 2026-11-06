@@ -107,6 +107,8 @@ private:
     // BAND: on Quick Launch's gripper or title, its band's items come first
     void showTaskbarMenu(QPoint at, bool tray, bool band = false);
     void showQuickItemMenu(int index, QPoint at);
+    // The Start button's: its folder's verbs, Properties and All Users' (explorer.exe's sub_1033b53)
+    void showStartButtonMenu(QPoint at);
     void addBandItems(QMenu *menu, const w4w::PeResources &browselc);
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;

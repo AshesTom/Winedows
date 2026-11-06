@@ -56,11 +56,16 @@ class FileBrowser : public QMainWindow
 public:
     // A window on LOCATION, a path or a virtual folder; the one already there if there is.
     static void open(const QString &location);
+    // The "explore" verb: a new window on LOCATION with the Folders bar; "find": one with the Search bar
+    static void explore(const QString &location);
+    static void search(const QString &location);
     // My Computer's Manage verb
     static QString manageText();
     static void manageComputer();
     // Folder Options changed: every window reads them again.
     static void settingsChanged();
+    // Folder Options' Reset All Folders: every folder's own view forgotten, as is Apply to All's
+    static void resetFolderViews();
 
     FileBrowser(const QString &location);
     void navigate(const QString &location, bool remember = true);
@@ -80,11 +85,17 @@ private:
     void setView(View view);
     void applyGroups();
     void configureList(QListView *list, View view);
+    // The folder's bag: its view and Folders bar, kept when the window leaves it
+    void saveBag();
+    // Folder Options' Apply to All Folders: this window's view for every folder
+    void applyViewToAll();
+    void applyFilmColour();
+    static View viewOfMode(int mode);   // a FOLDERVIEWMODE
+    static QString cleanLocation(const QString &location);
     View shownView() const;           // Filmstrip is Thumbnails outside picture folders
     QWidget *folderPage() const;      // the page that shows a real folder in the current view
     void placeList(bool inFilmstrip);
     void stepFilmstrip(int step);
-    void selectFirstPicture();
     void rotateSelected(bool clockwise);
     void startSlideShow();
     void setAsBackground(const QString &path);
@@ -145,6 +156,7 @@ private:
     QStringList m_back, m_forward;
     View m_view = Tiles;
     bool m_pictureFolder = false;
+    int m_folderType = 0;   // shell32's folder type (FolderType in filebrowser.cpp)
     bool m_foldersShown = false, m_searchShown = false, m_noTasks = false, m_singleClick = false;
     bool m_groups = false;
     bool m_autoArrange = true;

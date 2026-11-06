@@ -137,9 +137,13 @@ void TaskPane::layoutGroups()
     int y = margin;
     for (int g = 0; g < m_groups.size(); ++g) {
         const PaneGroup &group = m_groups[g];
-        const int headerHeight = group.icon.isNull() ? header : qMax(header, theme->scaled(TITLE_ICON));
-        m_headers.append(QRect(margin, y, groupWidth, headerHeight));
-        y += headerHeight;
+        // A section with an icon (mainsection) keeps its 25-row header; the 32-pixel icon stands on the
+        // header's bottom and rises above it (XP in Wine: Picture Tasks' header 7 rows lower, its icon
+        // from there to the header's last row)
+        if (!group.icon.isNull())
+            y += qMax(0, theme->scaled(TITLE_ICON) - header);
+        m_headers.append(QRect(margin, y, groupWidth, header));
+        y += header;
         const QRect body(margin, y, groupWidth, 0);
         if (m_collapsed.value(group.title)) {
             m_bodies.append(body);
@@ -219,10 +223,17 @@ void TaskPane::paintEvent(QPaintEvent *)
         if (!m_arrows[arrow].isNull())
             painter.drawImage(header.right() - m_arrows[arrow].width() - theme->scaled(2), header.y() + header.height() - m_arrows[arrow].height(), m_arrows[arrow]);
         if (!group.icon.isNull())
-            group.icon.paint(&painter, QRect(header.x(), header.y(), theme->scaled(TITLE_ICON), theme->scaled(TITLE_ICON)));
+            group.icon.paint(&painter, QRect(header.x(), header.bottom() + 1 - theme->scaled(TITLE_ICON), theme->scaled(TITLE_ICON), theme->scaled(TITLE_ICON)));
         if (collapsed)
             continue;
         painter.fillRect(body, group.primary ? m_primaryBody : m_body);
+        // element [id=atom(watermark)] { contentalign: bottomright }, inside the white border
+        if (!group.watermark.isNull()) {
+            painter.save();
+            painter.setClipRect(body.adjusted(1, 0, -1, -1));
+            painter.drawImage(body.right() - group.watermark.width(), body.bottom() - group.watermark.height(), group.watermark);
+            painter.restore();
+        }
         painter.setPen(Qt::white);
         painter.drawLine(body.bottomLeft(), body.bottomRight());
         painter.drawLine(body.topLeft(), body.bottomLeft());

@@ -26,6 +26,7 @@ struct PaneGroup
     QList<PaneTask> tasks;
     QIcon icon = {};                 // 32 pixels, beside the title and above the header (mainsection)
     bool collapsed = false;          // how it first shows: XP's shell32 starts Details collapsed
+    QImage watermark = {};           // the shell style's 60-pixel picture at the body's bottom right
 };
 
 class TaskPane : public QWidget

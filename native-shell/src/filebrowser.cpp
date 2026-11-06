@@ -4,6 +4,7 @@
 #include "applets.h"
 #include "controlpanel.h"
 #include "fileicons.h"
+#include "folderoptions.h"
 #include "fileops.h"
 #include "pictures.h"
 #include "programs.h"
@@ -62,6 +63,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMimeDatabase>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QProcess>
@@ -121,8 +123,15 @@ QString title(const QString &location)
     const QFileInfo info(location);
     if (info.isRoot())
         return info.absoluteFilePath();
-    if (info.absoluteFilePath() == QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
-        return shellText(9227, "My Documents");
+    // XP's special folders by shell32's names for them
+    const struct { QStandardPaths::StandardLocation location; int name; const char *fallback; } special[] = {
+        {QStandardPaths::DocumentsLocation, 9227, "My Documents"}, {QStandardPaths::PicturesLocation, 9076, "My Pictures"},
+        {QStandardPaths::MusicLocation, 9105, "My Music"}, {QStandardPaths::MoviesLocation, 9107, "My Videos"}};
+    for (const auto &folder : special) {
+        const QString path = QStandardPaths::writableLocation(folder.location);
+        if (!path.isEmpty() && path != QDir::homePath() && info.absoluteFilePath() == path)
+            return shellText(folder.name, folder.fallback);
+    }
     return info.fileName();
 }
 
@@ -246,6 +255,15 @@ const int BITMAP_GO = 230, BITMAP_GO_HOT = 231;
 const int STRING_FILE_TASKS = 31233, STRING_NEW_FOLDER = 31236, STRING_RENAME = 31242, STRING_MOVE = 31244, STRING_COPY = 31246, STRING_DELETE = 31252;
 const int STRING_OTHER_PLACES = 31272, STRING_DETAILS = 31274, STRING_SYSTEM_TASKS = 31232, STRING_SYSTEM_INFO = 31294, STRING_ADD_REMOVE = 31327, STRING_CHANGE = 31312, STRING_EMPTY = 31331;
 const int STRING_PICTURE_TASKS = 31283, STRING_SLIDE_SHOW = 31287, STRING_BACKGROUND = 31289;
+// Picture Tasks' Print pictures (shell32's task at 0x7c9d87c8): its words for nothing or a folder chosen,
+// one picture, several
+const int STRING_PRINT_PICTURES = 31391, STRING_PRINT_PICTURE = 31390, STRING_PRINT_SELECTED = 31315;
+// Music Tasks and Video Tasks (0x7c9d8680, 0x7ca612f8): Play all or Play selection, icon 246
+const int STRING_MUSIC_TASKS = 31276, STRING_VIDEO_TASKS = 31396, STRING_PLAY_ALL = 31278, STRING_PLAY_SELECTION = 31279, ICON_PLAY = 246;
+// The tasks' icons, from their entries
+// shimgvw.dll's words for no picture, and the shell style's colour around the preview
+const int STRING_NO_PREVIEW = 202, SHELL_STYLE_PREVIEW = 100;
+const int ICON_SLIDE_SHOW = 249, ICON_BACKGROUND = 250, ICON_PRINT_PICTURES = 252;
 const int STRING_LABELLED = 31363, STRING_ITEMS_SELECTED = 31364, STRING_TOTAL_SIZE = 31365, STRING_SIZE = 8978, STRING_DATE_MODIFIED = 8980, STRING_DIMENSIONS = 9005;
 // The Details group's preview, at most so wide and tall: its body's width
 const int PREVIEW_SIDE = 160;
@@ -582,6 +600,150 @@ QString settingsPath()
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer.conf");
 }
 
+// shell32's folder types, named for desktop.ini's FolderType by its table at 0x7ca2c4e8
+enum FolderType {
+    TypeDocuments, TypeMyDocuments, TypePictures, TypeMyPictures, TypePhotoAlbum, TypeMusic, TypeMyMusic, TypeMusicArtist,
+    TypeMusicAlbum, TypeVideos, TypeMyVideos, TypeVideoAlbum, TypeLegacy, TypeCommonDocuments
+};
+// Each type's views (shell32's table at 0x7c9d11c8, read by 0x7cb371df and 0x7cb36ecd): whether Filmstrip
+// is offered, then the view of a folder of under 25 items, under 50, and more, as FOLDERVIEWMODE
+// (1 Icons, 3 List, 4 Details, 5 Thumbnails, 6 Tiles, 7 Thumbstrip)
+struct TypeViews
+{
+    bool filmstrip;
+    int few, some, many;
+};
+const TypeViews TYPE_VIEWS[] = {
+    {false, 6, 6, 1}, {false, 6, 6, 1}, {true, 5, 5, 5}, {true, 5, 5, 5}, {true, 7, 5, 5}, {false, 6, 6, 4}, {false, 5, 6, 3},
+    {false, 5, 5, 5}, {false, 6, 6, 4}, {false, 5, 5, 5}, {false, 5, 5, 5}, {false, 5, 5, 5}, {false, 6, 6, 1}, {false, 6, 6, 1},
+};
+const int FEW_ITEMS = 25, SOME_ITEMS = 50;
+// The sniffing (0x7ca2c2b2): at most 100 items with a class are looked at; a class wins with 3/5 of them
+// (MulDiv), audio first, then pictures, then video (its table at 0x7c9d47b0)
+const int SNIFF_ITEMS = 100;
+enum Perceived { PerceivedFolder = -1, PerceivedOther = 0, PerceivedImage = 2, PerceivedAudio = 3, PerceivedVideo = 4 };
+const struct { Perceived perceived; FolderType type; } SNIFF_TYPES[] = {
+    {PerceivedAudio, TypeMusic}, {PerceivedImage, TypePhotoAlbum}, {PerceivedVideo, TypeVideos},
+};
+
+// The shell style's pictures of a type's web view (shell32's table at 0x7cb201e8: music 10-12, picture
+// 13-15, video 19-21): the 32-pixel header icon, the section's 60-pixel watermark, the view's 150-pixel one
+enum TypeArt { ArtHeader, ArtSection, ArtView };
+QImage typeArt(int type, TypeArt which)
+{
+    int first = 0;
+    if (type >= TypePictures && type <= TypePhotoAlbum)
+        first = 13;
+    else if (type >= TypeMusic && type <= TypeMusicAlbum)
+        first = 10;
+    else if (type >= TypeVideos && type <= TypeVideoAlbum)
+        first = 19;
+    if (!first)
+        return {};
+    const auto style = xpfiles::resources(ShellTheme::shellStylePath(ShellTheme::instance()->choice()));
+    return style ? xpfiles::bitmap(*style, first + which) : QImage();
+}
+
+// The folders' "bags" (XP's ShellNoRoam\Bags): each folder's type, view and Folders bar
+QString bagsPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-explorer-bags.conf");
+}
+
+QString bagKey(const QString &folder, const char *value)
+{
+    return QString::fromLatin1(folder.toUtf8().toBase64(QByteArray::Base64UrlEncoding)) + QLatin1Char('/') + QLatin1String(value);
+}
+
+// A type the folder was given: Customize This Folder's template, else what its bag keeps (desktop.ini's
+// FolderType on XP, which 0x7ca2c3c9 reads first), else XP's special folders' own; -1 for none
+int givenFolderType(const QString &folder)
+{
+    static const QHash<QString, int> templates{{QStringLiteral("Documents"), TypeDocuments}, {QStringLiteral("Pictures"), TypePictures},
+                                               {QStringLiteral("Photo Album"), TypePhotoAlbum}, {QStringLiteral("Music"), TypeMusic},
+                                               {QStringLiteral("Videos"), TypeVideos}};
+    const QString chosen = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("folder/template/") + folder).toString();
+    if (templates.contains(chosen))
+        return templates.value(chosen);
+    const QVariant stored = QSettings(bagsPath(), QSettings::IniFormat).value(bagKey(folder, "type"));
+    if (stored.isValid())
+        return qBound(0, stored.toInt(), int(TypeCommonDocuments));
+    const std::pair<QStandardPaths::StandardLocation, FolderType> special[] = {
+        {QStandardPaths::DocumentsLocation, TypeMyDocuments}, {QStandardPaths::PicturesLocation, TypeMyPictures},
+        {QStandardPaths::MusicLocation, TypeMyMusic}, {QStandardPaths::MoviesLocation, TypeMyVideos}};
+    for (const auto &[location, type] : special) {
+        const QString path = QStandardPaths::writableLocation(location);
+        if (!path.isEmpty() && path != QDir::homePath() && path == folder)
+            return type;
+    }
+    return -1;
+}
+
+// AssocGetPerceivedType's class of an item, from its MIME type here (0x7ca3bd41); a folder counts by the
+// type it was given (0x7ca3a8fa: the picture types as a picture, the music ones as audio, the video ones
+// as video), and not at all without one
+int perceivedClass(const QFileInfo &item)
+{
+    if (item.isDir()) {
+        switch (givenFolderType(item.absoluteFilePath())) {
+        case TypePictures: case TypeMyPictures: case TypePhotoAlbum:
+            return PerceivedImage;
+        case TypeMusic: case TypeMyMusic: case TypeMusicArtist: case TypeMusicAlbum:
+            return PerceivedAudio;
+        case TypeVideos: case TypeMyVideos: case TypeVideoAlbum:
+            return PerceivedVideo;
+        default:
+            return PerceivedFolder;
+        }
+    }
+    static const QMimeDatabase mimes;
+    const QString name = mimes.mimeTypeForFile(item, QMimeDatabase::MatchExtension).name();
+    if (name.startsWith(QLatin1String("image/")))
+        return PerceivedImage;
+    if (name.startsWith(QLatin1String("audio/")))
+        return PerceivedAudio;
+    if (name.startsWith(QLatin1String("video/")))
+        return PerceivedVideo;
+    return PerceivedOther;
+}
+
+// The folder's type as shell32 decides it (0x7ca2c2b2), kept in its bag once sniffed as XP writes it
+int folderType(const QString &folder, const QFileInfoList &items)
+{
+    if (const int given = givenFolderType(folder); given >= 0)
+        return given;
+    // 0x7ca38c2f: the system drive's root, Windows, System and Program Files are documents, unsniffed
+    int type = TypeDocuments;
+    if (folder != QLatin1String("/") && folder != QLatin1String("/usr") && folder != QLatin1String("/opt")) {
+        if (items.isEmpty())
+            return TypeDocuments;   // nothing to judge by: not kept
+        int counts[std::size(SNIFF_TYPES)] = {};
+        int classed = 0;
+        for (const QFileInfo &item : items) {
+            if (classed >= SNIFF_ITEMS)
+                break;
+            const int perceived = perceivedClass(item);
+            for (size_t i = 0; i < std::size(SNIFF_TYPES); ++i)
+                if (SNIFF_TYPES[i].perceived == perceived) {
+                    ++counts[i];
+                    break;
+                }
+            if (perceived != PerceivedFolder)
+                ++classed;
+        }
+        if (classed) {
+            const int wanted = (classed * 3 + 2) / 5;   // MulDiv(classed, 3, 5)
+            for (size_t i = 0; i < std::size(SNIFF_TYPES); ++i)
+                if (counts[i] >= wanted) {
+                    type = SNIFF_TYPES[i].type;
+                    break;
+                }
+        }
+    }
+    QSettings(bagsPath(), QSettings::IniFormat).setValue(bagKey(folder, "type"), type);
+    return type;
+}
+
 QIcon stripIcon(int index)
 {
     static const auto shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
@@ -612,7 +774,16 @@ public:
                 return fileicons::typeName(info);
             return info.isDir() ? QString() : fileicons::sizeText(info.size());
         }
+        // the name, without the extension of a known type while Folder Options hide them
+        if ((role == Qt::DisplayRole || role == Qt::EditRole) && index.column() == 0)
+            return folderoptions::shownName(files()->fileInfo(mapToSource(index)));
         return QIdentityProxyModel::data(index, role);
+    }
+    bool setData(const QModelIndex &index, const QVariant &value, int role) override
+    {
+        if (role == Qt::EditRole && index.column() == 0)
+            return QIdentityProxyModel::setData(index, folderoptions::renamedName(files()->fileInfo(mapToSource(index)), value.toString()), role);
+        return QIdentityProxyModel::setData(index, value, role);
     }
     // Size's header to the right: shell32's LVCFMT_RIGHT
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override
@@ -658,10 +829,44 @@ void paintCompactItem(QPainter *painter, const QStyleOptionViewItem &option, con
     painter->restore();
 }
 
+// The shell style's large watermark of a folder type, at the view's bottom right (XP's list view
+// background image)
+void paintWatermark(QAbstractItemView *view, const QImage &watermark, const QRect &area)
+{
+    QPainter painter(view->viewport());
+    painter.fillRect(area, view->palette().base());
+    if (!watermark.isNull())
+        painter.drawImage(view->viewport()->width() - watermark.width(), view->viewport()->height() - watermark.height(), watermark);
+}
+
 class ExplorerDetailsView : public QTreeView
 {
 public:
     using QTreeView::QTreeView;
+    void setWatermark(const QImage &watermark)
+    {
+        m_watermark = watermark;
+        viewport()->update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        if (!m_watermark.isNull())
+            paintWatermark(this, m_watermark, event->rect());
+        QTreeView::paintEvent(event);
+    }
+    void scrollContentsBy(int dx, int dy) override
+    {
+        QTreeView::scrollContentsBy(dx, dy);
+        if (!m_watermark.isNull())
+            viewport()->update();
+    }
+
+private:
+    QImage m_watermark;
+
+public:
     QModelIndex indexAt(const QPoint &point) const override
     {
         const QModelIndex index = QTreeView::indexAt(point);
@@ -974,6 +1179,30 @@ class ExplorerListView : public QListView
 {
 public:
     using QListView::QListView;
+    void setWatermark(const QImage &watermark)
+    {
+        m_watermark = watermark;
+        viewport()->update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        if (!m_watermark.isNull())
+            paintWatermark(this, m_watermark, event->rect());
+        QListView::paintEvent(event);
+    }
+    void scrollContentsBy(int dx, int dy) override
+    {
+        QListView::scrollContentsBy(dx, dy);
+        if (!m_watermark.isNull())
+            viewport()->update();   // it stays in its corner
+    }
+
+private:
+    QImage m_watermark;
+
+public:
     QModelIndex indexAt(const QPoint &point) const override
     {
         const QModelIndex index = QListView::indexAt(point);
@@ -1146,7 +1375,8 @@ void showItemProperties(const QStringList &paths, QWidget *parent)
 } // namespace
 
 // Filmstrip's large picture, over the strip: the selected picture as large as the place lets it,
-// never larger than it is; the type's icon for another file. A double click opens it.
+// never larger than it is; for nothing or another file, shimgvw.dll's "No preview available." (202),
+// as XP's preview control shows it. A double click opens it.
 class FilmPreview : public QWidget
 {
 public:
@@ -1155,7 +1385,7 @@ public:
         , m_open(std::move(open))
     {
         setAutoFillBackground(true);
-        setBackgroundRole(QPalette::Base);
+        setBackgroundRole(QPalette::Window);   // the Filmstrip page's colour
         setMinimumHeight(60);
     }
     void setPath(const QString &path)
@@ -1183,9 +1413,9 @@ protected:
         if (!m_image.isNull()) {
             const QSizeF shown = m_image.deviceIndependentSize();
             painter.drawImage(QRectF(QPointF((width() - shown.width()) / 2, (height() - shown.height()) / 2), shown), m_image);
-        } else if (!m_path.isEmpty()) {
-            const QRect place((width() - 48) / 2, (height() - 48) / 2, 48, 48);
-            fileicons::forFile(QFileInfo(m_path)).paint(&painter, place);
+        } else {
+            painter.setPen(palette().color(QPalette::WindowText));
+            painter.drawText(rect(), Qt::AlignCenter, pictures::viewerString(STRING_NO_PREVIEW, "No preview available."));
         }
     }
     void mouseDoubleClickEvent(QMouseEvent *) override
@@ -1236,6 +1466,20 @@ void FileBrowser::open(const QString &location)
     window->show();
 }
 
+void FileBrowser::explore(const QString &location)
+{
+    auto *window = new FileBrowser(location);
+    window->setFoldersShown(true);
+    window->show();
+}
+
+void FileBrowser::search(const QString &location)
+{
+    auto *window = new FileBrowser(location);
+    window->showSearchBar(true);
+    window->show();
+}
+
 void FileBrowser::settingsChanged()
 {
     for (QWidget *widget : QApplication::topLevelWidgets())
@@ -1260,7 +1504,8 @@ FileBrowser::FileBrowser(const QString &location)
     m_groups = settings.value(QStringLiteral("folder/groups"), false).toBool();
     m_autoArrange = settings.value(QStringLiteral("folder/autoArrange"), true).toBool();
     m_alignToGrid = settings.value(QStringLiteral("folder/alignToGrid"), true).toBool();
-    m_foldersShown = settings.value(QStringLiteral("folders"), false).toBool();
+    // the Folders bar as this folder's bag left it (XP's per folder, observed in Wine)
+    m_foldersShown = QSettings(bagsPath(), QSettings::IniFormat).value(bagKey(cleanLocation(location), "folders"), false).toBool();
 
     m_files = new QFileSystemModel(this);
     m_files->setIconProvider(nullptr);
@@ -1282,14 +1527,16 @@ FileBrowser::FileBrowser(const QString &location)
     setFoldersShown(m_foldersShown);
     navigate(location, false);
     connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &FileBrowser::updateActions);
-    connect(ShellTheme::instance(), &ShellTheme::changed, this, [this] { updatePane(); });
+    connect(ShellTheme::instance(), &ShellTheme::changed, this, [this] {
+        applyFilmColour();
+        updatePane();
+    });
 }
 
 void FileBrowser::closeEvent(QCloseEvent *event)
 {
     QSettings settings(settingsPath(), QSettings::IniFormat);
-    settings.setValue(QStringLiteral("view"), int(m_view));
-    settings.setValue(QStringLiteral("folders"), m_foldersShown);
+    saveBag();
     settings.setValue(QStringLiteral("status"), m_statusAction->isChecked());
     QMainWindow::closeEvent(event);
 }
@@ -1305,6 +1552,13 @@ void FileBrowser::reloadSettings()
     m_noTasks = settings.value(QStringLiteral("classicFolders"), false).toBool();
     if (m_left)
         setFoldersShown(m_foldersShown);
+    // names (hidden extensions), title and address as the options now have them
+    if (m_list && !m_location.isEmpty()) {
+        emit m_model->layoutChanged();
+        m_list->doItemsLayout();
+        m_details->viewport()->update();
+        navigate(m_location, false);
+    }
 }
 
 void FileBrowser::buildPanes()
@@ -1463,7 +1717,8 @@ void FileBrowser::buildPanes()
     // thumbnails on one row, the list itself moved here while this view is shown
     m_film = new QWidget(m_pages);
     m_film->setAutoFillBackground(true);
-    m_film->setBackgroundRole(QPalette::Base);
+    m_film->setBackgroundRole(QPalette::Window);
+    applyFilmColour();
     auto *filmLayout = new QVBoxLayout(m_film);
     filmLayout->setContentsMargins(0, 0, 0, 0);
     filmLayout->setSpacing(0);
@@ -1501,11 +1756,6 @@ void FileBrowser::buildPanes()
     filmButtons->addStretch();
     filmLayout->addLayout(filmButtons);
     m_pages->addWidget(m_film);
-    // Filmstrip starts on the folder's first picture once the folder is read, as XP's does.
-    connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
-        if (path == currentFolder())
-            selectFirstPicture();
-    });
     m_virtualFilter = new VirtualFilter(this);
     m_virtualFilter->setSourceModel(m_virtual);
     m_virtualList = listView(m_virtualFilter);
@@ -1798,7 +2048,7 @@ void FileBrowser::buildMenus()
     tools->addAction(tr("&Disconnect Network Drive..."))->setEnabled(false);
     tools->addAction(tr("&Synchronize..."))->setEnabled(false);
     tools->addSeparator();
-    tools->addAction(tr("Folder &Options..."), this, [] { controlpanel::open(QStringLiteral("folders")); });
+    tools->addAction(tr("Folder &Options..."), this, [this] { folderoptions::show(this, [this] { applyViewToAll(); }); });
 
     QMenu *help = menuBar()->addMenu(tr("&Help"));
     const auto helpProgram = [] {
@@ -2051,21 +2301,6 @@ void FileBrowser::placeList(bool inFilmstrip)
     }
 }
 
-void FileBrowser::selectFirstPicture()
-{
-    if (shownView() != Filmstrip || m_list->selectionModel()->hasSelection())
-        return;
-    const QModelIndex root = m_list->rootIndex();
-    for (int row = 0; row < m_model->rowCount(root); ++row) {
-        const QModelIndex index = m_model->index(row, 0, root);
-        if (pictures::isPicture(m_model->path(index))) {
-            m_list->setCurrentIndex(index);
-            m_list->scrollTo(index);
-            return;
-        }
-    }
-}
-
 void FileBrowser::stepFilmstrip(int step)
 {
     const QModelIndex root = m_list->rootIndex();
@@ -2205,8 +2440,8 @@ void FileBrowser::setView(View view)
     // (Once the page is there: the selection is read from the view it shows.)
     if (shown == Filmstrip) {
         const QStringList paths = selectedPaths();
+        // Nothing is chosen for it: XP's opens on "No preview available." (seen in Wine).
         m_filmPreview->setPath(paths.size() == 1 ? paths.first() : QString());
-        selectFirstPicture();
     }
     m_list->doItemsLayout();
 }
@@ -2357,10 +2592,8 @@ QStringList FileBrowser::selectedPaths() const
 
 void FileBrowser::navigate(const QString &location, bool remember)
 {
-    QString target = location;
+    const QString target = cleanLocation(location);
     const bool web = places::isWeb(target);
-    if (!target.startsWith(QLatin1String("::")) && !web)
-        target = QDir::cleanPath(QFileInfo(target).absoluteFilePath());
     if (remember && target != m_location && !m_location.isEmpty()) {
         m_back.append(m_location);
         m_forward.clear();
@@ -2368,12 +2601,16 @@ void FileBrowser::navigate(const QString &location, bool remember)
         sounds::play(QStringLiteral("Windows XP Start.wav"));
     }
     m_searchTimer->stop();
+    if (target != m_location)
+        saveBag();
     m_location = target;
-    setWindowTitle(places::title(target));
+    // Folder Options' Display the full path in the title bar / in the address bar
+    const bool real = !target.startsWith(QLatin1String("::")) && !web;
+    setWindowTitle(real && folderoptions::fullPathInTitle() ? target : places::title(target));
     setWindowIcon(places::icon(target));
     m_address->blockSignals(true);
     m_address->clear();
-    m_address->addItem(places::icon(target), target.startsWith(QLatin1String("::")) ? places::title(target) : target);
+    m_address->addItem(places::icon(target), real && folderoptions::fullPathInAddress() ? target : places::title(target));
     if (m_searchCompanion)
         m_searchCompanion->setCurrentFolder(target.startsWith(QLatin1String("::")) || web ? QDir::homePath() : target);
     m_address->setCurrentIndex(0);
@@ -2407,20 +2644,105 @@ void FileBrowser::navigate(const QString &location, bool remember)
     } else {
         showVirtual(target);
     }
-    // Picture folders have Filmstrip, which then stays theirs; Customize This Folder can say so.
-    QString folderTemplate;
-    if (!web && !folder.startsWith(QLatin1String("::")) && target != places::RecycleBin)
-        folderTemplate = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("folder/template/") + folder).toString();
-    const bool pictureFolder = !web && !folder.startsWith(QLatin1String("::")) && target != places::RecycleBin
-        && (pictures::isPictureFolder(folder) || folderTemplate == QLatin1String("Pictures") || folderTemplate == QLatin1String("Photo Album"));
-    if (pictureFolder != m_pictureFolder || (m_view == Filmstrip && !folder.startsWith(QLatin1String("::")))) {
-        m_pictureFolder = pictureFolder;
-        setView(m_view);
+    // The folder's type (shell32's sniffing, or the one it was given) offers Filmstrip to the picture types;
+    // its view is the one its bag kept, else its type's for its number of items (0x7cb371df).
+    const QSettings bags(bagsPath(), QSettings::IniFormat);
+    // Without Remember each folder's view settings, one view for every folder (the last one used)
+    const QSettings shellSettings(settingsPath(), QSettings::IniFormat);
+    const QVariant kept = folderoptions::rememberFolderViews() ? bags.value(bagKey(target, "view")) : shellSettings.value(QStringLiteral("view"));
+    const QVariant forAll = shellSettings.value(QStringLiteral("folder/defaultView"));
+    if (!folder.startsWith(QLatin1String("::")) && target != places::RecycleBin) {
+        QDir::Filters filter = QDir::AllEntries | QDir::NoDotAndDotDot;
+        if (QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("showHidden"), false).toBool())
+            filter |= QDir::Hidden;
+        const QFileInfoList items = QDir(folder).entryInfoList(filter, QDir::Name | QDir::DirsFirst);
+        m_folderType = folderType(folder, items);
+        static_cast<ExplorerListView *>(m_list)->setWatermark(typeArt(m_folderType, ArtView));
+        static_cast<ExplorerDetailsView *>(m_details)->setWatermark(typeArt(m_folderType, ArtView));
+        const TypeViews &views = TYPE_VIEWS[m_folderType];
+        m_pictureFolder = views.filmstrip;
+        const int mode = items.size() < FEW_ITEMS ? views.few : items.size() < SOME_ITEMS ? views.some : views.many;
+        m_view = kept.isValid()   ? View(qBound(0, kept.toInt(), int(Filmstrip)))
+               : forAll.isValid() ? View(qBound(0, forAll.toInt(), int(Filmstrip)))
+                                  : viewOfMode(mode);
+    } else {
+        m_pictureFolder = false;
+        m_folderType = TypeDocuments;
+        static_cast<ExplorerListView *>(m_list)->setWatermark({});
+        static_cast<ExplorerDetailsView *>(m_details)->setWatermark({});
+        if (kept.isValid())
+            m_view = View(qBound(0, kept.toInt(), int(Filmstrip)));
     }
+    setView(m_view);
     selectInTree(target);
     updatePane();
     updateActions();
     updateStatus();
+}
+
+// Around Filmstrip's preview: the shell style's colour (its string 100, 0xBBGGRR; blue_ss.dll's
+// 0xFBF2EE, its UIFILE's preview border rgb(238,242,251)), the window colour without one. The strip
+// itself keeps the window's white.
+void FileBrowser::applyFilmColour()
+{
+    QColor colour = ShellTheme::instance()->system(QStringLiteral("window"), Qt::white);
+    if (const auto style = xpfiles::resources(ShellTheme::shellStylePath(ShellTheme::instance()->choice()))) {
+        bool ok = false;
+        const uint bgr = xpfiles::string(*style, SHELL_STYLE_PREVIEW).toUInt(&ok, 16);
+        if (ok)
+            colour = QColor(bgr & 0xff, (bgr >> 8) & 0xff, (bgr >> 16) & 0xff);
+    }
+    QPalette palette = m_film->palette();
+    palette.setColor(QPalette::Window, colour);
+    m_film->setPalette(palette);
+}
+
+// What a folder keeps when the window leaves it: its view and the Folders bar
+void FileBrowser::saveBag()
+{
+    if (m_location.isEmpty() || places::isWeb(m_location) || m_location == places::Search)
+        return;
+    QSettings bags(bagsPath(), QSettings::IniFormat);
+    if (folderoptions::rememberFolderViews())
+        bags.setValue(bagKey(m_location, "view"), int(m_view));
+    else
+        QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("view"), int(m_view));
+    bags.setValue(bagKey(m_location, "folders"), m_foldersShown);
+}
+
+void FileBrowser::resetFolderViews()
+{
+    // (toolbars and folder tasks stay: here the Folders bar and the folder's type)
+    QSettings bags(bagsPath(), QSettings::IniFormat);
+    for (const QString &key : bags.allKeys())
+        if (key.endsWith(QLatin1String("/view")))
+            bags.remove(key);
+    QSettings(settingsPath(), QSettings::IniFormat).remove(QStringLiteral("folder/defaultView"));
+}
+
+void FileBrowser::applyViewToAll()
+{
+    resetFolderViews();
+    QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("folder/defaultView"), int(m_view));
+}
+
+FileBrowser::View FileBrowser::viewOfMode(int mode)
+{
+    switch (mode) {
+    case 1: return Icons;
+    case 3: return List;
+    case 4: return Details;
+    case 5: return Thumbnails;
+    case 7: return Filmstrip;
+    default: return Tiles;
+    }
+}
+
+QString FileBrowser::cleanLocation(const QString &location)
+{
+    if (location.startsWith(QLatin1String("::")) || places::isWeb(location))
+        return location;
+    return QDir::cleanPath(QFileInfo(location).absoluteFilePath());
 }
 
 void FileBrowser::addVirtual(const QString &text, const QIcon &icon, std::function<void()> action, const QString &detail)
@@ -2610,7 +2932,9 @@ void FileBrowser::showVirtual(const QString &location)
 bool FileBrowser::blocked() const
 {
     const QSettings settings(settingsPath(), QSettings::IniFormat);
-    return isSystemFolder(m_location) && !settings.value(QStringLiteral("shownSystemFolders")).toStringList().contains(m_location);
+    // Folder Options' Display the contents of system folders shows them all
+    return isSystemFolder(m_location) && !folderoptions::showSystemFolders()
+        && !settings.value(QStringLiteral("shownSystemFolders")).toStringList().contains(m_location);
 }
 
 // XP remembers, for each of them, that its contents were asked for.
@@ -2629,7 +2953,11 @@ void FileBrowser::setSystemFolderShown(bool shown)
 void FileBrowser::openPath(const QString &path)
 {
     if (QFileInfo(path).isDir()) {
-        navigate(path);
+        // General's Open each folder in its own window
+        if (folderoptions::separateWindows())
+            open(path);
+        else
+            navigate(path);
         return;
     }
     if (QFileInfo(path).suffix() == QLatin1String("desktop")) {
@@ -2867,13 +3195,66 @@ void FileBrowser::updatePane()
         const bool picturesChosen = !selected.isEmpty() && chosenPictures.size() == selected.size();
         if (m_pictureFolder || picturesChosen) {
             PaneGroup pictureTasks{xpfiles::shellString(STRING_PICTURE_TASKS, "Picture Tasks"), true, {}};
-            if (picturesChosen || !pictures::picturesIn(m_location).isEmpty())
-                pictureTasks.tasks.append({xpfiles::shellString(STRING_SLIDE_SHOW, "View as a slide show"), pictures::viewerIcon(pictures::SlideShowButton), [this] { startSlideShow(); }});
+            pictureTasks.icon = QIcon(QPixmap::fromImage(typeArt(TypePictures, ArtHeader)));
+            pictureTasks.watermark = typeArt(TypePictures, ArtSection);
+            // shell32's entries in their order (0x7c9d8750 on): Get pictures from camera or scanner (no
+            // scanner here), View as a slide show, Order prints online (no service here), Print pictures, Set
+            // as desktop background (its words only for one picture), Copy to CD (no burner here)
+            const QStringList folderPictures = pictures::picturesIn(m_location);
+            if (picturesChosen || !folderPictures.isEmpty())
+                pictureTasks.tasks.append({xpfiles::shellString(STRING_SLIDE_SHOW, "View as a slide show"), fileicons::shell(ICON_SLIDE_SHOW), [this] { startSlideShow(); }});
+#ifdef XP_PRINTING
+            if (picturesChosen || (selected.isEmpty() && !folderPictures.isEmpty())) {
+                const QString words = !picturesChosen ? xpfiles::shellString(STRING_PRINT_PICTURES, "Print pictures")
+                    : chosenPictures.size() == 1      ? xpfiles::shellString(STRING_PRINT_PICTURE, "Print this picture")
+                                                      : xpfiles::shellString(STRING_PRINT_SELECTED, "Print the selected pictures");
+                pictureTasks.tasks.append({words, fileicons::shell(ICON_PRINT_PICTURES), [this, folderPictures, chosenPictures, picturesChosen] {
+                    // all the folder's pictures, those chosen ticked (all of them when none is)
+                    QStringList listed = folderPictures;
+                    for (const QString &path : chosenPictures)
+                        if (!listed.contains(path))
+                            listed.append(path);
+                    pictures::printWizard(listed, picturesChosen ? chosenPictures : listed, this);
+                }});
+            }
+#endif
             if (chosenPictures.size() == 1 && selected.size() == 1)
-                pictureTasks.tasks.append({xpfiles::shellString(STRING_BACKGROUND, "Set as desktop background"), fileicons::shell(35),
+                pictureTasks.tasks.append({xpfiles::shellString(STRING_BACKGROUND, "Set as desktop background"), fileicons::shell(ICON_BACKGROUND),
                                            [this, path = chosenPictures.first()] { setAsBackground(path); }});
             if (!pictureTasks.tasks.isEmpty())
                 groups.append(pictureTasks);
+        }
+        // The music and video types' section: its play task's words by what is chosen, as its entry has
+        // them: Play all for nothing or one file (the folder's), Play selection for a folder or several
+        const bool music = m_folderType >= TypeMusic && m_folderType <= TypeMusicAlbum;
+        const bool video = m_folderType >= TypeVideos && m_folderType <= TypeVideoAlbum;
+        if (music || video) {
+            PaneGroup playTasks{music ? xpfiles::shellString(STRING_MUSIC_TASKS, "Music Tasks") : xpfiles::shellString(STRING_VIDEO_TASKS, "Video Tasks"), true, {}};
+            playTasks.icon = QIcon(QPixmap::fromImage(typeArt(m_folderType, ArtHeader)));
+            playTasks.watermark = typeArt(m_folderType, ArtSection);
+            const bool all = selected.isEmpty() || (selected.size() == 1 && !QFileInfo(selected.first()).isDir());
+            const QString prefix = music ? QStringLiteral("audio/") : QStringLiteral("video/");
+            playTasks.tasks.append({all ? xpfiles::shellString(STRING_PLAY_ALL, "Play all") : xpfiles::shellString(STRING_PLAY_SELECTION, "Play selection"),
+                                    fileicons::shell(ICON_PLAY), [this, all, prefix, selected] {
+                                        // the media files of the folder, or of what is chosen (a chosen folder's own)
+                                        static const QMimeDatabase mimes;
+                                        QStringList files;
+                                        const auto add = [&files, &prefix](const QString &path) {
+                                            if (mimes.mimeTypeForFile(path, QMimeDatabase::MatchExtension).name().startsWith(prefix))
+                                                files.append(path);
+                                        };
+                                        for (const QString &path : all ? QStringList{m_location} : selected) {
+                                            if (QFileInfo(path).isDir()) {
+                                                for (const QFileInfo &entry : QDir(path).entryInfoList(QDir::Files, QDir::Name))
+                                                    add(entry.absoluteFilePath());
+                                            } else {
+                                                add(path);
+                                            }
+                                        }
+                                        if (!files.isEmpty())
+                                            programs::openMediaPlayer(files);
+                                    }});
+            groups.append(playTasks);
         }
         // An ordinary section, as XP's own shell32 shows it: only special ones (System Tasks, Picture Tasks)
         // have the blue header.
@@ -2893,11 +3274,21 @@ void FileBrowser::updatePane()
             tasks.tasks.append({words(STRING_DELETE, "Delete this file", 31262, "Delete this folder", 31270, "Delete the selected items"), fileicons::shell(fileicons::DeleteTask), [this] { deleteSelected(false); }});
         }
         groups.append(tasks);
+        // The parent, then the folder type's list (shell32's CSIDL lists at 0x7ca612b4): My Pictures for the
+        // picture types, My Music for the music ones, else My Documents (and Shared Documents, which has no
+        // counterpart here); then My Computer and My Network Places
         const QFileInfo info(m_location);
         if (!info.isRoot())
             others.tasks.append(place(info.absolutePath()));
-        if (m_location != documents)
-            others.tasks.append(place(documents));
+        QString typePlace = documents;
+        if (TYPE_VIEWS[m_folderType].filmstrip)
+            typePlace = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        else if (m_folderType >= TypeMusic && m_folderType <= TypeMusicAlbum)
+            typePlace = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
+        if (typePlace.isEmpty() || typePlace == QDir::homePath())
+            typePlace = documents;
+        if (m_location != typePlace && info.absolutePath() != typePlace)
+            others.tasks.append(place(typePlace));
         others.tasks.append(place(places::Computer));
         others.tasks.append(place(places::Network));
         // XP's Details: a picture's preview over its name, then "Label: value" lines
@@ -3107,11 +3498,7 @@ void FileBrowser::fillItemMenu(QMenu *menu, const QStringList &selected)
         open->setFont(bold);
     }
     if (folderItem) {
-        menu->addAction(xpfiles::shellString(STRING_EXPLORE, "E&xplore"), this, [path = selected.first()] {
-            auto *window = new FileBrowser(path);
-            window->setFoldersShown(true);
-            window->show();
-        });
+        menu->addAction(xpfiles::shellString(STRING_EXPLORE, "E&xplore"), this, [path = selected.first()] { explore(path); });
         menu->addAction(xpfiles::shellString(STRING_SEARCH, "S&earch..."), this, [this, path = selected.first()] {
             navigate(path);
             showSearchBar(true);

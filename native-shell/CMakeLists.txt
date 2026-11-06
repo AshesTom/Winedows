@@ -24,6 +24,7 @@ add_executable(explorer
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
     src/filebrowser.cpp src/filebrowser.h
+    src/folderoptions.cpp src/folderoptions.h
     src/shellmenus.cpp src/shellmenus.h
     src/fileicons.cpp src/fileicons.h
     src/fileops.cpp src/fileops.h

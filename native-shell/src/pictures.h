@@ -29,8 +29,6 @@ bool isPicture(const QString &path);
 QSize dimensions(const QString &path);
 // The picture scaled, as it should stand (EXIF), to fit BOX; read now.
 QImage load(const QString &path, QSize box);
-// XP's "Picture" folders: My Pictures, or one that holds mostly pictures
-bool isPictureFolder(const QString &folder);
 // The pictures of a folder in name order
 QStringList picturesIn(const QString &folder);
 
@@ -38,6 +36,8 @@ QStringList picturesIn(const QString &folder);
 enum ViewerButton { ZoomIn = 2, ZoomOut = 3, BestFit = 5, ActualSize = 6, SlideShowButton = 8, PreviousImage = 9, NextImage = 10,
                     RotateCounterclockwise = 11, RotateClockwise = 12 };
 enum SlideButton { Play = 0, Pause = 1, Previous = 2, Next = 3, Close = 4 };
+// photowiz.dll's Photo Printing Wizard on PATHS, CHECKED first ticked (nothing without printing support)
+void printWizard(const QStringList &paths, const QStringList &checked, QWidget *parent);
 QIcon viewerIcon(int index);
 QIcon slideIcon(int index);
 // A string of shimgvw.dll

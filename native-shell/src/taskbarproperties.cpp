@@ -517,6 +517,8 @@ namespace {
 const int DIALOG_CUSTOMIZE = 7;
 enum { ID_ITEMS = 1005, ID_BEHAVIOR = 1006, ID_RESTORE = 1402, ID_OK = 1, ID_CANCEL = 2 };
 enum { STRING_NAME = 1000, STRING_BEHAVIOR = 1001, STRING_HIDE_WHEN_INACTIVE = 1002, STRING_CURRENT = 1403, STRING_PAST = 1404 };
+// The picture of an item that has none (sub_1039b65: LoadImage 252 at SM_CXSMICON)
+const int ICON_NO_PICTURE = 252;
 
 QVariantMap behaviors()
 {
@@ -594,11 +596,12 @@ void customize(QWidget *parent)
         for (const QString &name : names) {
             auto *item = new QTreeWidgetItem(list, {name, choices.value(chosen.value(name, 0).toInt())});
             item->setData(0, Qt::UserRole, name);
-            if (iconFinder()) {
-                const QImage icon = iconFinder()(name);
-                if (!icon.isNull())
-                    item->setIcon(0, QIcon(QPixmap::fromImage(icon)));
-            }
+            // a current item without a picture gets explorer.exe's icon 252 (sub_1039b65)
+            QImage icon = iconFinder() ? iconFinder()(name) : QImage();
+            if (icon.isNull() && heading == STRING_CURRENT)
+                icon = xpfiles::icon(*explorer(), ICON_NO_PICTURE, 16);
+            if (!icon.isNull())
+                item->setIcon(0, QIcon(QPixmap::fromImage(icon)));
         }
     };
     fill(STRING_CURRENT, settings.value(QStringLiteral("TrayNotify/Current")).toStringList());
