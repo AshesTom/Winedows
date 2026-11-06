@@ -2193,10 +2193,7 @@ void Taskbar::showStartMenu(bool keyboard)
         setHidden(false, false);
     // On XP's Luna taskbar the panel stands on the bar's top; under Windows Classic, on the Start button's
     // top left corner (2 in, over the bar's top 4 rows).
-    auto *panel = new StartPanel(mapToGlobal(theme()->renderer() ? QPoint(0, 0) : m_startRect.topLeft()), [this] {
-        if (sessiondialog::askLogOff())
-            endSession("logoff");
-    }, [this] { turnOff(); },
+    auto *panel = new StartPanel(mapToGlobal(theme()->renderer() ? QPoint(0, 0) : m_startRect.topLeft()), [this] { logOff(); }, [this] { turnOff(); },
                                  [] { FileBrowser::open(places::ControlPanel); });
     panel->setAttribute(Qt::WA_DeleteOnClose);
     connect(panel, &StartPanel::closed, this, [this] {
@@ -2211,18 +2208,85 @@ void Taskbar::showStartMenu(bool keyboard)
     update();
 }
 
+namespace {
+// What logind says the computer can do (CanSuspend, CanHibernate): msgina asks NtPowerInformation
+bool logindCan(const char *method)
+{
+    QProcess busctl;
+    busctl.start(QStringLiteral("busctl"), {QStringLiteral("call"), QStringLiteral("org.freedesktop.login1"), QStringLiteral("/org/freedesktop/login1"),
+                                            QStringLiteral("org.freedesktop.login1.Manager"), QLatin1String(method)});
+    if (!busctl.waitForFinished(2000))
+        return false;
+    return QString::fromUtf8(busctl.readAllStandardOutput()).contains(QLatin1String("\"yes\""));
+}
+
+// The Welcome screen to switch to while this session goes on: in a window (session.sh's), XP's own over it
+QString nativeWelcome()
+{
+    const QString greeter = qEnvironmentVariable("WIN4WINE_GREETER_DIR");
+    if (qEnvironmentVariable("WIN4WINE_NATIVE_WELCOME") != QLatin1String("1") || greeter.isEmpty())
+        return {};
+    const QString script = greeter + QStringLiteral("/xp-native-welcome.py");
+    return QFileInfo::exists(script) ? script : QString();
+}
+} // namespace
+
+void Taskbar::logOff()
+{
+    // With somewhere to switch to (the Welcome screen in a window, or the display manager's greeter),
+    // XP's Fast User Switching: shell32's Log Off Windows with Switch User
+    // (once the Start menu has gone, as for Turn Off: the greyed screen is a picture of the desktop)
+    QTimer::singleShot(TURN_OFF_DELAY_MS, this, [this] {
+        const bool canSwitch = !nativeWelcome().isEmpty() || !QStandardPaths::findExecutable(QStringLiteral("dm-tool")).isEmpty();
+        switch (sessiondialog::askLogOff(canSwitch)) {
+        case sessiondialog::LogOff:
+            endSession("logoff");
+            break;
+        case sessiondialog::SwitchUser:
+            switchUser();
+            break;
+        default:
+            break;
+        }
+    });
+}
+
+void Taskbar::switchUser()
+{
+    const QString welcome = nativeWelcome();
+    if (welcome.isEmpty()) {
+        // the display manager's greeter, this session kept behind it
+        QProcess::startDetached(QStringLiteral("dm-tool"), {QStringLiteral("switch-to-greeter")});
+        return;
+    }
+    // The Welcome screen over the running session, the account logged on with its programs counted
+    // (logonui's status1); choosing it comes back, Turn Off and Restart end the session.
+    auto *screen = new QProcess(this);
+    connect(screen, &QProcess::finished, this, [this, screen](int status) {
+        screen->deleteLater();
+        if (status == 3)
+            endSession("shutdown");
+        else if (status == 4)
+            endSession("reboot");
+    });
+    screen->start(QStringLiteral("python3"), {welcome, QStringLiteral("--assets"), qEnvironmentVariable("WIN4WINE_ASSETS"),
+                                              QStringLiteral("--programs"), QString::number(m_windows->tasks().size())});
+}
+
 void Taskbar::turnOff()
 {
     // Once the Start menu has gone: the screen fading behind the dialog is a picture of it.
     QTimer::singleShot(TURN_OFF_DELAY_MS, this, [this] {
         const bool power = qEnvironmentVariable("WIN4WINE_POWER") == QLatin1String("1");
-        const sessiondialog::Choice choice = sessiondialog::askTurnOff(power);
+        const sessiondialog::Choice choice = sessiondialog::askTurnOff(power && logindCan("CanSuspend"), power && logindCan("CanHibernate"));
         if (choice == sessiondialog::TurnOff)
             endSession("shutdown");
         else if (choice == sessiondialog::Restart)
             endSession("reboot");
         else if (choice == sessiondialog::StandBy)
             QProcess::startDetached(QStringLiteral("systemctl"), {QStringLiteral("suspend")});
+        else if (choice == sessiondialog::Hibernate)
+            QProcess::startDetached(QStringLiteral("systemctl"), {QStringLiteral("hibernate")});
     });
 }
 

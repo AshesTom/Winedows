@@ -28,6 +28,7 @@ struct BalloonTip
     QImage image;
     int timeout = 0;                  // milliseconds; clamped to XP's 10 to 30 seconds
     bool sound = true;                // NIIF_NOSOUND when false
+    bool closeButton = true;          // a tooltip's balloon (TTS_BALLOON without TTS_CLOSE) has none
     std::function<void(Reason)> closed;
 };
 
@@ -71,6 +72,8 @@ public:
     explicit BalloonWindow(const BalloonTip &tip);
     // Its stem on ICON (a tray icon's place on the screen), the body on the screen's side of it.
     void place(const QRect &icon);
+    // Its stem's tip on TIP, the body on the screen's side of it.
+    void placeAt(QPoint tip);
 
 Q_SIGNALS:
     void clicked();
@@ -85,6 +88,7 @@ protected:
 
 private:
     void layout();
+    void placeStem(QPoint anchor, const QRect &room);
     QRegion shape() const;
     QRect closeRect() const;
     void drawClose(QPainter &painter) const;

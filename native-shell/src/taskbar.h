@@ -151,6 +151,9 @@ private:
     void setHidden(bool hidden, bool animate = true);
     void endSession(const char *request);
     void turnOff();
+    // Start > Log Off: Switch User or Log Off
+    void logOff();
+    void switchUser();
     QString clockText() const;
 
     WindowList *m_windows;

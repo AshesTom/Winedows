@@ -43,6 +43,8 @@ def main():
     parser.add_argument('mode', choices=('logon', 'logoff'))
     parser.add_argument('--dpi', type=int, default=96, help="the XP shell's LogPixels")
     parser.add_argument('--assets', help="extract/extract.py's output, without the greeter's configuration")
+    parser.add_argument('--transient', action='store_true',
+                        help='gone when stopped (a session in a window goes on to its Welcome screen)')
     args = parser.parse_args()
     try:
         import welcome
@@ -85,7 +87,7 @@ def main():
     d.flush()
 
     def finish(*_):
-        if args.mode == 'logoff':
+        if args.mode == 'logoff' and not args.transient:
             # Keep the last line on the screen until the display manager ends the X server.
             xdraw.set_root_background(d, screen.render(width, height))
         sys.exit(0)

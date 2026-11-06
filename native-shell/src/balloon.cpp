@@ -199,7 +199,7 @@ void BalloonWindow::layout()
 {
     const QFontMetrics text(m_font), title(m_titleFont);
     const QRect wrapped = text.boundingRect(QRect(0, 0, scaled(TEXT_WIDTH), 100000), Qt::AlignLeft | Qt::TextWordWrap | Qt::TextExpandTabs, m_tip.text);
-    const int closeSpace = scaled(CLOSE_GAP + CLOSE + CLOSE_RIGHT);
+    const int closeSpace = m_tip.closeButton ? scaled(CLOSE_GAP + CLOSE + CLOSE_RIGHT) : scaled(TEXT_RIGHT);
     int width = scaled(EDGE) + wrapped.width() + scaled(TEXT_RIGHT);
     int y = scaled(TOP);
     if (!m_tip.title.isEmpty()) {
@@ -225,6 +225,22 @@ void BalloonWindow::place(const QRect &icon)
     m_stemDown = icon.center().y() >= room.center().y();
     m_stemRight = icon.center().x() >= room.center().x();
     const QPoint anchor(icon.left() + scaled(ANCHOR_X), m_stemDown ? icon.top() + scaled(ANCHOR_Y) : icon.bottom() - scaled(ANCHOR_Y));
+    placeStem(anchor, room);
+}
+
+void BalloonWindow::placeAt(QPoint tip)
+{
+    const QScreen *screen = QGuiApplication::screenAt(tip);
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    const QRect room = screen->geometry();
+    m_stemDown = tip.y() >= room.center().y();
+    m_stemRight = tip.x() >= room.center().x();
+    placeStem(tip, room);
+}
+
+void BalloonWindow::placeStem(QPoint anchor, const QRect &room)
+{
     // The body beside the stem's straight edge, then kept on the screen, the stem moving along it.
     int left = m_stemRight ? anchor.x() + scaled(STEM_INSET) - (m_body.width() - 1) : anchor.x() - scaled(STEM_INSET);
     left = qBound(room.left(), left, room.right() + 1 - m_body.width());
@@ -258,6 +274,8 @@ QRegion BalloonWindow::shape() const
 
 QRect BalloonWindow::closeRect() const
 {
+    if (!m_tip.closeButton)
+        return {};
     const int bodyTop = m_stemDown ? 0 : scaled(STEM_SHOWN);
     return QRect(m_body.width() - scaled(CLOSE_RIGHT + CLOSE), bodyTop + scaled(CLOSE_TOP), scaled(CLOSE), scaled(CLOSE));
 }
@@ -292,6 +310,8 @@ void BalloonWindow::paintEvent(QPaintEvent *)
 void BalloonWindow::drawClose(QPainter &painter) const
 {
     const QRect rect = closeRect();
+    if (rect.isEmpty())
+        return;
     // Pressed, then dragged off it: back to normal until the mouse comes back
     const int state = m_hot ? (m_pressed ? 3 : 2) : 1;
     if (w4w::Renderer *renderer = theme()->renderer())

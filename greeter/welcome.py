@@ -552,8 +552,25 @@ def escape(text):
 
 
 class User:
-    def __init__(self, name, display=None, picture=None, password=True):
+    """An account. PROGRAMS is None while it is not logged on, else its running programs; MAIL its unread
+    messages."""
+    def __init__(self, name, display=None, picture=None, password=True, programs=None, mail=0):
         self.name, self.display, self.picture, self.password = name, display or name, picture, password
+        self.programs, self.mail = programs, mail
+
+    def statuses(self, assets):
+        """status0 and status1 under the name, as logonui's sub_100a289 fills them for a logged-on
+        account: the unread mail (27, 28) first, then "Logged on" (15) or "%d program(s) running." (29, 30)."""
+        if self.programs is None:
+            return []
+        lines = []
+        if self.mail:
+            lines.append(assets.string('logonui', 27 if self.mail == 1 else 28).replace('%d', str(self.mail)))
+        if self.programs:
+            lines.append(assets.string('logonui', 29 if self.programs == 1 else 30).replace('%d', str(self.programs)))
+        else:
+            lines.append(assets.string('logonui', 15))
+        return lines
 
 
 class Screen:
@@ -856,6 +873,15 @@ class Screen:
         name = self.name_layout(user.display)
         name_x = x + px(5 + 2 + 58 + 7) + INSET
         self.text.draw(cr, name, name_x, fy, tint(TEXT))
+        if self.mode == 'list':
+            # button [class="status"]: rcint(46)pt bold, rgb(0,48,156), white on the selected account;
+            # layoutpos=top under the name, one under the other
+            y = fy + self.text.size(name)[1]
+            for line in user.statuses(a):
+                layout = self.text.layout(line, self.pt(int(a.string('logonui', 46) or 9)), bold=True,
+                                          family=a.account_face)
+                self.text.draw(cr, layout, name_x, y, tint(TEXT if selected else STATUS))
+                y += self.text.size(layout)[1]
         if self.mode == 'logon' and self.status:
             layout = self.text.layout(self.status, self.pt(int(a.string('logonui', 46) or 9)), bold=True,
                                       family=a.account_face)

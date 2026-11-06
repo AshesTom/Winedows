@@ -146,6 +146,8 @@ fi
 # In a window (xp.sh native) XP's Welcome screen comes first, and Log Off comes back to it. A whole
 # session's Welcome is its display manager's greeter, where Log Off goes back to.
 export WIN4WINE_NATIVE_REQUEST=$ipc/session-request
+# Switch User's Welcome screen (taskbar.cpp), over the session it leaves running
+export WIN4WINE_GREETER_DIR=$root/greeter WIN4WINE_ASSETS=$assets
 startup=--startup
 while :; do
     if [[ ${WIN4WINE_NATIVE_WELCOME:-0} == 1 ]]; then
@@ -160,7 +162,7 @@ while :; do
     [[ ${WIN4WINE_NATIVE_WELCOME:-0} == 1 && $(cat "$WIN4WINE_NATIVE_REQUEST" 2>/dev/null) == logoff ]] || break
     # "Logging off...", then the Welcome screen again
     if [[ -e $assets/system32/logonui.exe ]]; then
-        { echo saving; sleep 1; } | python3 "$root/greeter/xp-splash.py" logoff --assets "$assets" > /dev/null 2>&1 &
+        { echo saving; sleep 1; } | python3 "$root/greeter/xp-splash.py" logoff --transient --assets "$assets" > /dev/null 2>&1 &
         splash=$!
         sleep 1.5
         kill "$splash" 2>/dev/null || true

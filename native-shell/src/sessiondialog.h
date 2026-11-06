@@ -8,10 +8,12 @@ class QWidget;
 
 namespace sessiondialog {
 
-enum Choice { Cancelled, StandBy, TurnOff, Restart };
+enum Choice { Cancelled, StandBy, TurnOff, Restart, Hibernate, SwitchUser, LogOff };
 
-Choice askTurnOff(bool canStandBy);
-bool askLogOff();
+// msgina's Turn Off Computer: Stand By, Turn Off, Restart (Hibernate with Shift, or alone)
+Choice askTurnOff(bool canStandBy, bool canHibernate);
+// shell32's Log Off Windows (Switch User, Log Off) when CANSWITCH, else msgina's plain question
+Choice askLogOff(bool canSwitch);
 // The blue picture with TEXT on it, in the middle of the screen, while a theme changes. Null
 // without msgina.dll's picture. The caller deletes it.
 QWidget *showPleaseWait(const QString &text);

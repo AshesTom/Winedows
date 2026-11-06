@@ -524,3 +524,22 @@ Tools menu; for the View tree, on a reflink copy of the prefix given shell32's A
 | The pages' "?" help: aHelpIds tables at `0x7c9e4228` (General: 30100 → 51092 …) and `0x7c9e4ff8` (View); the tree's HelpIDs name shell.hlp | `shell32.dll` | Missing: the help file they use was not established (shell.hlp is on the media, not extracted) |
 | The sheet's size: 383 × 475 here, 385 × 474 on XP; controls a pixel or two off | xpdialog's sheet layout | Shared with the other sheets, not addressed |
 
+---
+
+## 17. Log Off, Switch User and Turn Off
+
+Binaries: `msgina.dll` (base 0x75970000), `shell32.dll`, `logonui.exe` (0x1000000). Port:
+[`sessiondialog.cpp`](../native-shell/src/sessiondialog.cpp), [`taskbar.cpp`](../native-shell/src/taskbar.cpp) (`logOff`,
+`switchUser`, `turnOff`), [`welcome.py`](../greeter/welcome.py), [`xp-native-welcome.py`](../greeter/xp-native-welcome.py).
+Checked in the native session in a window (`WIN4WINE_NATIVE_WELCOME=1`).
+
+| Item | Source | Status |
+|---|---|---|
+| Turn Off Computer's set-up (`0x759975a5`): centred across, a third of the way down; NtPowerInformation decides: neither stand-by nor hibernation greys Stand By; hibernation alone gives Stand By the Hibernate button's words (control 20106) for good; both start timer 0xbd85 (50 ms), which reads Shift (`0x759960e6`) and swaps Stand By and Hibernate (`0x7599700e`, the label 20108 redrawn and its tip taken down). The policy ShowHibernateButton shows the fourth button instead. The focus starts on Stand By, on Turn Off when Stand By is greyed | `msgina.dll` | Done, with logind's CanSuspend and CanHibernate; Hibernate runs `systemctl hibernate`. ShowHibernateButton is not read. Only the hibernation-less case could be tried here (logind says "na") |
+| The buttons' tips (`0x759970ec`, from the subclass `0x7599731a` on WM_MOUSEHOVER, gone on WM_MOUSELEAVE): titled with the button's words; Turn Off 20129, Stand By 20130 (20131, which mentions Shift, when it can hibernate too), Restart 20132, Hibernate 20133 | `msgina.dll` | Done: a balloon without a close button, half a cursor under the pointer, after 400 ms (TrackMouseEvent's hover time) |
+| The keys: Tab and the arrows move the focus (drawn lit), Enter and Space choose, the access keys choose at once, Escape cancels | the buttons' template (BS_OWNERDRAW with &-words) | Done (the native dialog had only Escape) |
+| Log Off Windows with Switch User: shell32's LogoffWindowsDialog (`0x30157296`) shows dialog 1089 when its pictures load: background 14354, flag 14355, icons 14356 (14351, 14353 at 256 colours and fewer), title 14342/14343, labels 14345/14348, tips 14349 (Switch User) and 14350 (Log Off) | `shell32.dll` | Done, over the greyed screen as Turn Off; shown when there is somewhere to switch to (the Welcome screen in a window, or LightDM's `dm-tool`), else msgina's plain question (2250) |
+| Switch User | XP's Fast User Switching | In a window: XP's Welcome screen over the running session, choosing the account comes back, Turn Off and Restart end the session; under a display manager, `dm-tool switch-to-greeter`. Win+L (winlogon's) is not caught |
+| The Welcome screen's logged-on account (logonui `0x100a289`, into status0/status1 through `0x1009884`): status0 the unread mail (27, 28), status1 "Logged on" (15) or "%d program(s) running." (29, 30) from the session's ProgramCount; the status buttons' style rcint(46)pt bold rgb(0,48,156), white on the selected account, under the name (UIFILE `accountitem`) | `logonui.exe` | Done (the programs: the taskbar's windows); no mail count here; the status buttons' balloon (32–34, 39) is missing |
+| The log-off splash in a window | session.sh | Fixed: it kept its window (RetainPermanent, meant for a display manager's last screen) over the next Welcome screen and desktop; `--transient` lets it go |
+

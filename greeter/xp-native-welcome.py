@@ -37,6 +37,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--assets', required=True)
     parser.add_argument('--startup', action='store_true', help="play XP's startup sound")
+    parser.add_argument('--programs', type=int, help='the account is logged on, with this many programs running '
+                        '(Switch User: the session goes on behind the screen)')
     args = parser.parse_args()
     try:
         import welcome
@@ -52,7 +54,8 @@ def main():
     home = Path(entry.pw_dir)
     face = home / '.face'
     picture = face if face.is_file() else welcome.default_picture(config, assets)
-    screen = welcome.Screen(assets, [welcome.User(entry.pw_name, entry.pw_gecos.split(',')[0] or None, picture)])
+    screen = welcome.Screen(assets, [welcome.User(entry.pw_name, entry.pw_gecos.split(',')[0] or None, picture,
+                                                  programs=args.programs)])
     screen.prompt = False
     result = {'status': 1}
 
@@ -76,7 +79,9 @@ def main():
 
     def enter(index):
         screen.mode, screen.selected, screen.hover = 'logon', index, None
-        screen.status = assets.string('winlogon', STATUS_LOADING)
+        # (back to a session that is still running: nothing to load)
+        screen.status = assets.string('winlogon', STATUS_LOADING) if args.programs is None else ''
+
         area.queue_draw()
         GLib.timeout_add(LOADING, finish, 0)
 
