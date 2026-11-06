@@ -64,6 +64,8 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QDirIterator>
+#include <QScrollBar>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QProcess>
@@ -1374,6 +1376,59 @@ void showItemProperties(const QStringList &paths, QWidget *parent)
 
 } // namespace
 
+const int TREE_ROW = 17;
+
+// The Folders tree: buttons without lines (TVS_HASBUTTONS without TVS_HASLINES, as XP's in Wine)
+class FolderTree : public QTreeWidget
+{
+public:
+    explicit FolderTree(QWidget *parent)
+        : QTreeWidget(parent)
+    {
+        setProperty("treeLines", false);
+    }
+
+protected:
+    void drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const override
+    {
+        if (!model()->hasChildren(index))
+            return;
+        QStyleOption option;
+        option.initFrom(this);
+        option.rect = QRect(rect.right() + 1 - indentation(), rect.y(), indentation(), rect.height());
+        option.state = QStyle::State_Children | (isExpanded(index) ? QStyle::State_Open : QStyle::State_None);
+        style()->drawPrimitive(QStyle::PE_IndicatorBranch, &option, painter, this);
+    }
+};
+
+// Whether a folder has folders in it, for the tree's button: the first one found is enough
+bool hasSubfolders(const QString &path)
+{
+    QDirIterator it(path, QDir::Dirs | QDir::NoDotAndDotDot);
+    return it.hasNext();
+}
+
+// The Folders tree's items: the one under the pointer underlined in COLOR_HOTLIGHT, as XP's
+// tree view tracks it (seen in Wine)
+class HotTrackDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    // rows 17 apart, as XP's tree view's (its 16-pixel images and a pixel)
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        return QSize(QStyledItemDelegate::sizeHint(option, index).width(), ShellTheme::instance()->scaled(TREE_ROW));
+    }
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        if ((option->state & QStyle::State_MouseOver) && !(option->state & QStyle::State_Selected)) {
+            option->font.setUnderline(true);
+            option->palette.setColor(QPalette::Text, ShellTheme::instance()->system(QStringLiteral("hotlight"), QColor(0, 0, 128)));
+        }
+    }
+};
+
 // Filmstrip's large picture, over the strip: the selected picture as large as the place lets it,
 // never larger than it is; for nothing or another file, shimgvw.dll's "No preview available." (202),
 // as XP's preview control shows it. A double click opens it.
@@ -1471,6 +1526,8 @@ void FileBrowser::explore(const QString &location)
     auto *window = new FileBrowser(location);
     window->setFoldersShown(true);
     window->show();
+    // explorer /e, starts in the tree
+    window->m_tree->setFocus();
 }
 
 void FileBrowser::search(const QString &location)
@@ -1597,10 +1654,18 @@ void FileBrowser::buildPanes()
 
     // The Folders tree: the Desktop, and under it what XP has there
     auto *foldersPage = barPage(tr("Folders"), [this] { setFoldersShown(false); });
-    m_tree = new QTreeWidget(foldersPage);
+    m_tree = new FolderTree(foldersPage);
     m_tree->setHeaderHidden(true);
     m_tree->setIconSize(QSize(16, 16));
-    m_tree->setRootIsDecorated(true);
+    // XP's (in Wine): lines and buttons, but none at the root; whole names, scrolled sideways; the
+    // item under the pointer underlined in COLOR_HOTLIGHT
+    m_tree->setRootIsDecorated(false);
+    m_tree->header()->setStretchLastSection(false);
+    m_tree->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_tree->setTextElideMode(Qt::ElideNone);
+    m_tree->setMouseTracking(true);
+    m_tree->setItemDelegate(new HotTrackDelegate(m_tree));
     const auto addPlace = [this](QTreeWidgetItem *parent, const QString &text, const QIcon &icon, const QString &location) {
         auto *item = new QTreeWidgetItem(QStringList(text));
         item->setIcon(0, icon);
@@ -1609,18 +1674,24 @@ void FileBrowser::buildPanes()
             parent->addChild(item);
         else
             m_tree->addTopLevelItem(item);
-        // A folder shows it can open until it is read.
+        // A folder shows it can open when it has folders in it (SFGAO_HASSUBFOLDER)
         if (!location.startsWith(QLatin1String("::")))
-            item->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+            item->setChildIndicatorPolicy(hasSubfolders(location) ? QTreeWidgetItem::ShowIndicator : QTreeWidgetItem::DontShowIndicator);
         return item;
     };
     const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
     auto *desktopItem = addPlace(nullptr, xpfiles::shellString(9208, "Desktop"), fileicons::shell(35), desktop);
+    // (its items are put in now: Qt takes an item without its indicator for one without children)
+    desktopItem->setChildIndicatorPolicy(QTreeWidgetItem::DontShowIndicatorWhenChildless);
     addPlace(desktopItem, places::title(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)), fileicons::shell(fileicons::Documents), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
     auto *computer = addPlace(desktopItem, places::title(places::Computer), places::icon(places::Computer), places::Computer);
     addPlace(computer, QStringLiteral("/"), fileicons::shell(fileicons::Drive), QStringLiteral("/"));
     addPlace(computer, places::title(places::ControlPanel), places::icon(places::ControlPanel), places::ControlPanel);
+    addPlace(desktopItem, places::title(places::Network), places::icon(places::Network), places::Network);
     addPlace(desktopItem, places::title(places::RecycleBin), places::icon(places::RecycleBin), places::RecycleBin);
+    // then the Desktop folder's own folders, as the desktop's namespace lists them after its items
+    for (const QFileInfo &folder : QDir(desktop).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::IgnoreCase))
+        addPlace(desktopItem, folder.fileName(), fileicons::forFile(folder), folder.absoluteFilePath());
     desktopItem->setExpanded(true);
     computer->setExpanded(true);
     connect(m_tree, &QTreeWidget::itemExpanded, this, &FileBrowser::fillTreeItem);
@@ -2504,10 +2575,11 @@ void FileBrowser::fillTreeItem(QTreeWidgetItem *item)
         filter |= QDir::Hidden;
     const QFileInfoList children = QDir(location).entryInfoList(filter, QDir::Name | QDir::IgnoreCase);
     for (const QFileInfo &child : children) {
-        auto *childItem = new QTreeWidgetItem(QStringList(child.fileName()));
+        // XP's special folders by their shell names (My Pictures, My Music...)
+        auto *childItem = new QTreeWidgetItem(QStringList(places::title(child.absoluteFilePath())));
         childItem->setIcon(0, fileicons::forFile(child));
         childItem->setData(0, Qt::UserRole, child.absoluteFilePath());
-        childItem->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+        childItem->setChildIndicatorPolicy(hasSubfolders(child.absoluteFilePath()) ? QTreeWidgetItem::ShowIndicator : QTreeWidgetItem::DontShowIndicator);
         item->addChild(childItem);
     }
     if (children.isEmpty())
@@ -2550,6 +2622,22 @@ void FileBrowser::selectInTree(const QString &location)
     }
     m_tree->setCurrentItem(best);
     m_tree->scrollToItem(best);
+    // TreeView_EnsureVisible scrolls sideways too, until the item's name is whole (once the tree is
+    // laid out with its new rows)
+    m_tree->resizeColumnToContents(0);
+    QTimer::singleShot(0, m_tree, [tree = m_tree, location] {
+        QTreeWidgetItem *item = tree->currentItem();
+        if (!item || item->data(0, Qt::UserRole).toString() != location)
+            return;
+        QScrollBar *across = tree->horizontalScrollBar();
+        const QRect shown = tree->visualItemRect(item);
+        const int words = tree->fontMetrics().horizontalAdvance(item->text(0)) + tree->iconSize().width() + 8;
+        const int right = shown.x() + words - tree->viewport()->width();
+        if (right > 0)
+            across->setValue(across->value() + right);
+        else if (shown.x() < 0)
+            across->setValue(across->value() + shown.x());
+    });
 }
 
 QString FileBrowser::currentFolder() const

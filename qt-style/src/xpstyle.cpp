@@ -523,15 +523,17 @@ void XpStyle::drawPrimitive(PrimitiveElement element, const QStyleOption *option
         // XP's tree: dotted lines in COLOR_GRAYTEXT and its +/- glyphs.
         const QRect r = option->rect;
         const QPoint c = r.center();
+        // A tree without TVS_HASLINES (its "treeLines" property false) has only the glyphs.
+        const bool lines = !widget || widget->property("treeLines").toBool() || !widget->property("treeLines").isValid();
         painter->save();
         QPen pen(system(QStringLiteral("graytext"), option->palette.color(QPalette::Dark)));
         pen.setStyle(Qt::DotLine);
         painter->setPen(pen);
-        if (option->state & State_Item)
+        if (lines && (option->state & State_Item))
             painter->drawLine(c.x(), c.y(), r.right(), c.y());
-        if (option->state & State_Sibling)
+        if (lines && (option->state & State_Sibling))
             painter->drawLine(c.x(), r.top(), c.x(), r.bottom());
-        else if (option->state & (State_Item | State_Children))
+        else if (lines && (option->state & (State_Item | State_Children)))
             painter->drawLine(c.x(), r.top(), c.x(), c.y());
         painter->restore();
         if (option->state & State_Children) {

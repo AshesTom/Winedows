@@ -491,6 +491,21 @@ test folders (two pictures, two subfolders, two other files; three MP3s and a te
 | The type's pictures (`0x7cb201e8`: music 10/11/12, picture 13/14/15, video 19/20/21, search 16/17/18 in the shell style): the 32-pixel section icon, which stands on the bottom of a 25-row header and rises 7 above it, the 60-pixel watermark at the section body's bottom right (clipped to it), the 150-pixel one at the folder view's bottom right | `blue_ss.dll`; XP in Wine (header rows 131–155, icon from 124) | Done; pixel-identical header placement with Luna |
 | Hidden known extensions (HideFileExt, on by default): only an extension with a registered type is hidden (XP shows "bliss" and "Track 1" but "data.bin" and "README.md", .md being unregistered there) | XP in Wine; REGINST | Done (`folderoptions::shownName`): an extension shared-mime-info knows; folder windows and the desktop; a rename edits the name alone and keeps the extension (`renamedName`) |
 
+### The Folders bar
+
+Checked against XP's explorer in Wine (`explorer /e,` on the same folder). The tree view's creation was not located in
+shell32 (it goes through the generic window wrapper `sub_3005d81b`), so these values are measured.
+
+| Item | Source | Status |
+|---|---|---|
+| Buttons without lines (no TVS_HASLINES) and none at the root (no TVS_LINESATROOT); rows 17 apart, 19 per level | XP in Wine | Done (`FolderTree`; the style's `treeLines` property drops the dotted lines) |
+| A button only for a folder that has folders in it (SFGAO_HASSUBFOLDER) | XP in Wine | Done (`hasSubfolders`); a folder that gains its first subfolder later keeps no button until the tree is rebuilt |
+| Whole names, the tree scrolled sideways (a horizontal scroll bar) | XP in Wine | Done; XP also scrolls sideways onto the chosen folder when it fits already, by a rule not found |
+| The item under the pointer underlined in COLOR_HOTLIGHT (0,0,128) | XP in Wine | Done (`HotTrackDelegate`) |
+| Desktop's items: My Documents, My Computer (its drives, Control Panel), My Network Places, Recycle Bin, then the Desktop folder's folders; the special folders by their shell names (My Music, My Pictures) | XP in Wine | Done |
+| `explorer /e,` starts with the keyboard in the tree | XP in Wine | Done (`FileBrowser::explore`) |
+| The Search Companion | XP in Wine | Not comparable here: XP's Search in this prefix opens its Internet search and a web page |
+
 ### Folder Options
 
 shell32's sheet (caption 22985): General (dialog 29959), View (29960), File Types (1099). Port:
