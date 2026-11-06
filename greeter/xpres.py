@@ -8,7 +8,7 @@ tables and self-registration) read XP's files through it too.
 from pathlib import Path
 import struct
 
-RT_BITMAP, RT_DIALOG, RT_STRING = 2, 5, 6
+RT_ICON, RT_BITMAP, RT_DIALOG, RT_STRING, RT_GROUP_ICON = 3, 2, 5, 6, 14
 
 
 class Resources:
@@ -104,6 +104,23 @@ class Resources:
         masks = 12 if compression == 3 and header == 40 else 0
         offset = 14 + header + masks + 4 * colors
         return b'BM' + struct.pack('<IHHI', 14 + len(dib), 0, 0, offset) + dib
+
+    def icon(self, group, size):
+        """The SIZE-pixel image of icon GROUP with the most colours, as the bytes of a DIB of its
+        colour half (the height an icon's header doubles for the AND mask, halved)."""
+        directory = self.find(RT_GROUP_ICON, group)
+        if directory is None:
+            raise KeyError(f'icon {group}')
+        best = None
+        for i in range(struct.unpack_from('<H', directory, 4)[0]):
+            width, _, _, _, _, bits, _, number = struct.unpack_from('<BBBBHHIH', directory, 6 + 14 * i)
+            if (width or 256) == size and (best is None or bits > best[0]):
+                best = (bits, number)
+        if best is None:
+            raise KeyError(f'icon {group} at {size}')
+        dib = bytearray(self.find(RT_ICON, best[1]))
+        struct.pack_into('<i', dib, 8, struct.unpack_from('<i', dib, 8)[0] // 2)
+        return bytes(dib)
 
     def string(self, number):
         block = self.find(RT_STRING, number // 16 + 1)

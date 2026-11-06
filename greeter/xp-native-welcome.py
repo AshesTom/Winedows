@@ -21,6 +21,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 STATUS_LOADING = 1682
+# How long a status line's balloon stays (logonui's sub_1009e91: 10000)
+BALLOON_MS = 10000
 # How long "Loading your personal settings..." shows, in milliseconds
 LOADING = 1200
 
@@ -98,6 +100,10 @@ def main():
         px, py, pw, ph = screen.power_rect(width, height)
         if px <= x < px + pw and py <= y < py + ph:
             return ('power',)
+        # a logged-on account's status lines are buttons (logonui's status0, status1)
+        for key, (sx, sy, sw, sh) in screen.status_rects.items():
+            if sx <= x < sx + sw and sy <= y < sy + sh:
+                return ('status', key)
         index = screen.item_at(width, height, x, y)
         return ('user', index) if index is not None else None
 
@@ -106,8 +112,11 @@ def main():
         hover = hit[1] if hit and hit[0] == 'user' else None
         dialog_hover = hit[1] if hit and hit[0] == 'dialog' else None
         power = hit == ('power',)
-        if (hover, dialog_hover, power) != (screen.hover, screen.dialog_hover, screen.power_hover):
+        status = hit[1] if hit and hit[0] == 'status' else None
+        if (hover, dialog_hover, power, status) != (screen.hover, screen.dialog_hover, screen.power_hover,
+                                                    screen.status_hover):
             screen.hover, screen.dialog_hover, screen.power_hover = hover, dialog_hover, power
+            screen.status_hover = status
             area.queue_draw()
         return True
 
@@ -115,6 +124,20 @@ def main():
         if event.button != 1:
             return True
         hit = target(event.x, event.y)
+        # a click anywhere takes a balloon down; one on a status line shows its own for 10 s
+        screen.balloon = None
+        if hit and hit[0] == 'status':
+            screen.balloon = hit[1]
+            shown = hit[1]
+
+            def expire():
+                if screen.balloon == shown:
+                    screen.balloon = None
+                    area.queue_draw()
+                return False
+            GLib.timeout_add(BALLOON_MS, expire)
+            area.queue_draw()
+            return True
         if hit == ('power',):
             screen.dialog = True
         elif hit and hit[0] == 'user':

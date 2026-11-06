@@ -2255,8 +2255,9 @@ void Taskbar::switchUser()
 {
     const QString welcome = nativeWelcome();
     if (welcome.isEmpty()) {
-        // the display manager's greeter, this session kept behind it
-        QProcess::startDetached(QStringLiteral("dm-tool"), {QStringLiteral("switch-to-greeter")});
+        // the display manager's greeter, this session kept behind it (without one, nowhere to go)
+        if (!QStandardPaths::findExecutable(QStringLiteral("dm-tool")).isEmpty())
+            QProcess::startDetached(QStringLiteral("dm-tool"), {QStringLiteral("switch-to-greeter")});
         return;
     }
     // The Welcome screen over the running session, the account logged on with its programs counted
@@ -2949,6 +2950,12 @@ void Taskbar::inactiveIconsBalloon()
 
 void Taskbar::hotkey(int key, int modifiers)
 {
+    // Win+L is winlogon's, not in explorer.exe's table: with the Welcome screen and Fast User Switching
+    // it is Switch User (shell32's string 14349 says so)
+    if (key == 'L' && modifiers == 0) {
+        switchUser();
+        return;
+    }
     int id = -1;
     for (int i = 0; i < int(std::size(HOTKEYS)); ++i)
         if (HOTKEYS[i].key == key && HOTKEYS[i].modifiers == modifiers)

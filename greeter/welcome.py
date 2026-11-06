@@ -268,6 +268,17 @@ class Assets:
         languages = self.logonui.languages(6)
         self.system_font = SYSTEM_FONTS[0x411 if not languages or languages[0] == 0x411 else 0x409]
         self.dialog = self.template(self.msgina.find(5, 20100))
+        user32 = root / 'resources/user32.dll'
+        self.user32 = Resources(user32) if user32.is_file() else None
+
+    def info_icon(self):
+        """user32's IDI_INFORMATION (104) at 16 pixels, the balloons' TTI_INFO; None without user32."""
+        if 'info' not in self.cache:
+            try:
+                self.cache['info'] = Bitmap(self.user32.icon(104, 16), alpha=True) if self.user32 else None
+            except KeyError:
+                self.cache['info'] = None
+        return self.cache['info']
 
     def bitmap(self, module, number, key=None, alpha=False, dimmed=False):
         name = (module, number, dimmed)
@@ -565,12 +576,27 @@ class User:
             return []
         lines = []
         if self.mail:
-            lines.append(assets.string('logonui', 27 if self.mail == 1 else 28).replace('%d', str(self.mail)))
+            lines.append(('mail', assets.string('logonui', 27 if self.mail == 1 else 28).replace('%d', str(self.mail))))
         if self.programs:
-            lines.append(assets.string('logonui', 29 if self.programs == 1 else 30).replace('%d', str(self.programs)))
+            lines.append(('programs', assets.string('logonui', 29 if self.programs == 1 else 30)
+                          .replace('%d', str(self.programs))))
         else:
-            lines.append(assets.string('logonui', 15))
+            lines.append(('programs', assets.string('logonui', 15)))
         return lines
+
+    def balloon(self, assets, kind):
+        """The balloon a click on a status line shows (logonui's sub_1009e91 and sub_1009fed): the
+        programs' title "%s has %d program(s) running" (32, 33) or "%s is logged on" (38) over 34 or 39;
+        the mail's "%s has %d e-mail message(s)" (35, 36) over 37."""
+        if kind == 'mail':
+            title = assets.string('logonui', 35 if self.mail == 1 else 36).replace('%s', self.display, 1)
+            return title.replace('%d', str(self.mail)), assets.string('logonui', 37)
+        if self.programs:
+            title = assets.string('logonui', 32 if self.programs == 1 else 33).replace('%s', self.display, 1)
+            title, body = title.replace('%d', str(self.programs)), assets.string('logonui', 34)
+        else:
+            title, body = assets.string('logonui', 38).replace('%s', self.display, 1), assets.string('logonui', 39)
+        return title, body.replace('\r\n', '\n')
 
 
 class Screen:
@@ -589,6 +615,9 @@ class Screen:
         self.users = users
         self.mode = 'list'
         self.hover = None          # index of the account under the pointer
+        self.status_hover = None   # (account, kind) of the status line under the pointer: underlined
+        self.balloon = None        # (account, kind) of the status line whose balloon is shown
+        self.status_rects = {}     # (account, kind): (x, y, w, h), as last drawn
         self.selected = None       # index of the account showing its password box
         self.password = ''
         self.prompt = True         # whether the selected account shows its password box
@@ -837,6 +866,13 @@ class Screen:
                                       family=a.bottom_face)
             self.text.draw(cr, layout, width - px(25 + 325 - 18) + INSET, y, tint((255, 255, 255)))
 
+        # A status line's balloon (TTI_INFO, 10 s), its stem on the line
+        if self.balloon and self.mode == 'list' and self.balloon in self.status_rects:
+            i, kind = self.balloon
+            x, y, w, h = self.status_rects[self.balloon]
+            title, body = self.users[i].balloon(a, kind)
+            self.draw_balloon(cr, x + w // 2, y + h, title, body, icon='info')
+
         if self.dialog and dialog:
             self.draw_dialog(cr, width, height, blit)
 
@@ -876,12 +912,15 @@ class Screen:
         if self.mode == 'list':
             # button [class="status"]: rcint(46)pt bold, rgb(0,48,156), white on the selected account;
             # layoutpos=top under the name, one under the other
+            # (button [class="status"][mousefocused]: underlined)
             y = fy + self.text.size(name)[1]
-            for line in user.statuses(a):
+            for kind, line in user.statuses(a):
                 layout = self.text.layout(line, self.pt(int(a.string('logonui', 46) or 9)), bold=True,
-                                          family=a.account_face)
+                                          family=a.account_face, underline=self.status_hover == (i, kind))
                 self.text.draw(cr, layout, name_x, y, tint(TEXT if selected else STATUS))
-                y += self.text.size(layout)[1]
+                w, h = self.text.size(layout)
+                self.status_rects[(i, kind)] = (name_x, y, w, h)
+                y += h
         if self.mode == 'logon' and self.status:
             layout = self.text.layout(self.status, self.pt(int(a.string('logonui', 46) or 9)), bold=True,
                                       family=a.account_face)
@@ -1016,8 +1055,16 @@ class Screen:
             self.text.draw(cr, title, left + title_left, top + 11, (0, 0, 0))
             self.text.draw(cr, body, left + 12, top + body_top, (0, 0, 0))
             return
-        # The error icon is drawn, not taken from user32.
         ix, iy = left + 11, top + 9
+        info = self.assets.info_icon() if icon == 'info' else None
+        if info:
+            cr.set_source_surface(info.surface, ix, iy)
+            cr.paint()
+            cr.restore()
+            self.text.draw(cr, title, left + 36, top + 11, (0, 0, 0))
+            self.text.draw(cr, body, left + 12, top + 30, (0, 0, 0))
+            return
+        # The error icon is drawn, not taken from user32.
         cr.arc(ix + 7.5, iy + 7.5, 7, 0, 6.2832)
         cr.set_source_rgb(0.86, 0.1, 0.1)
         cr.fill()
