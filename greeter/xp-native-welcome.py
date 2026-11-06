@@ -151,12 +151,54 @@ def main():
         area.queue_draw()
         return True
 
+    def key(_, event):
+        """The keys of the LightDM greeter's Welcome screen (xp-greeter.py): the arrows through the
+        accounts, Enter to choose one; in the Turn Off dialog the arrows and Tab move the focus, Enter
+        chooses, its access keys choose at once, Escape cancels."""
+        name = Gdk.keyval_name(event.keyval) or ''
+        if screen.dialog:
+            order = [n for n in ('standby', 'off', 'restart') if n != 'standby' or screen.can_standby]
+            if name == 'Escape':
+                screen.dialog = False
+            elif name in ('Left', 'Right', 'Tab', 'ISO_Left_Tab'):
+                step = -1 if name in ('Left', 'ISO_Left_Tab') else 1
+                current = order.index(screen.dialog_focus) if screen.dialog_focus in order else 0
+                screen.dialog_focus = order[(current + step) % len(order)]
+            else:
+                chosen = screen.dialog_focus if name in ('Return', 'KP_Enter', 'space') else \
+                    {'u': 'off', 'r': 'restart'}.get(name.lower())
+                if chosen == 'off':
+                    finish(3)
+                elif chosen == 'restart':
+                    finish(4)
+            area.queue_draw()
+            return True
+        if screen.mode != 'list':
+            return True
+        if name in ('Up', 'Down'):
+            count = len(screen.users)
+            current = screen.hover if screen.hover is not None else (-1 if name == 'Down' else count)
+            screen.hover = max(0, min(count - 1, current + (1 if name == 'Down' else -1)))
+            area.queue_draw()
+        elif name in ('Return', 'KP_Enter', 'space') and screen.hover is not None:
+            enter(screen.hover)
+        return True
+
+    def grab(*_):
+        # A popup window gets no keys of its own: they come by asking, as the screen covers everything.
+        seat = Gdk.Display.get_default().get_default_seat()
+        seat.grab(window.get_window(), Gdk.SeatCapabilities.KEYBOARD, False, None, None, None)
+        return False
+
     area.connect('draw', draw)
     window.add_events(0)
     from gi.repository import Gdk
     area.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
+    window.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.STRUCTURE_MASK)
     area.connect('motion-notify-event', motion)
     area.connect('button-release-event', release)
+    window.connect('key-press-event', key)
+    window.connect('map-event', grab)
     window.show_all()
     if args.startup:
         play(args.assets, 'Windows XP Startup.wav')
