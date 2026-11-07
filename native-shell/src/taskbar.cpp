@@ -110,6 +110,13 @@ const int STRING_START_TIP = 533, STRING_START_BALLOON_TITLE = 800, STRING_START
 const int REMINDERS_DELAY_MS = 6000;
 const int STRING_LOW_RESOLUTION_TITLE = 811, STRING_LOW_RESOLUTION = 812;
 const int STRING_TOUR_BALLOON_TITLE = 821, STRING_TOUR_BALLOON = 822, TOUR_SHOW_MS = 60000;
+// Their IconResource values: explorer.exe,9 and tourstart.exe,0 (ExtractIconEx's indexes: the 10th and
+// the 1st icon group, 111 and 100)
+const int ICON_LOW_RESOLUTION = 111, ICON_TOUR = 100;
+// A reminder's notification icon, beside the Security Center's 0xfffffff3
+const quint32 ICON_REMINDER = 0xfffffff4;
+// user32.dll's information icon (IDI_INFORMATION)
+const int ICON_INFORMATION = 104;
 // The chevron's balloon (sub_101d6b6): when the chevron is first shown, 30 s
 const int STRING_HIDDEN_BALLOON_TITLE = 590, STRING_HIDDEN_BALLOON = 591, HIDDEN_BALLOON_MS = 30000;
 const int STRING_UNDO = 534, STRING_CASCADE = 535, STRING_TILE = 536, STRING_MINIMIZE_ALL = 537, STRING_SHOW_OPEN_WINDOWS = 850;
@@ -2842,17 +2849,47 @@ void Taskbar::startButtonBalloon()
     balloon->show();
 }
 
-namespace {
-// A reminder's balloon: shell32 shows it from a notification icon of its own, which this shell does
-// not add, so its stem is on the notification area's left end.
-BalloonWindow *reminderBalloon(const BalloonTip &tip, const QRect &tray)
+// shell32's PostBootReminder shows a reminder through an IUserNotification (sub_3004f02d, sub_3004ef26): a
+// notification icon of its own, the small icon of its IconResource with its ToolTip value as the tip (explorer's
+// two reminders have none), and its Title, Text and TypeFlags as that icon's balloon. The icon stays for ShowTime,
+// or until the balloon or the icon is clicked or the balloon closed; then it goes, and the next reminder comes.
+void Taskbar::reminder(BalloonTip tip, const QImage &image, int showTime, std::function<void()> clicked,
+                       std::function<void()> done)
 {
-    auto *balloon = new BalloonWindow(tip);
-    balloon->setAttribute(Qt::WA_DeleteOnClose);
-    balloon->place(QRect(tray.x() + 8, tray.top(), 1, 1));
-    QTimer::singleShot(tip.timeout, balloon, &QWidget::close);
-    return balloon;
-}
+    // Not the taskbar's child: DONE may start the next reminder, which a taskbar going away must not
+    auto *owner = new QObject;
+    connect(owner, &QObject::destroyed, this, [done] { done(); });
+    TrayIcon icon;
+    icon.id = ICON_REMINDER;
+    icon.image = image;
+    // A reminder without its own icon (tourstart.exe missing from an older extraction) shows user32's
+    // small information icon, as its balloon does
+    if (icon.image.isNull())
+        if (const auto user32 = xpfiles::resources(xpfiles::find(QStringLiteral("user32.dll"))))
+            icon.image = xpfiles::icon(*user32, ICON_INFORMATION, ShellTheme::instance()->scaled(16));
+    QPointer<QObject> alive(owner);
+    const auto finish = [alive](bool click, const std::function<void()> &clicked) {
+        if (!alive)
+            return;
+        alive->deleteLater();
+        if (click)
+            clicked();
+    };
+    m_tray->setOwnIcons(owner, {icon}, [finish, clicked](quint32 id, const char *op, QPoint) {
+        if (id != ICON_REMINDER)
+            return false;
+        if (qstrcmp(op, "context") != 0)
+            finish(true, clicked);
+        return true;
+    });
+    tip.icon = ICON_REMINDER;
+    tip.timeout = showTime;
+    tip.closed = [finish, clicked](BalloonTip::Reason reason) {
+        if (reason == BalloonTip::Clicked || reason == BalloonTip::Dismissed)
+            finish(reason == BalloonTip::Clicked, clicked);
+    };
+    m_tray->balloons()->show(tip);
+    QTimer::singleShot(showTime, owner, [finish, clicked] { finish(false, clicked); });
 }
 
 // Microsoft.FixScreenResolution (strings 811/812, icon explorer.exe,9): XP's check (sub_100e569) compares
@@ -2869,18 +2906,13 @@ void Taskbar::lowResolutionBalloon(std::function<void()> next)
     tip.title = xpfiles::string(*explorer, STRING_LOW_RESOLUTION_TITLE);
     tip.text = xpfiles::string(*explorer, STRING_LOW_RESOLUTION);
     tip.kind = BalloonTip::Info;
-    tip.timeout = 10000;
-    BalloonWindow *balloon = reminderBalloon(tip, QRect(mapToGlobal(m_trayRect.topLeft() + QPoint(0, m_top)), m_trayRect.size()));
-    connect(balloon, &BalloonWindow::clicked, balloon, [balloon] {
-        balloon->close();
-        DisplayProperties::showTab(DisplayProperties::Settings);
-    });
-    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
-    connect(balloon, &QObject::destroyed, this, [next] { next(); });
-    balloon->show();
+    // its ShowTime is not set: shell32's default, which this does not read, stands at a balloon's longest
+    reminder(tip, xpfiles::icon(*explorer, ICON_LOW_RESOLUTION, ShellTheme::instance()->scaled(16)), 30000,
+             [] { DisplayProperties::showTab(DisplayProperties::Settings); }, next);
 }
 
-// Microsoft.OfferTour (strings 821/822, icon tourstart.exe,0), once: its click runs tourstart.exe.
+// Microsoft.OfferTour (sub_101343b: strings 821/822, icon tourstart.exe,0, ShowTime 60000, NIIF_INFO), once:
+// its click runs tourstart.exe.
 void Taskbar::tourBalloon()
 {
     const QString key = QStringLiteral("StartMenu/TourBalloonShown");
@@ -2898,10 +2930,8 @@ void Taskbar::tourBalloon()
     if (tip.title.isEmpty() && tip.text.isEmpty())
         return;
     tip.kind = BalloonTip::Info;
-    tip.timeout = TOUR_SHOW_MS;
-    BalloonWindow *balloon = reminderBalloon(tip, QRect(mapToGlobal(m_trayRect.topLeft() + QPoint(0, m_top)), m_trayRect.size()));
-    connect(balloon, &BalloonWindow::clicked, balloon, [balloon] {
-        balloon->close();
+    const auto tourstart = xpfiles::resources(xpfiles::find(QStringLiteral("tourstart.exe")));
+    reminder(tip, tourstart ? xpfiles::icon(*tourstart, ICON_TOUR, ShellTheme::instance()->scaled(16)) : QImage(), TOUR_SHOW_MS, [] {
         // The tour is an XP program: Wine runs it when it is there, the Start menu's shortcut otherwise.
         const QString tour = xpfiles::find(QStringLiteral("tourstart.exe"));
         const QString wine = QStandardPaths::findExecutable(QStringLiteral("wine"));
@@ -2909,9 +2939,7 @@ void Taskbar::tourBalloon()
             QProcess::startDetached(wine, {tour}, QDir::homePath());
         else if (const QString link = xpfiles::find(QStringLiteral("Tour Windows XP.lnk")); !link.isEmpty())
             programs::open(link);
-    });
-    connect(balloon, &BalloonWindow::dismissed, balloon, &QWidget::close);
-    balloon->show();
+    }, [] {});
 }
 
 // explorer.exe's balloon about the chevron (strings 590/591), once, when it is first shown.

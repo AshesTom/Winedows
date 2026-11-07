@@ -6,12 +6,14 @@
 #include "theme.h"
 #include "xpfiles.h"
 
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QMenu>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QUrl>
 
 namespace securitycenter {
 namespace {
@@ -19,9 +21,14 @@ namespace {
 const quint32 ICON_SECURITY = 0xfffffff3;
 // xpsp2res.dll's shields: green with a check, red with a cross, yellow with an exclamation mark
 const int SHIELD_ON = 10602, SHIELD_OFF = 10603, SHIELD_UNKNOWN = 10604;
+// wscntfy.exe's notification icon and its balloon's (NIIF_USER): xpsp2res.dll's 6106, a red shield
+// (sub_10018d5, sub_10019c3: LoadImageW at 16 x 16)
+const int ICON_ALERT = 6106;
 // Its words
-const int STRING_UPDATES_OFF = 17003, STRING_NO_FIREWALL = 17005, STRING_OPEN = 17008, STRING_ALERTS = 17010,
-          STRING_CLICK = 17013, STRING_AT_RISK = 17119;
+const int STRING_UPDATES_OFF = 17003, STRING_NO_FIREWALL = 17005, STRING_OPEN = 17008, STRING_WEB_SITE = 17009,
+          STRING_ALERTS = 17010, STRING_CLICK = 17013, STRING_BULLET = 17014, STRING_AT_RISK = 17119;
+// Go to Microsoft Security Web Site (sub_100194a)
+const char WEB_SITE[] = "http://go.microsoft.com/fwlink/?linkid=193";
 // The first look a while after the session starts, as wscntfy.exe waits for the services; then every minute.
 const int FIRST_CHECK = 15000, CHECK_EVERY = 60000;
 // An alert stays XP's longest.
@@ -103,6 +110,11 @@ QString string(int id, const char *fallback)
     return text.isEmpty() ? QString::fromUtf8(fallback) : text;
 }
 
+QImage alertIcon()
+{
+    return xpsp2res() ? xpfiles::icon(*xpsp2res(), ICON_ALERT, ShellTheme::instance()->scaled(16)) : QImage();
+}
+
 QImage shield(State state, int size)
 {
     return xpsp2res() ? xpfiles::icon(*xpsp2res(), state == On ? SHIELD_ON : state == Off ? SHIELD_OFF : SHIELD_UNKNOWN, size) : QImage();
@@ -175,7 +187,7 @@ void Alerts::update(const Status &status)
     }
     TrayIcon icon;
     icon.id = ICON_SECURITY;
-    icon.image = shield(Off, ShellTheme::instance()->scaled(16));
+    icon.image = alertIcon();
     icon.tooltip = string(STRING_ALERTS, "Windows Security Alerts");
     m_tray->setOwnIcons(this, {icon}, [](quint32 id, const char *op, QPoint at) {
         if (id != ICON_SECURITY)
@@ -183,7 +195,10 @@ void Alerts::update(const Status &status)
         if (qstrcmp(op, "context") == 0) {
             auto *menu = new QMenu;
             menu->setAttribute(Qt::WA_DeleteOnClose);
+            // wscntfy.exe's menu (0x65 and 0x66), the first the default
             QAction *open = menu->addAction(string(STRING_OPEN, "Open Security Center"), [] { controlpanel::open(QStringLiteral("security")); });
+            menu->addAction(string(STRING_WEB_SITE, "Go to Microsoft Security Web Site"),
+                            [] { QDesktopServices::openUrl(QUrl(QLatin1String(WEB_SITE))); });
             menu->setDefaultAction(open);
             menu->popup(at - QPoint(0, menu->sizeHint().height()));
         } else {
@@ -201,11 +216,14 @@ void Alerts::showBalloon()
     BalloonTip tip;
     tip.icon = ICON_SECURITY;
     tip.title = string(STRING_AT_RISK, "Your computer might be at risk");
-    // One problem, as XP names one even when several essentials are off (the last of them,
-    // as seen with its firewall off and no antivirus); a blank line, then what to do.
-    tip.text = found.last() + QStringLiteral("\n\n") + string(STRING_CLICK, "Click this balloon to fix this problem.");
+    // sub_10019c3: each problem on its line (firewall, Automatic Updates, virus protection), after
+    // string 17014's "· " when there are several; a blank line, then what to do.
+    const QString bullet = found.size() > 1 ? string(STRING_BULLET, "\u00b7 ") : QString();
+    for (const QString &problem : found)
+        tip.text += bullet + problem + QLatin1Char('\n');
+    tip.text += QLatin1Char('\n') + string(STRING_CLICK, "Click this balloon to fix this problem.");
     tip.kind = BalloonTip::User;
-    tip.image = shield(Off, ShellTheme::instance()->scaled(16));
+    tip.image = alertIcon();
     tip.timeout = BALLOON_TIMEOUT;
     tip.closed = [this](BalloonTip::Reason reason) {
         m_balloon = 0;

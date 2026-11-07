@@ -310,6 +310,10 @@ Binaries: `explorer.exe`, `shell32.dll`, `comctl32.dll` 6.0, `luna.msstyles`. Po
 | Menu band: shell32's menu band is a comctl32 toolbar of text-only buttons (words + 16, 19 tall, 2 under the band's top, first 2 in) | XP in Wine | Done: identical pixels, hot item included |
 | "Address" in Rebar TextColor (127 124 115) | `luna.msstyles` | Done |
 | Task pane: `rcbmp(112/110, 6, …)` nine-grid over the 25-row header, the header's border of 2, title 13 in, arrow 2 from the right, words 7 after the icon; File and Folder Tasks ordinary, Details collapsed | shell style `blue_ss.dll`'s sheet; XP in Wine | Done: first section identical |
+| Post-boot reminders (`sub_101343b`, `sub_101389f`): explorer files Microsoft.OfferTour (title 821, text 822, IconResource `tourstart.exe,0`, ShellExecute `tourstart.exe`, ShowTime 60000, NIIF_INFO, no ToolTip) and Microsoft.FixScreenResolution (811, 812, `explorer.exe,9`, `desk.cpl`) | `explorer.exe` | Done |
+| How shell32 shows one (`sub_3004f02d`, `sub_3004ef26`): an IUserNotification, so a notification icon of its own (ExtractIconEx's small icon of IconResource, the ToolTip value as its tip), the balloon pointing at it; the icon goes with the reminder | `shell32.dll` | Done: `Taskbar::reminder`, icon ID 0xfffffff4 (tourstart.exe's group 100, explorer.exe's 111); without the icon file, user32's information icon (104). The icon stays for ShowTime, or until the balloon or the icon is clicked or the balloon closed: when exactly IUserNotification::Show returns is not read |
+| The Security Center's alert (`wscntfy.exe` `sub_10018d5`, `sub_10019c3`): its icon is `xpsp2res.dll`'s 6106 at 16 x 16 with the tip 17010 and callback 0x464; the balloon (NIF_INFO, NIIF_USER with the same icon, uTimeout 30000) is titled 17119, its text each problem on a line ending CR LF (firewall 17005, or 17004 with its name, 17101 when unknown; Automatic Updates 17003; antivirus 17006, 17007, 17011/17012 with its name, 17120), each after 17014's "· " when there are several, then a blank line and 17013 | `wscntfy.exe`, `xpsp2res.dll` | Done ([`securitycenter.cpp`](../native-shell/src/securitycenter.cpp)); only the firewall and Automatic Updates are watched here |
+| Its icon's menu (WM_CONTEXTMENU, WM_RBUTTONUP): Open Security Center (0x65, 17008, the default) and Go to Microsoft Security Web Site (0x66, 17009, `http://go.microsoft.com/fwlink/?linkid=193` by ShellExecute); WM_LBUTTONUP and NIN_BALLOONUSERCLICK open the Security Center | `wscntfy.exe` window procedure (`0x100207c`) | Done; the right-to-left order (`sub_100261b`) is not ported |
 
 ### Missing
 
@@ -317,6 +321,7 @@ Binaries: `explorer.exe`, `shell32.dll`, `comctl32.dll` 6.0, `luna.msstyles`. Po
 |---|---|
 | Task pane entries XP adds: Publish this folder to the Web, Local Disk / Documents / My Network Places in Other Places | Partial: folder windows' Other Places end with My Network Places, and My Network Places is a folder (Local Network, 4263) of the places added with Network Tasks (31343: Add a network place 31347, View network connections 31345) and GVfs mounts, its Other Places Desktop, My Computer and My Documents. Set up a home or small office network (31349), View workgroup computers (31351), Entire Network (9218) and Publish this folder to the Web are missing |
 | The caption under XP's own uxtheme | Not comparable in Wine (Wine draws it) |
+| The Desktop Cleanup reminder ("There are unused icons on your desktop", `fldrclnr.dll`) | Missing: the desktop's icons are not timed and the wizard is not ported; its notification icon would be the information icon |
 | The toolbar band's remaining differences | Wine's text rendering in the capture; not addressed |
 
 ---

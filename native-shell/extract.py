@@ -84,9 +84,13 @@ ICON_FILES = {
     'notepad.exe': 'system32', 'calc.exe': 'system32', 'comdlg32.dll': 'system32', 'lucon.ttf': 'fonts',
     # The Security Center: its notification icon and balloon, and its window
     'wscntfy.exe': 'security', 'xpsp2res.dll': 'security', 'wscui.cpl': 'security', 'inetcpl.cpl': 'security',
+    # The tour's reminder: its notification icon
+    'tourstart.exe': 'system32',
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
                      'lcldocs.xml', 'lclmm.xml', 'lclmode.xml', 'lclrfine.xml', 'lclsrch.xml'), 'srchasst/mui'),
 }
+# Files whose name on the media is not the installed one's (LAYOUT.INF renames them)
+MEDIA_NAMES = {'tourstart.exe': 'tourstrt.exe'}
 # Windows Media Player's skins (Program Files\\Windows Media Player\\Skins): their 8.3 names on the media,
 # and the names LAYOUT.INF (Compact, Revert) or their .wms give them.
 WMP_SKINS = {
@@ -227,9 +231,10 @@ def extract(source, output):
             copy_file(iso, name, sector, size, output / 'wmp/skins' / WMP_SKINS[stem])
     for name, sector, size in media:
         for target in {**FILES, **ICON_FILES, **OOBE_FILES}:
-            if name in (target, compressed(target)):
+            source = MEDIA_NAMES.get(target, target)
+            if name in (source, compressed(source)):
                 # A plain copy over a compressed one; the setup files' first otherwise.
-                if target not in wanted or name == target:
+                if target not in wanted or name == source:
                     wanted[target] = (name, sector, size)
     missing = sorted(set(FILES) - set(wanted))
     if missing:
