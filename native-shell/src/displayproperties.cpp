@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "displayproperties.h"
+#include "desktopcleanup.h"
 #include "desktopicons.h"
 
 #include "fileicons.h"
@@ -89,6 +90,7 @@ const QList<QPair<int, int>> HELP_DESKTOP_ITEMS = {   // 0x7c9e5580, shell32, di
     {30077, 51235}, {30078, 51235}, {30080, 51235}, {30081, 51235}, {30089, 51241}, {30068, 51241}, {30070, 51242},
     {30071, 51243}, {30096, 4502}, {30017, 51245}, {30016, 51245}, {30018, 51246}, {30099, 51247}, {30098, 51247}};
 const int ITEMS_DOCUMENTS = 30077, ITEMS_COMPUTER = 30078, ITEMS_NETWORK = 30080, ITEMS_INTERNET = 30081, ITEMS_ICONS = 30068;
+const int ITEMS_CLEANUP_GROUP = 30464, ITEMS_CLEANUP_TEXT = 30016, ITEMS_CLEANUP_RUN = 30017, ITEMS_CLEANUP_NOW = 30018;
 const int DESKTOP_LIST = 30048, DESKTOP_BROWSE = 30049, DESKTOP_CUSTOMIZE = 30050, DESKTOP_POSITION = 30051, DESKTOP_PREVIEW = 30053, DESKTOP_COLOUR = 30054, DESKTOP_LIST_LABEL = 30056;
 const int SHELL_CENTER = 30236, SHELL_NONE_WALLPAPER = 30300;
 // desk.cpl's: its name (the sheet's caption) and its pages' names
@@ -706,8 +708,8 @@ bool pickIcon(QWidget *parent, const QString &title, QString *chosenFile, QStrin
 }
 
 // shell32's Desktop Items, modal to Display Properties. Here its four check boxes choose the desktop's icons
-// (DesktopIcons reads them); Change Icon and Restore Default change the item's picture; the cleanup wizard and
-// the Web page are greyed.
+// (DesktopIcons reads them); Change Icon and Restore Default change the item's picture; Desktop cleanup's check
+// box and Clean Desktop Now are fldrclnr's (desktopcleanup.h). The Web page is greyed.
 static void showDesktopItems(QWidget *owner)
 {
     if (!shell32())
@@ -732,6 +734,16 @@ static void showDesktopItems(QWidget *owner)
             box->setEnabled(true);
             box->setChecked(desktopItemShown(item));
         }
+    // Desktop cleanup: its check box is CleanupWiz's NoRun turned round; Clean Desktop Now runs
+    // "fldrclnr.dll,Wizard_RunDLL all" (sub_301b767a), every shortcut listed
+    for (int id : {ITEMS_CLEANUP_GROUP, ITEMS_CLEANUP_TEXT, ITEMS_CLEANUP_RUN, ITEMS_CLEANUP_NOW})
+        if (QWidget *control = page.controls.value(id))
+            control->setEnabled(true);
+    auto *cleanupRun = qobject_cast<QAbstractButton *>(page.controls.value(ITEMS_CLEANUP_RUN));
+    if (cleanupRun)
+        cleanupRun->setChecked(desktopcleanup::enabled());
+    if (auto *now = qobject_cast<QPushButton *>(page.controls.value(ITEMS_CLEANUP_NOW)))
+        QObject::connect(now, &QPushButton::clicked, &dialog, [] { desktopcleanup::showWizard(desktopcleanup::shortcuts(true)); });
     // The list: the pictures of My Computer, My Documents, My Network Places and the Recycle Bin's two,
     // in shell32's words
     if (QWidget *place = page.controls.value(ITEMS_ICONS)) {
@@ -830,6 +842,8 @@ static void showDesktopItems(QWidget *owner)
     for (const auto &[id, item] : boxes)
         if (auto *box = qobject_cast<QAbstractButton *>(page.controls.value(id)))
             setDesktopItemShown(item, box->isChecked());
+    if (cleanupRun)
+        desktopcleanup::setEnabled(cleanupRun->isChecked());
 }
 
 QWidget *DisplayProperties::desktopPage()

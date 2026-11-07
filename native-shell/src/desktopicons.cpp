@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "desktopicons.h"
+#include "desktopcleanup.h"
 #include "folderoptions.h"
 
 #include "fileicons.h"
@@ -506,8 +507,11 @@ void DesktopIcons::open(const Item &item)
             FileBrowser::open(places::Computer);
         else if (item.path == QLatin1String("::my-network-places"))
             FileBrowser::open(places::Network);
-        else if (const auto browser = programs::defaultBrowser())
+        else if (const auto browser = programs::defaultBrowser()) {
             programs::launch(*browser);
+            // Internet Explorer's own run, which the desktop cleanup looks for
+            programs::noteRun(item.path);
+        }
         return;
     }
     if (QFileInfo(item.path).suffix() == QLatin1String("desktop")) {
@@ -737,9 +741,10 @@ void DesktopIcons::showMenu(int index, QPoint global)
                 m_desktop->update();
             });
         }
-        for (int command : {CMD_LOCK_WEB, CMD_CLEANUP})
-            if (QAction *action = desktop.value(command))
-                action->setEnabled(false);
+        if (QAction *lock = desktop.value(CMD_LOCK_WEB))
+            lock->setEnabled(false);
+        // shell32 runs "fldrclnr.dll,Wizard_RunDLL all" (sub_300ebefd), as Desktop Items' Clean Desktop Now does
+        connectTo(desktop, CMD_CLEANUP, [] { desktopcleanup::showWizard(desktopcleanup::shortcuts(true)); });
     }
     connectTo(items, CMD_REFRESH, [this] { reload(); });
     const bool files = fileops::clipboardHasFiles();

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "taskbar.h"
+#include "desktopcleanup.h"
 #include "displayproperties.h"
 #include "taskbarproperties.h"
 
@@ -115,6 +116,9 @@ const int STRING_TOUR_BALLOON_TITLE = 821, STRING_TOUR_BALLOON = 822, TOUR_SHOW_
 const int ICON_LOW_RESOLUTION = 111, ICON_TOUR = 100;
 // A reminder's notification icon, beside the Security Center's 0xfffffff3
 const quint32 ICON_REMINDER = 0xfffffff4;
+// The desktop cleanup's notification icon (fldrclnr's IUserNotification) and how long it stays
+const quint32 ICON_CLEANUP = 0xfffffff5;
+const int CLEANUP_SHOW_MS = 20000;
 // user32.dll's information icon (IDI_INFORMATION)
 const int ICON_INFORMATION = 104;
 // The chevron's balloon (sub_101d6b6): when the chevron is first shown, 30 s
@@ -514,7 +518,12 @@ Taskbar::Taskbar(WindowList *windows, Tray *tray)
     connect(m_tray, &Tray::startRequested, this, [this] { showStartMenu(true); });
     connect(m_tray, &Tray::hotkey, this, &Taskbar::hotkey);
     QTimer::singleShot(START_BALLOON_DELAY_MS, this, &Taskbar::startButtonBalloon);
-    QTimer::singleShot(REMINDERS_DELAY_MS, this, [this] { lowResolutionBalloon([this] { tourBalloon(); }); });
+    QTimer::singleShot(REMINDERS_DELAY_MS, this, [this] {
+        lowResolutionBalloon([this] {
+            tourBalloon();
+            desktopCleanupBalloon();
+        });
+    });
     m_dragTimer.setSingleShot(true);
     connect(&m_dragTimer, &QTimer::timeout, this, [this] {
         if (m_dragHit.kind == Hit::Task && m_dragHit.index < m_buttons.size()) {
@@ -2854,14 +2863,17 @@ void Taskbar::startButtonBalloon()
 // two reminders have none), and its Title, Text and TypeFlags as that icon's balloon. The icon stays for ShowTime,
 // or until the balloon or the icon is clicked or the balloon closed; then it goes, and the next reminder comes.
 void Taskbar::reminder(BalloonTip tip, const QImage &image, int showTime, std::function<void()> clicked,
-                       std::function<void()> done)
+                       std::function<void()> done, const QString &tooltip)
 {
+    // A tip that names its icon keeps it: one IUserNotification's beside the reminders'
+    const quint32 id = tip.icon ? tip.icon : ICON_REMINDER;
     // Not the taskbar's child: DONE may start the next reminder, which a taskbar going away must not
     auto *owner = new QObject;
     connect(owner, &QObject::destroyed, this, [done] { done(); });
     TrayIcon icon;
-    icon.id = ICON_REMINDER;
+    icon.id = id;
     icon.image = image;
+    icon.tooltip = tooltip;
     // A reminder without its own icon (tourstart.exe missing from an older extraction) shows user32's
     // small information icon, as its balloon does
     if (icon.image.isNull())
@@ -2875,14 +2887,14 @@ void Taskbar::reminder(BalloonTip tip, const QImage &image, int showTime, std::f
         if (click)
             clicked();
     };
-    m_tray->setOwnIcons(owner, {icon}, [finish, clicked](quint32 id, const char *op, QPoint) {
-        if (id != ICON_REMINDER)
+    m_tray->setOwnIcons(owner, {icon}, [finish, clicked, id](quint32 hit, const char *op, QPoint) {
+        if (hit != id)
             return false;
         if (qstrcmp(op, "context") != 0)
             finish(true, clicked);
         return true;
     });
-    tip.icon = ICON_REMINDER;
+    tip.icon = id;
     tip.timeout = showTime;
     tip.closed = [finish, clicked](BalloonTip::Reason reason) {
         if (reason == BalloonTip::Clicked || reason == BalloonTip::Dismissed)
@@ -2940,6 +2952,28 @@ void Taskbar::tourBalloon()
         else if (const QString link = xpfiles::find(QStringLiteral("Tour Windows XP.lnk")); !link.isEmpty())
             programs::open(link);
     }, [] {});
+}
+
+// explorer.exe runs "fldrclnr.dll,Wizard_RunDLL" at logon when the cleanup is due (sub_100efe1). fldrclnr's
+// reminder (sub_693d245b) is an IUserNotification: its icon 100 with its title as the tip, its strings 6 and 7
+// as an NIIF_INFO balloon, shown for 20 s (SetBalloonRetry(20000, -1, 1)); a click opens the wizard on the
+// unused shortcuts. None unused, no reminder; either way fldrclnr then writes its time.
+void Taskbar::desktopCleanupBalloon()
+{
+    if (!isVisible() || !desktopcleanup::due())
+        return;
+    const QList<desktopcleanup::Shortcut> unused = desktopcleanup::shortcuts(false);
+    if (unused.isEmpty()) {
+        desktopcleanup::stamp();
+        return;
+    }
+    BalloonTip tip;
+    tip.icon = ICON_CLEANUP;
+    tip.title = desktopcleanup::reminderTitle();
+    tip.text = desktopcleanup::reminderText();
+    tip.kind = BalloonTip::Info;
+    reminder(tip, desktopcleanup::reminderIcon(ShellTheme::instance()->scaled(16)), CLEANUP_SHOW_MS,
+             [unused] { desktopcleanup::showWizard(unused); }, [] { desktopcleanup::stamp(); }, tip.title);
 }
 
 // explorer.exe's balloon about the chevron (strings 590/591), once, when it is first shown.

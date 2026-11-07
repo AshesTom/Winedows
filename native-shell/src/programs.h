@@ -2,6 +2,7 @@
 // The Linux applications, from their desktop entries, in XP's Programs folders.
 #pragma once
 
+#include <QDateTime>
 #include <QIcon>
 #include <QMap>
 #include <QString>
@@ -13,6 +14,7 @@ namespace programs {
 struct Program
 {
     QString id;           // its desktop entry's file name
+    QString file;         // and that file's path
     QString name, icon;
     QString comment;      // its Comment, which XP's Start menu shows as the item's infotip
     QStringList command;
@@ -46,6 +48,10 @@ void clearUses();
 void removeUse(const QString &id);
 // Programs by their uses, most used first.
 QList<Program> mostUsed(int count);
+// When the shortcut or desktop item at PATH was last run (XP's UserAssist UEME_RUNPATH, which the desktop
+// cleanup reads); invalid if never. launch() notes its program's file.
+void noteRun(const QString &path);
+QDateTime lastRun(const QString &path);
 // The user's default programs, through xdg-settings and xdg-mime.
 std::optional<Program> defaultBrowser();
 std::optional<Program> defaultMail();

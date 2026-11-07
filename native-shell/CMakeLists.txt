@@ -25,6 +25,7 @@ add_library(xpshell STATIC
     src/editmenu.cpp src/editmenu.h
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
+    src/desktopcleanup.cpp src/desktopcleanup.h
     src/filebrowser.cpp src/filebrowser.h
     src/folderoptions.cpp src/folderoptions.h
     src/shellmenus.cpp src/shellmenus.h

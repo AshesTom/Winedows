@@ -41,7 +41,7 @@ QString find(const QString &name)
 void loadFonts()
 {
     for (const char *name : {"tahoma.ttf", "tahomabd.ttf", "framd.ttf", "framdit.ttf", "trebuc.ttf", "trebucbd.ttf", "marlett.ttf",
-                             "arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf", "micross.ttf", "msgothic.ttc", "lucon.ttf"})
+                             "arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf", "micross.ttf", "msgothic.ttc", "lucon.ttf", "verdanab.ttf"})
         if (const QString path = find(QLatin1String(name)); !path.isEmpty())
             QFontDatabase::addApplicationFont(path);
 }

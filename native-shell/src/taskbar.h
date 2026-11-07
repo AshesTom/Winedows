@@ -130,7 +130,11 @@ private:
     void tourBalloon();
     // shell32's way of showing one: its own notification icon and that icon's balloon. CLICKED runs when
     // either is clicked; DONE once the icon has gone.
-    void reminder(BalloonTip tip, const QImage &image, int showTime, std::function<void()> clicked, std::function<void()> done);
+    // TOOLTIP is the icon's.
+    void reminder(BalloonTip tip, const QImage &image, int showTime, std::function<void()> clicked, std::function<void()> done,
+                  const QString &tooltip = QString());
+    // fldrclnr.dll's "There are unused icons on your desktop", when the desktop cleanup is due
+    void desktopCleanupBalloon();
     void inactiveIconsBalloon();
     QPointer<QWidget> m_startBalloon;
     // XP's hotkeys with the Windows key (explorer.exe's IDs 500 to 511), by virtual key and RegisterHotKey's modifiers

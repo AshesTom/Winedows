@@ -33,6 +33,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUrl>
 
 #include <algorithm>
 #include <cmath>
@@ -80,6 +81,7 @@ Program toProgram(const QString &path, const QHash<QString, QString> &values)
 {
     Program program;
     program.id = QFileInfo(path).fileName();
+    program.file = path;
     const QString locale = QLocale().name();
     program.name = values.value(QStringLiteral("Name[%1]").arg(locale),
                                 values.value(QStringLiteral("Name[%1]").arg(locale.section(QLatin1Char('_'), 0, 0)),
@@ -139,6 +141,18 @@ QString folderOf(const Program &program)
 QString usePath()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-programs.conf");
+}
+
+// When each shortcut was last run, by its path (a key of its own: QSettings would take the path's
+// slashes for groups)
+QString runPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/native-runs.conf");
+}
+
+QString runKey(const QString &path)
+{
+    return QString::fromLatin1(QUrl::toPercentEncoding(path));
 }
 
 // A launch count with the time it was last used: XP's UserAssist keeps both, and its Start menu
@@ -255,6 +269,22 @@ void launch(const Program &program)
 {
     QProcess::startDetached(program.command.first(), program.command.mid(1), QDir::homePath());
     noteUse(program.id);
+    noteRun(program.file);
+}
+
+void noteRun(const QString &path)
+{
+    if (path.isEmpty())
+        return;
+    QSettings runs(runPath(), QSettings::IniFormat);
+    runs.setValue(runKey(path), QDateTime::currentMSecsSinceEpoch());
+}
+
+QDateTime lastRun(const QString &path)
+{
+    const QSettings runs(runPath(), QSettings::IniFormat);
+    const qint64 at = runs.value(runKey(path), 0).toLongLong();
+    return at > 0 ? QDateTime::fromMSecsSinceEpoch(at) : QDateTime();
 }
 
 void launchWith(const Program &program, const QStringList &files)

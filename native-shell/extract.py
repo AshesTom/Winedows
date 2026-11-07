@@ -86,6 +86,9 @@ ICON_FILES = {
     'wscntfy.exe': 'security', 'xpsp2res.dll': 'security', 'wscui.cpl': 'security', 'inetcpl.cpl': 'security',
     # The tour's reminder: its notification icon
     'tourstart.exe': 'system32',
+    # The Desktop Cleanup Wizard (fldrclnr.dll): its reminder, its pages and its words, and the welcome
+    # pages' Verdana Bold title
+    'fldrclnr.dll': 'system32', 'verdanab.ttf': 'fonts',
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
                      'lcldocs.xml', 'lclmm.xml', 'lclmode.xml', 'lclrfine.xml', 'lclsrch.xml'), 'srchasst/mui'),
 }
