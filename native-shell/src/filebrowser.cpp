@@ -1045,7 +1045,7 @@ public:
         if (m_mode == TilesMode)
             return QSize(TILES_WIDTH, TILES_HEIGHT);
         if (m_mode == ThumbnailMode)
-            return QSize(120, 134);
+            return QSize(125, 140);
         return QStyledItemDelegate::sizeHint(option, index);
     }
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
@@ -1126,31 +1126,29 @@ public:
     }
 
 private:
-    static constexpr int THUMB_BOX = 100, THUMB_SIDE = 96, THUMB_TOP = 4, THUMB_GAP = 4, THUMB_TEXT = 16;
+    // Measured on XP's in Wine: the frame is the 96-pixel square, 15 from the cell's left and 5 from its top
+    // (cells 125 by 140), the name's letters 7 rows under it
+    static constexpr int THUMB_SIDE = 96, THUMB_TOP = 5, THUMB_GAP = 2, THUMB_TEXT = 16;
 
-    // XP's Thumbnails: the picture within a white square of 96 pixels and its frame, the type's
-    // icon for other files, a folder's first pictures; the name on a line under it, highlighted
-    // only as wide as its words. Selected, the frame is the highlight, two pixels wide.
+    // XP's Thumbnails: the picture fitted to a white square of 96 pixels, its frame (COLOR_BTNFACE)
+    // drawn over its edge; the type's icon for other files, a folder's own thumbnail; the name on a
+    // line under it, highlighted only as wide as its words. Selected, the frame is the highlight,
+    // two pixels wide.
     void paintThumbnail(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index, const QIcon &icon, const QString &name) const
     {
         const bool selected = option.state & QStyle::State_Selected, active = (option.state & QStyle::State_Active) && m_view->hasFocus();
         const QPalette &palette = option.palette;
         const QColor highlight = active ? palette.color(QPalette::Active, QPalette::Highlight) : palette.color(QPalette::Inactive, QPalette::Button);
-        const QRect box(option.rect.x() + (option.rect.width() - THUMB_BOX) / 2, option.rect.y() + THUMB_TOP, THUMB_BOX, THUMB_BOX);
+        const QRect box(option.rect.x() + (option.rect.width() - THUMB_SIDE + 1) / 2, option.rect.y() + THUMB_TOP, THUMB_SIDE, THUMB_SIDE);
         painter->fillRect(box, Qt::white);
         const auto *model = dynamic_cast<const FolderModelImpl *>(index.model());
         const QString path = model ? model->path(index) : QString();
-        const bool folder = model && QFileInfo(path).isDir();
-        const QImage thumbnail = model ? pictures::Thumbnails::instance()->get(path, folder ? THUMB_SIDE - 12 : THUMB_SIDE) : QImage();
-        if (!thumbnail.isNull() && folder) {
-            // Its pictures two by two, the folder's icon over their lower left corner
-            const QRect inner = box.adjusted(8, 8, -8, -8);
-            painter->drawImage(inner.x() + (inner.width() - thumbnail.width()) / 2, inner.y() + (inner.height() - thumbnail.height()) / 2, thumbnail);
-            icon.paint(painter, QRect(box.x() + 3, box.bottom() - 34, 32, 32), Qt::AlignCenter);
-        } else if (!thumbnail.isNull()) {
+        // a folder's is shell32's folder with its pictures on it (pictures::folderImage)
+        const QImage thumbnail = model ? pictures::Thumbnails::instance()->get(path, THUMB_SIDE) : QImage();
+        if (!thumbnail.isNull()) {
             painter->drawImage(box.x() + (box.width() - thumbnail.width()) / 2, box.y() + (box.height() - thumbnail.height()) / 2, thumbnail);
         } else {
-            icon.paint(painter, box.adjusted(26, 26, -26, -26), Qt::AlignCenter);
+            icon.paint(painter, box.adjusted(24, 24, -24, -24), Qt::AlignCenter);
         }
         if (selected) {
             painter->fillRect(QRect(box.x(), box.y(), box.width(), 2), highlight);
@@ -1158,7 +1156,7 @@ private:
             painter->fillRect(QRect(box.x(), box.y(), 2, box.height()), highlight);
             painter->fillRect(QRect(box.right() - 1, box.y(), 2, box.height()), highlight);
         } else {
-            painter->setPen(QColor(201, 199, 186));
+            painter->setPen(palette.color(QPalette::Button));
             painter->drawRect(box.adjusted(0, 0, -1, -1));
         }
         const QFontMetrics &metrics = option.fontMetrics;
@@ -2459,16 +2457,16 @@ void FileBrowser::configureList(QListView *list, View shown)
         // The thumbnails on one row, which scrolls sideways
         delegate->setMode(ItemDelegate::ThumbnailMode);
         list->setViewMode(QListView::IconMode);
-        list->setGridSize(QSize(120, 134));
+        list->setGridSize(QSize(125, 140));
         list->setIconSize(QSize(96, 96));
         list->setWrapping(false);
         list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        list->setFixedHeight(134 + 4 + list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, list));
+        list->setFixedHeight(140 + 4 + list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, list));
         break;
     case Thumbnails:
         delegate->setMode(ItemDelegate::ThumbnailMode);
         list->setViewMode(QListView::IconMode);
-        list->setGridSize(QSize(120, 134));
+        list->setGridSize(QSize(125, 140));
         list->setIconSize(QSize(96, 96));
         break;
     case Tiles:

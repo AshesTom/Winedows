@@ -18,6 +18,8 @@
 #include "xpfiles.h"
 #include "xpprogram.h"
 
+#include <algorithm>
+
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QLabel>
@@ -30,6 +32,7 @@
 #include <QCursor>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QCloseEvent>
 #include <QImageReader>
@@ -58,7 +61,7 @@ const int VIEWER_STRIP = 105, SLIDE_STRIP = 109;
 // The slide show's pace, and how long its toolbar and pointer stay after the mouse stops
 const int SLIDE_SECONDS = 5, TOOLBAR_SECONDS = 3;
 // Pictures read for a folder's thumbnail, and how many of its files are looked at to call it a picture folder
-const int FOLDER_PICTURES = 4;
+const int FOLDER_PICTURES = 4, FOLDER_NEWEST = 8;   // drawn, and looked at (0x7ca39256)
 
 const std::optional<w4w::PeResources> &viewer()
 {
@@ -96,26 +99,70 @@ const QSet<QString> &suffixes()
 
 } // namespace
 
-// A folder's thumbnail in a square of SIDE: PICTURE alone (Customize's, or its folder.jpg: 0x7ca39615),
-// else up to four of its pictures two by two
+// A folder's thumbnail (shell32's 0x7ca39da8): its canvas 80, 96 or 120 pixels, the least that holds SIDE
+// (0x7ca3980d), shell32's folder (icon 4) drawn on it at that size (0x7ca39a4b), PICTURE in the first place
+// at the larger size, else in the four places the first four of its eight newest pictures (0x7ca393ad),
+// each fitted and centred (0x7ca39908); the canvas then scaled to SIDE. Null without a picture: the
+// folder's icon is shown instead.
 QImage folderImage(const QString &folder, int side, const QString &picture)
 {
-    if (!picture.isEmpty())
-        if (const QImage image = load(picture, QSize(side, side)); !image.isNull())
-            return image;
-    const QStringList found = picturesIn(folder).mid(0, FOLDER_PICTURES);
-    if (found.isEmpty())
-        return {};
-    QImage image(side, side, QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::transparent);
-    QPainter painter(&image);
-    const int gap = 2, cell = (side - gap) / 2;
-    for (int i = 0; i < found.size(); ++i) {
-        const QImage mini = load(found[i], QSize(cell, cell));
-        const QRect place((i % 2) * (cell + gap), (i / 2) * (cell + gap), cell, cell);
-        painter.drawImage(place.x() + (cell - mini.width()) / 2, place.y() + (cell - mini.height()) / 2, mini);
+    struct Layout
+    {
+        int canvas, single, mini, x1, x2, y1, y2;
+    };
+    // the tables at 0x7c9e382c (the sizes) and 0x7c9e3844 (the places)
+    static const Layout LAYOUTS[] = {{80, 69, 32, 5, 42, 9, 45}, {96, 82, 40, 7, 49, 11, 52}, {120, 104, 48, 8, 64, 13, 67}};
+    const Layout &layout = side <= 80 ? LAYOUTS[0] : side <= 96 ? LAYOUTS[1] : LAYOUTS[2];
+
+    const bool single = !picture.isEmpty() && isPicture(picture);
+    QStringList found;
+    if (single) {
+        found.append(picture);
+    } else {
+        QFileInfoList newest;
+        for (const QString &path : picturesIn(folder))
+            newest.append(QFileInfo(path));
+        std::stable_sort(newest.begin(), newest.end(), [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
+        for (const QFileInfo &item : newest.mid(0, FOLDER_NEWEST))
+            found.append(item.absoluteFilePath());
     }
-    return image;
+    const QPoint places[] = {{layout.x1, layout.y1}, {layout.x2, layout.y1}, {layout.x1, layout.y2}, {layout.x2, layout.y2}};
+    const int box = single ? layout.single : layout.mini;
+    QList<QPair<QPoint, QImage>> drawn;
+    for (const QString &path : std::as_const(found)) {
+        if (drawn.size() >= FOLDER_PICTURES)
+            break;
+        const QImage mini = load(path, QSize(box, box));
+        if (mini.isNull())
+            continue;
+        const QPoint place = places[drawn.size()];
+        drawn.append({place + QPoint((box - mini.width()) / 2, (box - mini.height()) / 2), mini});
+    }
+    if (drawn.isEmpty())
+        return {};
+
+    static const QHash<int, QImage> backgrounds = [] {
+        QHash<int, QImage> made;
+        const auto shell32 = xpfiles::resources(xpfiles::find(QStringLiteral("shell32.dll")));
+        for (const Layout &each : LAYOUTS) {
+            QImage folderIcon = shell32 ? xpfiles::icon(*shell32, 4, each.canvas) : QImage();
+            if (!folderIcon.isNull() && folderIcon.width() != each.canvas)
+                folderIcon = folderIcon.scaled(each.canvas, each.canvas, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            made.insert(each.canvas, folderIcon.convertToFormat(QImage::Format_ARGB32_Premultiplied));
+        }
+        return made;
+    }();
+    QImage image = backgrounds.value(layout.canvas);
+    if (image.isNull()) {
+        image = QImage(layout.canvas, layout.canvas, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+    }
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    for (const auto &[at, mini] : std::as_const(drawn))
+        painter.drawImage(at, mini);
+    painter.end();
+    return side == layout.canvas ? image : image.scaled(side, side, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 
 bool isPicture(const QString &path)
