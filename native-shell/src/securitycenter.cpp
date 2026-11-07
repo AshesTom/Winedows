@@ -10,8 +10,10 @@
 #include <QDir>
 #include <QFile>
 #include <QMenu>
+#include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -25,8 +27,9 @@ const int SHIELD_ON = 10602, SHIELD_OFF = 10603, SHIELD_UNKNOWN = 10604;
 // (sub_10018d5, sub_10019c3: LoadImageW at 16 x 16)
 const int ICON_ALERT = 6106;
 // Its words
-const int STRING_UPDATES_OFF = 17003, STRING_NO_FIREWALL = 17005, STRING_OPEN = 17008, STRING_WEB_SITE = 17009,
-          STRING_ALERTS = 17010, STRING_CLICK = 17013, STRING_BULLET = 17014, STRING_AT_RISK = 17119;
+const int STRING_UPDATES_OFF = 17003, STRING_NO_FIREWALL = 17005, STRING_NO_ANTIVIRUS = 17006, STRING_OPEN = 17008,
+          STRING_WEB_SITE = 17009, STRING_ALERTS = 17010, STRING_ANTIVIRUS_OFF = 17012, STRING_CLICK = 17013, STRING_BULLET = 17014,
+          STRING_AT_RISK = 17119;
 // Go to Microsoft Security Web Site (sub_100194a)
 const char WEB_SITE[] = "http://go.microsoft.com/fwlink/?linkid=193";
 // The first look a while after the session starts, as wscntfy.exe waits for the services; then every minute.
@@ -70,14 +73,15 @@ bool ufwEnabled()
                .match(QString::fromUtf8(file.readAll())).hasMatch();
 }
 
-// apt's unattended upgrades: the package, and APT::Periodic::Unattended-Upgrade set
-bool aptUnattended()
+// apt's unattended upgrades: on with the package and APT::Periodic::Unattended-Upgrade set, off
+// when that setting says so, not yet configured otherwise (wscsvc.dll's states 1 and 5)
+State aptUnattended()
 {
     if (!installed("unattended-upgrade"))
-        return false;
+        return CheckSettings;
     const QDir folder(QStringLiteral("/etc/apt/apt.conf.d"));
     static const QRegularExpression setting(QStringLiteral("APT::Periodic::Unattended-Upgrade\\s+\"(\\w+)\""));
-    bool on = false;
+    State state = CheckSettings;
     for (const QString &name : folder.entryList(QDir::Files, QDir::Name)) {
         QFile file(folder.filePath(name));
         if (!file.open(QIODevice::ReadOnly))
@@ -85,23 +89,64 @@ bool aptUnattended()
         auto matches = setting.globalMatch(QString::fromUtf8(file.readAll()));
         while (matches.hasNext()) {
             const QString value = matches.next().captured(1);
-            on = value != QLatin1String("0") && value.compare(QLatin1String("false"), Qt::CaseInsensitive) != 0;
+            state = value != QLatin1String("0") && value.compare(QLatin1String("false"), Qt::CaseInsensitive) != 0 ? On : Off;
         }
     }
-    return on;
+    return state;
 }
 
+QSettings &choices()
+{
+    static QSettings settings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/security-center.conf"),
+                              QSettings::IniFormat);
+    return settings;
+}
+
+const char *notifyName(Essential essential)
+{
+    return essential == Virus ? "AntiVirusDisableNotify" : essential == Firewall ? "FirewallDisableNotify" : "UpdatesDisableNotify";
+}
+
+QPointer<Alerts> alertsInstance;
+
+} // namespace
+
+bool alerts(Essential essential)
+{
+    return !choices().value(QLatin1String(notifyName(essential)), false).toBool();
+}
+
+void setAlerts(Essential essential, bool on)
+{
+    choices().setValue(QLatin1String(notifyName(essential)), !on);
+}
+
+bool monitoredByUser(Essential essential)
+{
+    return essential != Updates && choices().value(QLatin1String(essential == Virus ? "AntiVirusOverride" : "FirewallOverride"), false).toBool();
+}
+
+void setMonitoredByUser(Essential essential, bool on)
+{
+    if (essential != Updates)
+        choices().setValue(QLatin1String(essential == Virus ? "AntiVirusOverride" : "FirewallOverride"), on);
+}
+
+// wscsvc.dll alerts for an essential in its bad state (1 off or missing) whose notify bit is set; the
+// balloon names them in wscntfy.exe's order: firewall, Automatic Updates, antivirus.
 QStringList problems(const Status &status)
 {
     QStringList out;
-    if (status.firewall == Off)
+    if (status.firewall == Off && alerts(Firewall))
         out.append(string(STRING_NO_FIREWALL, "No firewall is turned on"));
-    if (status.updates == Off)
+    if (status.updates == Off && alerts(Updates))
         out.append(string(STRING_UPDATES_OFF, "Automatic Updates is turned off"));
+    if (status.virus == NotFound && alerts(Virus))
+        out.append(string(STRING_NO_ANTIVIRUS, "Antivirus software might not be installed"));
+    else if (status.virus == Off && alerts(Virus))
+        out.append(string(STRING_ANTIVIRUS_OFF, "%1 is turned off").replace(QLatin1String("%1"), status.virusName));
     return out;
 }
-
-} // namespace
 
 QString string(int id, const char *fallback)
 {
@@ -126,28 +171,44 @@ void check(QObject *context, std::function<void(const Status &)> done)
         done(Status{});
         return;
     }
-    run(context, QStringLiteral("systemctl"), {QStringLiteral("is-active"), QStringLiteral("firewalld"), QStringLiteral("ufw"), QStringLiteral("nftables"), QStringLiteral("iptables")},
-        [context, done](const QString &output) {
+    // The firewalls, then ClamAV's scanner under its distributions' names
+    const QStringList firewalls{QStringLiteral("firewalld"), QStringLiteral("ufw"), QStringLiteral("nftables"), QStringLiteral("iptables")};
+    const QStringList scanners{QStringLiteral("clamav-daemon"), QStringLiteral("clamd@scan"), QStringLiteral("clamd")};
+    run(context, QStringLiteral("systemctl"), QStringList{QStringLiteral("is-active")} + firewalls + scanners,
+        [context, done, firewalls, scanners](const QString &output) {
             const QStringList active = output.split(QLatin1Char('\n'));
             const auto running = [&](int i) { return active.value(i).trimmed() == QLatin1String("active"); };
             Status status;
-            const QStringList names{QStringLiteral("firewalld"), QStringLiteral("ufw"), QStringLiteral("nftables"), QStringLiteral("iptables")};
-            for (int i = 0; i < names.size() && status.firewall != On; ++i)
-                if (running(i) && (names[i] != QLatin1String("ufw") || ufwEnabled())) {
+            for (int i = 0; i < firewalls.size() && status.firewall != On; ++i)
+                if (running(i) && (firewalls[i] != QLatin1String("ufw") || ufwEnabled())) {
                     status.firewall = On;
-                    status.firewallName = names[i];
+                    status.firewallName = firewalls[i];
                 }
             if (status.firewall != On)
                 status.firewall = Off;
+            if (monitoredByUser(Firewall))
+                status.firewall = NotMonitored;
+            // ClamAV: ON while its scanner runs, OFF when only installed, NOT FOUND without it
+            for (int i = 0; i < scanners.size() && status.virus != On; ++i)
+                if (running(int(firewalls.size()) + i))
+                    status.virus = On;
+            if (status.virus != On)
+                status.virus = installed("clamscan") || installed("clamd") ? Off : NotFound;
+            if (status.virus != NotFound)
+                status.virusName = QStringLiteral("ClamAV");
+            if (monitoredByUser(Virus))
+                status.virus = NotMonitored;
             if (installed("apt-get")) {
-                status.updates = aptUnattended() ? On : Off;
+                status.updates = aptUnattended();
                 done(status);
             } else if (installed("dnf") || installed("dnf5") || installed("rpm-ostree")) {
                 run(context, QStringLiteral("systemctl"),
                     {QStringLiteral("is-enabled"), QStringLiteral("dnf-automatic.timer"), QStringLiteral("dnf-automatic-install.timer"),
                      QStringLiteral("dnf5-automatic.timer"), QStringLiteral("rpm-ostreed-automatic.timer")},
                     [done, status](const QString &enabled) mutable {
-                        status.updates = enabled.split(QLatin1Char('\n')).contains(QLatin1String("enabled")) ? On : Off;
+                        // a timer enabled: on; one masked: turned off; none set up: not yet configured
+                        const QStringList states = enabled.split(QLatin1Char('\n'));
+                        status.updates = states.contains(QLatin1String("enabled")) ? On : states.contains(QLatin1String("masked")) ? Off : CheckSettings;
                         done(status);
                     });
             } else {
@@ -160,9 +221,16 @@ Alerts::Alerts(Tray *tray)
     : QObject(tray)
     , m_tray(tray)
 {
+    alertsInstance = this;
     m_timer.setSingleShot(true);
     connect(&m_timer, &QTimer::timeout, this, &Alerts::refresh);
     m_timer.start(FIRST_CHECK);
+}
+
+void Alerts::recheck()
+{
+    if (alertsInstance && alertsInstance->m_known)
+        alertsInstance->refresh();
 }
 
 void Alerts::refresh()
@@ -175,11 +243,13 @@ void Alerts::refresh()
 
 void Alerts::update(const Status &status)
 {
-    const bool wasAtRisk = m_known && m_status.atRisk();
-    const bool newProblem = !m_known || problems(status) != problems(m_status);
+    const bool wasAtRisk = m_known && !m_problems.isEmpty();
+    const QStringList found = problems(status);
+    const bool newProblem = !m_known || found != m_problems;
     m_status = status;
+    m_problems = found;
     m_known = true;
-    if (!status.atRisk()) {
+    if (found.isEmpty()) {
         if (m_balloon)
             m_tray->balloons()->cancel(m_balloon);
         m_tray->setOwnIcons(this, {}, nullptr);
@@ -200,7 +270,7 @@ void Alerts::update(const Status &status)
             menu->addAction(string(STRING_WEB_SITE, "Go to Microsoft Security Web Site"),
                             [] { QDesktopServices::openUrl(QUrl(QLatin1String(WEB_SITE))); });
             menu->setDefaultAction(open);
-            menu->popup(at - QPoint(0, menu->sizeHint().height()));
+            Tray::popupMenu(menu, at);
         } else {
             controlpanel::open(QStringLiteral("security"));
         }
@@ -212,7 +282,7 @@ void Alerts::update(const Status &status)
 
 void Alerts::showBalloon()
 {
-    const QStringList found = problems(m_status);
+    const QStringList &found = m_problems;
     BalloonTip tip;
     tip.icon = ICON_SECURITY;
     tip.title = string(STRING_AT_RISK, "Your computer might be at risk");

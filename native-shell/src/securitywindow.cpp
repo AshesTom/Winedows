@@ -7,11 +7,15 @@
 #include "securitycenter.h"
 
 #include "controlpanel.h"
+#include "fontpolicy.h"
 #include "theme.h"
+#include "xpdialog.h"
 #include "xpfiles.h"
 
+#include <QCheckBox>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
@@ -34,7 +38,9 @@ const int STRING_FIREWALL = 17020, STRING_UPDATES = 17021, STRING_VIRUS = 17022,
           STRING_VIRUS_UNWATCHED = 17073, STRING_INTRO = 17079, STRING_MANAGE = 17081, STRING_ESSENTIALS = 17024,
           STRING_RECOMMENDATIONS = 17110, STRING_NOT_MONITORED = 17111, STRING_HELP_PROTECT = 17125, STRING_WHATS_NEW = 17128,
           STRING_TITLE = 17153, STRING_INTERNET_OPTIONS = 17154, STRING_PRIVACY = 17095, STRING_WINDOWS_FIREWALL = 12122,
-          STRING_SECURITY_CENTER = 6103;
+          STRING_SECURITY_CENTER = 6103, STRING_CHECK_SETTINGS = 17112, STRING_NOT_FOUND = 17113, STRING_UPDATES_NOT_CONFIGURED = 17054,
+          STRING_VIRUS_ON = 17065, STRING_VIRUS_OFF = 17057, STRING_VIRUS_NOT_FOUND = 17069, STRING_VIRUS_MONITORED = 17075,
+          STRING_TURN_ON_UPDATES = 17023;
 // The Resources pane's links, in XP's order
 const int RESOURCES[] = {17026, 17027, 17033, 17096, 17036};
 // wscui.cpl's PNG resources
@@ -66,7 +72,7 @@ const int SECTION_TOP[] = {3, 1, 1}, SECTION_BOTTOM[] = {4, 1, 1};
 const int PAGE_X = 10, PAGE_WIDTH = 475, HEADING_BASELINE = 34, INTRO_BASELINE = 50, LINE = 13, SECTIONS_TOP = 111, SECTION_GAP = 9;
 // In a box: its header, its icon's centre, title, status, separator and chevron; its text and button
 const int HEADER = 38, ICON_CENTRE_X = 21, TITLE_X = 40, TITLE_BASELINE = 23, STATUS_RIGHT = 435, DOT_GAP = 27, SEPARATOR_X = 443,
-          CHEVRON_X = 451, BODY_X = 12, BODY_BASELINE = 54, BODY_WIDTH = 450, BUTTON_X = 347, BUTTON_GAP = 9, BUTTON_WIDTH = 117,
+          CHEVRON_X = 451, BODY_X = 12, BODY_BASELINE = 54, BODY_WIDTH = 450, BUTTON_X = 347, BUTTON_GAP = 9, BUTTON_WIDTH = 117, UPDATES_BUTTON_WIDTH = 148,
           BUTTON_HEIGHT = 21, BUTTON_BOTTOM = 6;
 // "Manage security settings for:": its baseline under the last box, its icons' row, their links
 const int MANAGE_BASELINE = 27, MANAGE_ICONS = 20, MANAGE_ICON_X = 0, MANAGE_STEP = 175, MANAGE_TEXT_X = 41, MANAGE_TEXT_BASELINE = 21, PAGE_BOTTOM = 12;
@@ -90,9 +96,17 @@ int scaled(int pixels)
     return theme()->scaled(pixels);
 }
 
+// wscui.cpl's fonts are ANTIALIASED_QUALITY ones (CLEARTYPE_QUALITY with ClearType)
+QFont xpFont(const QString &spec)
+{
+    QFont font = theme()->font(spec);
+    w4w::xpFontSmoothing(font, font.pixelSize(), true);
+    return font;
+}
+
 QFont xpFont(const char *spec)
 {
-    return theme()->font(QLatin1String(spec));
+    return xpFont(QLatin1String(spec));
 }
 
 QImage png(int id)
@@ -297,6 +311,168 @@ void frame(QPainter &painter, const QRegion &region, const QColor &border)
 
 // The application's style, with the keyboard's cues always shown: the Security Center's
 // buttons underline their mnemonics on XP whether or not Alt was pressed.
+// wscui.cpl's small dialogs (Alert Settings, Recommendation): xpsp2res.dll's templates under a band
+// of the banner's blue with the Security Center's name (sub_4fadfa63: PNG 110, the font pair 17151,
+// a 3-row green rule). Measured on XP: the band's 41 rows, the shield 146 from the right and 8
+// down, the words' last pixel 13 from the right; the rule lightest in the middle.
+const int DIALOG_ALERTS = 1715, DIALOG_RECOMMENDATION = 1719;
+const int CONTROL_FIREWALL_ALERTS = 1705, CONTROL_UPDATES_ALERTS = 1706, CONTROL_VIRUS_ALERTS = 1707, CONTROL_INTRO = 1708,
+          CONTROL_MONITOR_MYSELF = 1709, CONTROL_LEARN_MORE = 1710, CONTROL_NOTE = 1711, CONTROL_FIRST = 1712,
+          CONTROL_SECOND = 1713, CONTROL_OR = 1714, CONTROL_ENABLE_FIRST = 1716;
+const int STRING_FIREWALL_HELPS = 17040, STRING_FIREWALL_TURN_ON = 17046, STRING_ANOTHER_ANTIVIRUS = 17129, STRING_TURN_ON_ANTIVIRUS = 17132,
+          STRING_FIREWALL_MYSELF = 17070, STRING_FIREWALL_NOTE = 17071, STRING_VIRUS_MYSELF = 17072, STRING_FIREWALL_LEARN = 17034,
+          STRING_VIRUS_LEARN = 17035, STRING_BAND_FONT = 17151, STRING_BAND_SIZE = 17152;
+const int PNG_BAND_SHIELD = 110;
+const int DIALOG_BAND = 41, DIALOG_RULE = 3, BAND_SHIELD_RIGHT = 146, BAND_SHIELD_TOP = 8, BAND_TEXT_RIGHT = 13, BAND_TEXT_BASELINE = 25;
+const int SUGGESTION_BULLET = 3, BULLET_LEFT = 8, BULLET_DOWN = 5;
+const QColor DIALOG_BODY(243, 242, 238), DIALOG_STRIP(224, 223, 228), DIALOG_LINE(94, 94, 94);
+const QColor BAND_TOP(2, 53, 206), RULE_EDGE(63, 120, 75), RULE_MIDDLE(128, 189, 144);
+
+class BandedDialog : public QDialog
+{
+public:
+    BandedDialog(int id, QWidget *parent)
+        : QDialog(parent)
+    {
+        setAttribute(Qt::WA_DeleteOnClose);
+        static const auto xpsp2res = xpfiles::resources(xpfiles::find(QStringLiteral("xpsp2res.dll")));
+        if (xpsp2res)
+            m_page = xpdialog::build(*xpsp2res, id, this);
+        setWindowTitle(m_page.caption);
+        setWindowIcon(QIcon(QPixmap::fromImage(fileIcon("wscui.cpl", 200, scaled(16)))));
+        setFixedSize(size());
+        if (auto *cancel = qobject_cast<QPushButton *>(m_page.controls.value(2)))
+            connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+        // its brushes (sub_4fad73ef's colours 0x24 and 0x22), measured
+        QPalette palette = this->palette();
+        palette.setColor(QPalette::Window, DIALOG_BODY);
+        setPalette(palette);
+    }
+
+    QWidget *control(int id) const { return m_page.controls.value(id); }
+    // The 3 x 3 black square XP paints left of a suggestion's link: 8 left of it, 5 down
+    void addBullet(QWidget *link) { m_bullets.append(link); }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        const int w = width(), band = scaled(DIALOG_BAND);
+        for (int y = 0; y < band; ++y) {
+            const double f = double(y) / (band - 1);
+            const auto mix = [f](int a, int b) { return qRound(a + (b - a) * f); };
+            painter.fillRect(0, y, w, 1, QColor(mix(BAND_TOP.red(), BANNER_BOTTOM.red()), mix(BAND_TOP.green(), BANNER_BOTTOM.green()),
+                                                mix(BAND_TOP.blue(), BANNER_BOTTOM.blue())));
+        }
+        const double middle = (w - 1) / 2.0;
+        for (int x = 0; x < w; ++x) {
+            const double f = 1 - qAbs(x - middle) / middle;
+            const auto mix = [f](int a, int b) { return qRound(a + (b - a) * f); };
+            painter.fillRect(x, band, 1, scaled(DIALOG_RULE), QColor(mix(RULE_EDGE.red(), RULE_MIDDLE.red()), mix(RULE_EDGE.green(), RULE_MIDDLE.green()),
+                                                                     mix(RULE_EDGE.blue(), RULE_MIDDLE.blue())));
+        }
+        painter.drawImage(w - scaled(BAND_SHIELD_RIGHT) - 1, scaled(BAND_SHIELD_TOP), png(PNG_BAND_SHIELD));
+        const QString spec = string(STRING_BAND_FONT, "Trebuchet MS") + QStringLiteral(", ") + string(STRING_BAND_SIZE, "11.0");
+        painter.setFont(xpFont(spec));
+        painter.setPen(Qt::white);
+        const QString name = string(STRING_SECURITY_CENTER, "Security Center");
+        const QRect ink = painter.fontMetrics().boundingRect(name);
+        painter.drawText(QPoint(w - scaled(BAND_TEXT_RIGHT) - ink.right() - 1, scaled(BAND_TEXT_BASELINE)), name);
+        // The buttons' strip: as far over OK as OK is from the bottom, under a dark line
+        if (QWidget *ok = m_page.controls.value(1)) {
+            const int top = ok->y() - (height() - ok->geometry().bottom() - 1);
+            painter.fillRect(0, top, w, 1, DIALOG_LINE);
+            painter.fillRect(0, top + 1, w, height() - top - 1, DIALOG_STRIP);
+        }
+        for (const QPointer<QWidget> &link : m_bullets)
+            if (link && link->isVisible())
+                painter.fillRect(QRect(link->x() - scaled(BULLET_LEFT), link->y() + scaled(BULLET_DOWN), scaled(SUGGESTION_BULLET), scaled(SUGGESTION_BULLET)), Qt::black);
+    }
+
+private:
+    xpdialog::Page m_page;
+    QList<QPointer<QWidget>> m_bullets;
+};
+
+// Recommendation (1719) for the firewall or the antivirus: what to do, "I'll monitor it myself"
+// and its note. ENABLE, when given, is the first suggestion's Enable now.
+void showRecommendation(Essential essential, const Status &status, std::function<void()> enable, std::function<void()> changed, QWidget *parent)
+{
+    auto *dialog = new BandedDialog(DIALOG_RECOMMENDATION, parent);
+    const bool firewall = essential == Firewall;
+    const auto setText = [dialog](int id, const QString &text) {
+        if (auto *label = qobject_cast<QLabel *>(dialog->control(id))) {
+            label->setTextFormat(Qt::RichText);
+            label->setText(text);
+            label->show();
+        } else if (auto *button = qobject_cast<QAbstractButton *>(dialog->control(id))) {
+            button->setText(text);
+            button->show();
+        }
+    };
+    // a SysLink's words, its <A> parts as links
+    const auto link = [](const QString &text) {
+        QString html = text.toHtmlEscaped();
+        static const QRegularExpression anchor(QStringLiteral("&lt;A\\b.*?&gt;(.*?)&lt;/A&gt;"), QRegularExpression::CaseInsensitiveOption);
+        html.replace(anchor, QStringLiteral("<a href=\"#\" style=\"color:#000080; text-decoration:underline\">\\1</a>"));
+        return html.replace(QLatin1String("\r\n"), QLatin1String("<br>"));
+    };
+    setText(CONTROL_INTRO, string(firewall ? STRING_FIREWALL_HELPS : STRING_VIRUS_HELPS, ""));
+    QString first = firewall ? string(STRING_FIREWALL_TURN_ON, "Make sure that your firewall is turned on")
+        : status.virus == Off ? string(STRING_TURN_ON_ANTIVIRUS, "Turn on your installed antivirus program.")
+                              : string(STRING_ANOTHER_ANTIVIRUS, "Get another antivirus program.");
+    setText(CONTROL_FIRST, link(first));
+    dialog->addBullet(dialog->control(CONTROL_FIRST));
+    if (enable)
+        if (auto *button = qobject_cast<QPushButton *>(dialog->control(CONTROL_ENABLE_FIRST))) {
+            button->show();
+            QObject::connect(button, &QPushButton::clicked, dialog, enable);
+        }
+    for (int hidden : {CONTROL_SECOND, CONTROL_OR})
+        if (QWidget *widget = dialog->control(hidden))
+            widget->hide();
+    auto *myself = qobject_cast<QCheckBox *>(dialog->control(CONTROL_MONITOR_MYSELF));
+    if (myself) {
+        myself->setText(string(firewall ? STRING_FIREWALL_MYSELF : STRING_VIRUS_MYSELF, ""));
+        myself->setChecked(monitoredByUser(essential));
+    }
+    setText(CONTROL_NOTE, link(string(firewall ? STRING_FIREWALL_NOTE : STRING_VIRUS_UNWATCHED, "")));
+    setText(CONTROL_LEARN_MORE, link(string(firewall ? STRING_FIREWALL_LEARN : STRING_VIRUS_LEARN, "")));
+    if (auto *ok = qobject_cast<QPushButton *>(dialog->control(1)))
+        QObject::connect(ok, &QPushButton::clicked, dialog, [dialog, essential, myself, changed] {
+            if (myself && myself->isChecked() != monitoredByUser(essential)) {
+                setMonitoredByUser(essential, myself->isChecked());
+                Alerts::recheck();
+                changed();
+            }
+            dialog->accept();
+        });
+    dialog->open();
+}
+
+} // namespace
+
+// Alert Settings (1715): a check box for each essential, the *DisableNotify values
+void showAlertSettings(QWidget *parent)
+{
+    auto *dialog = new BandedDialog(DIALOG_ALERTS, parent);
+    const std::pair<int, Essential> boxes[] = {{CONTROL_FIREWALL_ALERTS, Firewall}, {CONTROL_UPDATES_ALERTS, Updates}, {CONTROL_VIRUS_ALERTS, Virus}};
+    for (const auto &[id, essential] : boxes)
+        if (auto *box = qobject_cast<QCheckBox *>(dialog->control(id)))
+            box->setChecked(alerts(essential));
+    if (auto *ok = qobject_cast<QPushButton *>(dialog->control(1)))
+        QObject::connect(ok, &QPushButton::clicked, dialog, [dialog, boxes] {
+            for (const auto &[id, essential] : boxes)
+                if (auto *box = qobject_cast<QCheckBox *>(dialog->control(id)))
+                    setAlerts(essential, box->isChecked());
+            Alerts::recheck();
+            dialog->accept();
+        });
+    dialog->open();
+}
+
+namespace {
+
 class CueStyle : public QProxyStyle
 {
 public:
@@ -306,7 +482,7 @@ public:
     }
 };
 
-struct Essential
+struct Section
 {
     QString name;
     State state = NotMonitored;
@@ -337,7 +513,7 @@ public:
     void setStatus(const Status &status)
     {
         const auto essential = [](const QString &name, State state, const QString &word, const QString &text, int picture, std::function<void()> action) {
-            Essential e;
+            Section e;
             e.name = name;
             e.state = state;
             e.word = word;
@@ -348,27 +524,47 @@ public:
             e.expanded = state != On;
             return e;
         };
-        const QString on = string(STRING_ON, "ON"), off = string(STRING_OFF, "OFF"), unwatched = string(STRING_NOT_MONITORED, "NOT MONITORED");
-        for (Essential &e : m_essentials)
+        const auto word = [](State state) {
+            return state == On ? string(STRING_ON, "ON") : state == Off ? string(STRING_OFF, "OFF") : state == CheckSettings ? string(STRING_CHECK_SETTINGS, "CHECK SETTINGS")
+                : state == NotFound ? string(STRING_NOT_FOUND, "NOT FOUND") : string(STRING_NOT_MONITORED, "NOT MONITORED");
+        };
+        for (Section &e : m_essentials)
             delete e.button;
         m_essentials.clear();
+        // Recommendation's "I'll monitor it myself" changes what is watched: look again
+        QPointer<Page> self(this);
+        const auto changed = [self] {
+            if (self)
+                check(self, [self](const Status &status) {
+                    if (self)
+                        self->setStatus(status);
+                });
+        };
+        const auto recommend = [this, status, changed](securitycenter::Essential which, std::function<void()> enable) {
+            return std::function<void()>([this, status, changed, which, enable] { showRecommendation(which, status, enable, changed, window()); });
+        };
         QString firewall = status.firewall == On ? string(STRING_FIREWALL_ON, "%1 is currently ON.").replace(QLatin1String("%1"), status.firewallName)
             : status.firewall == Off ? string(STRING_NO_FIREWALL_FOUND, "Windows detects that your computer is not currently protected by a firewall.")
                                      : string(STRING_FIREWALL_MONITORED, "");
         const bool firewallTool = installed("firewall-config") || installed("gufw");
-        m_essentials.append(essential(string(STRING_FIREWALL, "Firewall"), status.firewall, status.firewall == On ? on : status.firewall == Off ? off : unwatched,
-                                      firewall, PNG_FIREWALL, status.firewall != On && firewallTool ? std::function<void()>(openFirewallSettings) : nullptr));
+        m_essentials.append(essential(string(STRING_FIREWALL, "Firewall"), status.firewall, word(status.firewall), firewall, PNG_FIREWALL,
+                                      recommend(Firewall, firewallTool ? std::function<void()>(openFirewallSettings) : nullptr)));
         QString updates = status.updates == On ? string(STRING_UPDATES_ON, "Automatic Updates is set to the recommended setting.")
             : status.updates == Off ? string(STRING_UPDATES_TURNED_OFF, "Automatic Updates is turned off.")
-                                    : QObject::tr("This distribution's updates are not monitored here: keep it up to date with its package manager.");
+            : status.updates == CheckSettings ? string(STRING_UPDATES_NOT_CONFIGURED, "Automatic Updates is not yet configured for this computer.")
+                                              : QObject::tr("This distribution's updates are not monitored here: keep it up to date with its package manager.");
         // XP's "Click Turn on Automatic Updates" names a button this system's updates do not have.
         updates.remove(QRegularExpression(QStringLiteral(" Click Turn on Automatic Updates[^.]*\\.")));
-        m_essentials.append(essential(string(STRING_UPDATES, "Automatic Updates"), status.updates, status.updates == On ? on : status.updates == Off ? off : unwatched,
+        m_essentials.append(essential(string(STRING_UPDATES, "Automatic Updates"), status.updates, word(status.updates),
                                       updates, PNG_UPDATES, status.updates != On && hasUpdates() ? std::function<void()>(openUpdates) : nullptr));
-        const QString virus = string(STRING_VIRUS_HELPS, "Antivirus software helps protect your computer against viruses and other security threats.")
-            + QStringLiteral("\r\n\r\n") + string(STRING_VIRUS_UNWATCHED, "");
-        m_essentials.append(essential(string(STRING_VIRUS, "Virus Protection"), status.virus, status.virus == On ? on : status.virus == Off ? off : unwatched,
-                                      virus, PNG_VIRUS, nullptr));
+        QString virus = status.virus == On ? string(STRING_VIRUS_ON, "%1 reports that it is up to date and virus scanning is on.")
+            : status.virus == Off ? string(STRING_VIRUS_OFF, "%1 reports that it is turned off.")
+            : status.virus == NotFound ? string(STRING_VIRUS_NOT_FOUND, "Windows did not find antivirus software on this computer.")
+            : monitoredByUser(Virus) ? string(STRING_VIRUS_MONITORED, "")
+                                     : string(STRING_VIRUS_HELPS, "") + QStringLiteral("\r\n\r\n") + string(STRING_VIRUS_UNWATCHED, "");
+        virus.replace(QLatin1String("%1"), status.virusName);
+        m_essentials.append(essential(string(STRING_VIRUS, "Virus Protection"), status.virus, word(status.virus), virus, PNG_VIRUS,
+                                      recommend(Virus, nullptr)));
         relayout();
     }
 
@@ -380,7 +576,7 @@ public:
         m_intro = wrap(pieces(string(STRING_INTRO, "")), body, scaled(PAGE_X), scaled(INTRO_BASELINE), scaled(PAGE_WIDTH), scaled(LINE), &m_links, &last);
         m_whatsNew = wrap(pieces(string(STRING_WHATS_NEW, "")), body, scaled(PAGE_X), last + scaled(LINE), scaled(PAGE_WIDTH), scaled(LINE), &m_links, nullptr);
         int y = scaled(SECTIONS_TOP);
-        for (Essential &e : m_essentials) {
+        for (Section &e : m_essentials) {
             int height = scaled(HEADER);
             e.runs.clear();
             if (e.expanded) {
@@ -392,14 +588,17 @@ public:
                 // XP has it for whatever is not ON, with or without a program behind it here.
                 if (e.state != On) {
                     if (!e.button) {
-                        e.button = new QPushButton(string(STRING_RECOMMENDATIONS, "&Recommendations..."), this);
+                        // Automatic Updates' is "Turn on Automatic Updates", wider
+                        e.button = new QPushButton(e.picture == PNG_UPDATES ? string(STRING_TURN_ON_UPDATES, "&Turn on Automatic Updates")
+                                                                            : string(STRING_RECOMMENDATIONS, "&Recommendations..."), this);
                         static CueStyle *cues = new CueStyle;
                         e.button->setStyle(cues);
                         if (e.recommendations)
                             QObject::connect(e.button, &QPushButton::clicked, this, e.recommendations);
                     }
                     // The style draws a push button's face a pixel in from its sides and two from its top.
-                    e.button->setGeometry(QRect(scaled(PAGE_X + BUTTON_X), buttonTop, scaled(BUTTON_WIDTH), scaled(BUTTON_HEIGHT)).adjusted(-1, -2, 1, 0));
+                    const int buttonWidth = scaled(e.picture == PNG_UPDATES ? UPDATES_BUTTON_WIDTH : BUTTON_WIDTH);
+                    e.button->setGeometry(QRect(scaled(PAGE_X + BUTTON_X + BUTTON_WIDTH) - buttonWidth, buttonTop, buttonWidth, scaled(BUTTON_HEIGHT)).adjusted(-1, -2, 1, 0));
                     e.button->show();
                 }
             } else if (e.button) {
@@ -436,7 +635,7 @@ protected:
         painter.drawText(QPoint(scaled(PAGE_X), scaled(HEADING_BASELINE)), string(STRING_ESSENTIALS, "Security essentials"));
         drawRuns(painter, m_intro, body, TEXT, LINK, true);
         drawRuns(painter, m_whatsNew, body, TEXT, LINK, true);
-        for (const Essential &e : m_essentials)
+        for (const Section &e : m_essentials)
             paintEssential(painter, e);
         painter.setFont(heading);
         painter.setPen(TEXT);
@@ -453,9 +652,9 @@ protected:
         }
     }
 
-    void paintEssential(QPainter &painter, const Essential &e) const
+    void paintEssential(QPainter &painter, const Section &e) const
     {
-        const Look &look = e.state == On ? ON_LOOK : e.state == Off ? OFF_LOOK : UNKNOWN_LOOK;
+        const Look &look = e.state == On ? ON_LOOK : e.state == Off || e.state == NotFound ? OFF_LOOK : UNKNOWN_LOOK;
         const QRegion box = rows(e.box, SECTION_TOP, 3, SECTION_BOTTOM, 3);
         for (const QRect &r : box)
             painter.fillRect(r, look.body);
@@ -541,13 +740,13 @@ private:
         int link = runAt(m_intro, body, at);
         if (link < 0)
             link = runAt(m_whatsNew, body, at);
-        for (const Essential &e : m_essentials)
+        for (const Section &e : m_essentials)
             if (link < 0 && e.expanded)
                 link = runAt(e.runs, body, at);
         return link;
     }
 
-    QList<Essential> m_essentials;
+    QList<Section> m_essentials;
     QList<Run> m_intro, m_whatsNew;
     QList<QString> m_links;
     QList<Manage> m_manage;
@@ -687,6 +886,8 @@ protected:
             const QString target = m_links.value(link);
             if (target == QLatin1String("updates"))
                 openUpdates();
+            else if (target == QLatin1String("alerts"))
+                showAlertSettings(this);
             else if (target.startsWith(QLatin1String("http")))
                 QDesktopServices::openUrl(QUrl(target));
             return;
@@ -728,6 +929,8 @@ private:
                 label = text.value(0).text;
             if (id == 17027)
                 href = QStringLiteral("updates");
+            else if (id == 17036)
+                href = QStringLiteral("alerts");
             int last = 0;
             m_bullets.append(y);
             m_resources += wrap({{label.trimmed(), href, true}}, body, scaled(RESOURCES_LINK_X), y, scaled(RESOURCES_WIDTH), scaled(LINE), &m_links, &last);
