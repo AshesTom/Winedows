@@ -26,6 +26,8 @@
 #include <QFileInfo>
 #include <QGroupBox>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -158,7 +160,11 @@ void showSystem()
         fill(52, osName());
         fill(53, QObject::tr("Linux %1").arg(QSysInfo::kernelVersion()));
         fill(54, QSysInfo::currentCpuArchitecture());
-        fill(56, qEnvironmentVariable("USER"));
+        // Registered to: the first name Windows Welcome was given, as XP's RegisteredOwner
+        const QString oobe = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/win4wine/oobe.json");
+        QFile record(oobe);
+        const QString owner = record.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(record.readAll()).object().value(QStringLiteral("registered_owner")).toString() : QString();
+        fill(56, owner.isEmpty() ? qEnvironmentVariable("USER") : owner);
         fill(57, QSysInfo::machineHostName());
         // CPU names are long: as XP, on a line or two, then the memory
         const QFontMetrics metrics(general->font());

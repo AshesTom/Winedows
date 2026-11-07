@@ -149,6 +149,9 @@ export WIN4WINE_NATIVE_REQUEST=$ipc/session-request
 # Switch User's Welcome screen (taskbar.cpp), over the session it leaves running
 export WIN4WINE_GREETER_DIR=$root/greeter WIN4WINE_ASSETS=$assets
 startup=--startup
+# Windows Welcome, once: at the first logon, before anything else (greeter/xp-native-oobe.py; it
+# returns at once when it ran already, and with 2 when its files were not extracted).
+python3 "$root/greeter/xp-native-oobe.py" --assets "$assets" > "$state/native-oobe.log" 2>&1 || true
 while :; do
     if [[ ${WIN4WINE_NATIVE_WELCOME:-0} == 1 ]]; then
         status=0

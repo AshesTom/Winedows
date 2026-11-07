@@ -59,7 +59,7 @@ run() {
         DISPLAY="$display" GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb XDG_SESSION_TYPE=x11 WIN4WINE_POWER=0 "$@"
 }
 if [[ $mode == oobe ]]; then
-    run "$local/native-shell/bin/oobe" --assets "$local/native-assets" --force
+    run python3 "$root/greeter/xp-native-oobe.py" --assets "$local/native-assets" --force
 else
     run "$root/native-shell/session.sh"
 fi

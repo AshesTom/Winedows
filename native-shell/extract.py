@@ -39,6 +39,16 @@ FILES = {
 }
 # What session/icon_theme.py makes the Windows XP icon theme from, where it looks for them;
 # a theme without some of them still works.
+# Windows Welcome at the first logon (greeter/xp-native-oobe.py): its intro video and music, the
+# images of its screens, and the pages and scripts its strings and styles are read from (no code
+# of it runs). Without them the session starts without it.
+OOBE_FILES = dict.fromkeys(('intro.wmv', 'title.wma', 'newmark1.jpg', 'newmark8.jpg', 'newtop1.jpg', 'newtop8.jpg',
+                            'newbtm1.jpg', 'newbtm8.jpg', 'mslogo.jpg', 'greenshd.gif', 'redshd.gif',
+                            'backup.jpg', 'backover.jpg', 'backdown.jpg', 'backoff.jpg',
+                            'nextup.jpg', 'nextover.jpg', 'nextdown.jpg', 'nextoff.jpg',
+                            'msobshel.htm', 'oobeutil.js', 'oobestyl.css',
+                            'welcome.htm', 'autoupdt.htm', 'ident2.htm', 'fini.htm'), 'oobe')
+
 ICON_FILES = {
     'mydocs.dll': 'system32', 'desk.cpl': 'cpl', 'msiexec.exe': 'filetypes', 'zipfldr.dll': 'filetypes',
     'iexplore.exe': 'ie', 'main.cpl': 'keyboard', 'user32.dll': 'resources', 'shimgvw.dll': 'shell', 'photowiz.dll': 'shell',
@@ -216,7 +226,7 @@ def extract(source, output):
         if name.endswith('.wm_') and stem in WMP_SKINS:
             copy_file(iso, name, sector, size, output / 'wmp/skins' / WMP_SKINS[stem])
     for name, sector, size in media:
-        for target in {**FILES, **ICON_FILES}:
+        for target in {**FILES, **ICON_FILES, **OOBE_FILES}:
             if name in (target, compressed(target)):
                 # A plain copy over a compressed one; the setup files' first otherwise.
                 if target not in wanted or name == target:
@@ -227,7 +237,7 @@ def extract(source, output):
     if not shutil.which('bsdtar'):
         raise SystemExit('bsdtar is needed for the compressed files: sudo pacman -S --needed libarchive')
     for target, (name, sector, size) in wanted.items():
-        folder = FILES.get(target) or ICON_FILES[target]
+        folder = FILES.get(target) or ICON_FILES.get(target) or OOBE_FILES[target]
         copy_file(iso, name, sector, size, output / folder / target)
         print(f'{folder}/{target}')
 
