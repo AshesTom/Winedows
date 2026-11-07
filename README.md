@@ -1,159 +1,50 @@
-<h1 align="center">Winedows</h1>
+<h1 align="center">Winedows: native shell</h1>
 <p align="center">
-  <img src="docs/images/screenshot-en.png" alt="Winedows: the English Windows XP shell with Linux and Windows applications on Debian 13" width="800" />
+  <img src="docs/images/native-desktop.png" alt="The native XP shell: the Start menu, My Pictures in Thumbnails view, Notepad and the Calculator" width="820" />
 </p>
 <p align="center">
-  <strong>Your Linux desktop, with the real Windows XP shell. About half a gigabyte of RAM.</strong>
+  <strong>The Windows XP desktop, rebuilt as Linux programs. No Wine, no Windows code.</strong>
 </p>
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-LGPL--2.1--or--later-blue?style=flat" alt="License: LGPL-2.1-or-later"></a>
-  <img src="https://img.shields.io/badge/Debian-13-A81D33?style=flat&logo=debian&logoColor=white" alt="Debian 13">
-  <img src="https://img.shields.io/badge/Wine-11.0-8B0000?style=flat" alt="Wine 11.0">
-  <img src="https://img.shields.io/badge/RAM-~0.5%20GB-2E7D32?style=flat" alt="RAM: about 0.5 GB">
+  <img src="https://img.shields.io/badge/C%2B%2B-Qt%206-41CD52?style=flat&logo=qt&logoColor=white" alt="C++ and Qt 6">
+  <img src="https://img.shields.io/badge/X11-native-555?style=flat&logo=xorg&logoColor=white" alt="Native X11">
+  <img src="https://img.shields.io/badge/Wine-not%20needed-8B0000?style=flat" alt="Wine not needed">
   <img src="https://img.shields.io/badge/status-experimental-orange?style=flat" alt="Status: experimental">
-</p>
-<p align="center">
-  <strong>English</strong> ·
-  <a href=".github/readme/README.ja.md">日本語</a>
 </p>
 
 > [!IMPORTANT]
-> **This is a personal, experimental project**, not a finished product for daily use.
-> It has only been tested on a **freshly installed Debian 13** set up with the installation script.
-> Installing it on a system already in use (with another desktop environment or display manager, for example) has not been tried.
-> A virtual machine or a spare machine is recommended.
+> **This is a personal, experimental project**, not a finished desktop for daily use. It has been tried on
+> CachyOS (Arch Linux) only, mostly in a window of another desktop. Try it in a window or a virtual machine first.
 
 ## What it is
 
-Winedows runs Windows XP's own `explorer.exe` on a patched Wine as the **desktop shell of Linux**.
-The taskbar, Start menu, desktop and folder windows are XP's real ones, and Linux applications get XP's frames and
-taskbar buttons. No Microsoft files are included: the few that are needed are extracted locally from your own ISO.
+Winedows' native shell is XP's `explorer.exe` **ported to Linux**: the desktop, the taskbar, the Start menu, the
+folder windows and the Control Panel are a Qt 6 program, and Notepad, the Calculator, the Command Prompt, the Picture
+and Fax Viewer and Windows Media Player 9 are Linux programs of their own beside it, as they were on XP.
 
-Winedows started as a fork of [mikuta0407/win4wine](https://github.com/mikuta0407/win4wine) and keeps its
-internal names (`win4wine-*` packages, `~/.config/win4wine`, …), so existing installs carry on unchanged.
+None of XP's code runs. Your own XP CD only gives the shell its **resources**, read at run time: the Luna visual
+style's art and metrics, the strings, menus and dialogs of `explorer.exe`, `shell32.dll` and the control panels, the
+icons, sounds, fonts and wallpapers. So every word and picture on screen is XP's own, in the language of your CD,
+and no Microsoft file is included in this repository.
 
-### One branch per Windows
+Linux applications live in it too: they get XP's window frames and taskbar buttons, their tray icons show up in XP's
+notification area, and they are listed under All Programs.
 
-| Branch | Shell |
-|---|---|
-| **`WinXP`** (this one) | Windows XP (Luna or Classic), the [ReactOS](https://reactos.org/) shell when you have no XP ISO, and XP Explorer |
-| [`Win7`](../../tree/Win7) | Windows 7 |
+> This branch (`nativeshell`) holds the native session alone. The original Winedows, which runs XP's real
+> `explorer.exe` on a patched Wine, lives on the [`WinXP`](../../tree/WinXP) branch.
 
-`master` only points to these two.
-
-## Lightweight
-
-XP recommended 128 MB of RAM, and its shell stays small on Wine. Measured on a full XP session right after logon
-(X11, 1280×800, Luna, the notification area with network, volume, Security Center and Messenger running), summing the
-proportional set size (PSS, shared pages split between the processes that map them) of every process of the session:
-
-| Part | Processes | RAM (PSS) |
-|---|---|---:|
-| XP's shell on Wine | `explorer.exe`, XP's tray and Start menu helpers, XP's services, `wineserver` | ≈ 300 MB |
-| Session | the X11 window manager, the tray bridge, the supervisor, the Linux application menu, the GTK theme watcher | ≈ 130 MB |
-| Linux desktop services | D-Bus, XDG portals, gvfs | ≈ 65 MB |
-| X server | | ≈ 30 MB |
-| **Total** | 45 processes | **≈ 520 MB** |
-
-For comparison, GNOME and KDE Plasma usually need around 1 GB or more right after logon.
-
-On disk: the Wine build is about 1.5 GB (with debug symbols), the files taken from the XP ISO about 160 MB,
-and the Wine prefix grows with the Windows programs you install. Building Wine needs about 40 GB once.
-
-## Install
-
-1. Get a Windows XP Professional SP3 (x86) ISO (English or Japanese) **yourself**.
-2. On a freshly installed Debian 13, run as the user who will log in:
-
-```sh
-git clone -b WinXP https://github.com/AshesTom/Winedows.git ~/winedows
-cd ~/winedows
-scripts/setup.sh --media /path/to/WindowsXPSP3.iso --greeter
-```
-
-3. Reboot. The XP Welcome screen logs you straight into the XP shell.
-
-Without an XP ISO, try the ReactOS shell instead (no ISO needed):
-
-```sh
-scripts/setup.sh --shell reactos --lang en   # or --lang ja
-```
-
-and choose the session "ReactOS Shell (Wine, X11)" at the login screen.
-
-Details: 🔗 [installation guide](.github/readme/INSTALL.en.md). Building Wine takes about 90 minutes on 4 cores.
-The theme (XP's classic one, for example) and the text size can be changed later
-([Changing the look and the text size](.github/readme/INSTALL.en.md#changing-the-look-and-the-text-size)).
-
-## What it does
-
-- **XP's shell**: Luna (or Classic) taskbar, Start menu, desktop, My Computer and folder windows.
-- **Linux applications**: Linux windows get XP's frames; the taskbar, Alt+Tab, minimize and maximize work as on XP.
-  Linux applications are listed under All Programs, in a Linux Applications folder.
-- **Notification area**: Linux tray icons (StatusNotifierItem and XEmbed) show up in XP's notification area, beside
-  XP's own network, battery and volume icons with their flyouts and XP's Volume Control, fed by NetworkManager and
-  PipeWire or PulseAudio. The wireless network list joins new networks through XP's network key dialog.
-- **XP's own programs and control panels**, from your ISO, in place of Wine's: Calculator, Notepad, Paint, WordPad,
-  Command Prompt, Task Manager, Registry Editor, the games, Windows Messenger, Internet Explorer 6, Windows Media
-  Player 9, the Search Companion with Rover, Display Properties (themes, styles, color schemes), User Accounts
-  (the picture also becomes the Linux user's), Network Connections and "Choose a wireless network", Add or Remove
-  Programs (Linux packages included), the Security Center and the Help and Support Center. XP's sounds play at
-  startup, logon and logoff.
-- **Keyboard layout**: the Linux system's at first; add input languages in Regional and Language Options and the
-  session follows at once, with Left Alt+Shift to switch as on XP.
-- **Japanese input**: fcitx5 + Mozc (Ctrl+Space or Zenkaku/Hankaku) in GTK, Qt and Wine applications.
-- **English or Japanese XP**: the language is detected from the ISO, and the fonts, locale and Welcome screen follow it.
-- **Windows applications**: a WoW64 Wine 11.0 runs 32-bit and 64-bit programs; `wine setup.exe` puts the installer's
-  shortcuts in XP's Start menu.
-- **XP Welcome screen**: an optional LightDM greeter with XP's Welcome and log-off screens.
-- **XP's keys and habits**: the Windows key, Ctrl+Esc, Win+R, Win+E, Quick Launch, Show Desktop, XP's DPI setting.
-- **Recovery**: if the XP shell keeps crashing, the session falls back to Wine's own explorer and an xterm.
-- **Wayland session (optional, more experimental)**: a patched labwc instead of the X11 window manager, with a scale
-  per monitor and fractional scales ([docs/wayland.md](docs/wayland.md), Japanese). Try the X11 session first.
-- **ReactOS shell (optional)**: ReactOS 0.4.16's explorer instead of XP's, in English or Japanese, beside the XP shell.
-- **XP Explorer (optional)**: XP's shell in a window of your current desktop (KDE or any other), without replacing it
-  ([xp-explorer/](xp-explorer/README.md)).
+## Screenshots
 
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/screenshot-classic-en.png" alt="The XP shell with the classic theme and Linux applications" width="400" /><br />
-      XP's classic theme (<code>--theme classic</code>)
+      <img src="docs/images/native-silver.png" alt="Display Properties after switching to the Silver colour scheme: every window follows at once" width="400" /><br />
+      Display Properties: switching to <strong>Silver</strong> repaints every window at once
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/screenshot-reactos-en.png" alt="The ReactOS shell and Linux applications" width="400" /><br />
-      The ReactOS shell (<code>--shell reactos</code>; no XP ISO needed)
-    </td>
-  </tr>
-</table>
-
-## Native mode (in development)
-
-Winedows is being ported to Linux itself: `native-shell/` is the XP shell rewritten as a **native Linux program**, and
-in time it will **replace Wine entirely**. It runs no XP code: your own XP files only give it their resources (the
-visual style's art, strings, icons, dialogs, fonts, wallpapers), read at run time.
-
-It already has the desktop and its icons, the taskbar, the Start menu, XP's window frames, Display Properties with live
-theme switching (also for Qt and GTK programs) and your own imported themes, folder windows with file operations, the
-Search Companion with its animated character and web searches on Bing, and the Control Panel. Much of XP
-is still missing, and so far it has only been tried in a window on CachyOS, so **it does not replace the Wine session
-yet**. To try it in a window of your current desktop, without Wine or a prefix:
-
-```sh
-./xp.sh native /path/to/WindowsXPSP3.iso   # later runs: ./xp.sh native --
-```
-
-What works and what is left: [docs/native-shell.md](docs/native-shell.md).
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/screenshot-en.png" alt="Normal mode: XP's own explorer.exe on Wine, with Linux and Windows applications" width="400" /><br />
-      <strong>Normal mode</strong>: XP's own <code>explorer.exe</code> on Wine
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/native-session-en.png" alt="Native mode: the Start menu, a folder window and the Control Panel, without Wine" width="400" /><br />
-      <strong>Native mode</strong>: a Linux program, without Wine
+      <img src="docs/images/native-classic.png" alt="The same desktop with the Windows Classic style" width="400" /><br />
+      The same desktop in <strong>Windows Classic</strong>
     </td>
   </tr>
 </table>
@@ -161,66 +52,162 @@ What works and what is left: [docs/native-shell.md](docs/native-shell.md).
 <table>
   <tr>
     <td align="center" width="33%">
-      <img src="docs/images/native-explorer-en.png" alt="Native mode's file explorer: My Documents with the Common Tasks pane" width="270" /><br />
-      File explorer
+      <img src="docs/images/native-start-menu.png" alt="The Start menu" width="250" /><br />
+      Start menu
     </td>
     <td align="center" width="33%">
-      <img src="docs/images/native-control-panel-en.png" alt="Native mode's Control Panel in category view" width="270" /><br />
+      <img src="docs/images/native-control-panel.png" alt="The Control Panel's category view" width="270" /><br />
       Control Panel
     </td>
     <td align="center" width="33%">
-      <img src="docs/images/native-start-menu-en.png" alt="Native mode's Start menu with All Programs open" width="270" /><br />
-      Start menu
+      <img src="docs/images/native-display-properties.png" alt="Display Properties, Appearance page" width="250" /><br />
+      Display Properties
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/images/native-media-player.png" alt="Windows Media Player 9 playing, in its full mode skin" width="270" /><br />
+      Windows Media Player 9, drawn from its own compiled skins
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/native-command-prompt.png" alt="The Command Prompt running bash" width="270" /><br />
+      Command Prompt, running bash in XP's raster font
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/native-explorer-en.png" alt="My Documents with the Common Tasks pane" width="270" /><br />
+      Folder windows
     </td>
   </tr>
 </table>
+
+## The installer
+
+`install.sh` installs the session the way XP's own setup looked, in its three phases. Their words, pictures and
+layout are read from `usetup.exe`, `winntbbu.dll` and `syssetup.dll` on your CD; the billboard's geometry was worked
+out from `winntbbu.dll` itself ([docs/setup.md](docs/setup.md) says where each value comes from).
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/setup-text-mode.png" alt="Text-mode setup: Welcome to Setup" width="400" /><br />
+      <strong>1. Text mode</strong>, in your terminal: Welcome to Setup, the licence (F8)…
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/setup-copying.png" alt="Text-mode setup copying files" width="400" /><br />
+      …and the copy gauge, while XP's files are taken from the CD and the programs built
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/setup-billboard.png" alt="The graphical setup's billboard" width="400" /><br />
+      <strong>2. The billboard</strong>, full screen, while the session is installed
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/setup-welcome.png" alt="Windows Welcome: Help protect your PC" width="400" /><br />
+      <strong>3. Windows Welcome</strong> at the first logon
+    </td>
+  </tr>
+</table>
+
+## Try it
+
+You need a **Windows XP Professional SP3 (x86) CD image**, English or Japanese, that you got yourself.
+
+Install what it is built with (Arch Linux and its derivatives; Debian's package names are in `install.sh`):
+
+```sh
+sudo pacman -S --needed cmake qt6-base qt6-multimedia qt6-declarative libarchive python-xlib python-gobject python-cairo
+```
+
+**In a window of your current desktop**, without touching anything on your system:
+
+```sh
+git clone -b nativeshell https://github.com/AshesTom/Winedows.git
+cd Winedows
+./xp.sh /path/to/WindowsXP-SP3.iso       # later runs: ./xp.sh --
+```
+
+The first run takes the files the shell needs from the CD into `.local/native-assets` and builds the programs.
+`./xp.sh -- 1600x900` picks another size; `./xp.sh oobe` shows Windows Welcome alone.
+
+**The installer, as a demo**: every screen of the three phases, with nothing built, copied or registered.
+
+```sh
+./xp.sh setup-demo /path/to/WindowsXP-SP3.iso   # later runs: ./xp.sh setup-demo
+```
+
+**For real**:
+
+```sh
+./install.sh --media /path/to/WindowsXP-SP3.iso --system
+```
+
+It installs the session in `~/.local/opt/winedows`. `--system` adds **Windows XP (native)** to your display
+manager's sessions, and `--greeter` also makes XP's Welcome screen LightDM's login screen (both ask for `sudo`).
+
+## What's in it
+
+- **Desktop**: Bliss or your wallpaper, the desktop's icons and their shortcut menus, Arrange Icons, the Recycle Bin.
+- **Taskbar**: Luna or Classic, buttons sized and grouped as XP's taskband does it, the notification area with Linux
+  tray icons and XP's volume and network icons, the clock, Taskbar and Start Menu Properties.
+- **Start menu**: XP's two columns, your picture and name, recent programs, All Programs and My Recent Documents,
+  Log Off and Turn Off Computer with XP's dialogs.
+- **Folder windows**: the Common Tasks pane, the Folders tree, Thumbnails, Tiles, Icons, List, Details and
+  Filmstrip; copy, move and delete with XP's progress windows, the Recycle Bin, Properties, Send To, and the Search
+  Companion with its character.
+- **Control Panel**: category and classic views. Display Properties has themes, visual styles, colour schemes and
+  imported `.msstyles`, applied live to the shell and to Qt and GTK programs. Also System, Date and Time, User
+  Accounts, Sounds, Mouse, Keyboard, Folder Options, Fonts, Network Connections and more.
+- **XP's programs**: Notepad, the Calculator (Standard and Scientific, 32 digits), the Command Prompt, the Picture
+  and Fax Viewer, and Windows Media Player 9 with its skins.
+- **Window frames** for Linux applications, drawn from the visual style: rounded corners, the three buttons, the
+  system menu, moving and sizing from every edge.
+- **Session**: XP's sounds, the Windows key shortcuts, Windows Welcome at the first logon, Switch User and the
+  Welcome screen, Log Off and Turn Off.
+
+The full list, and what is not ported yet: [docs/native-shell.md](docs/native-shell.md).
 
 ## How it works
 
 ```text
-LightDM ─ XP Welcome greeter (greeter/)
-   └─ XP Shell session (session/supervisor.py)
-        ├─ Wine 11.0 + patches (wine/patches/)
-        │    └─ XP's explorer.exe, shell32.dll, … (extracted from your ISO; ReactOS's in its session)
-        ├─ bridge-wm: an X11 window manager + Win32 proxy windows (bridge-wm/)
-        │    (Wayland session: a patched labwc instead, wayland/)
-        └─ fcitx5 + Mozc, tray bridge (bridge-wm/tray.py)
+display manager ─ "Windows XP (native)" (native-shell/session.sh)
+   ├─ Windows Welcome, once (greeter/xp-native-oobe.py)
+   ├─ bridge-wm/wm.py        X11 window manager: XP's frames for every window
+   ├─ bridge-wm/tray.py      Linux tray icons → XP's notification area
+   ├─ explorer               desktop, taskbar, Start menu, folders, Control Panel   (C++ / Qt 6)
+   │    └─ notepad, calc, cmd, shimgvw, wmplayer     XP's programs, each its own binary
+   └─ qt-style/              XP's look for the other Qt and GTK programs
+
+your XP CD ─ native-shell/extract.py ─▶ .local/native-assets   (resources only, read at run time)
 ```
 
-The design documents are in Japanese; [docs/README.md](docs/README.md) lists them.
+| Folder | What is there |
+|---|---|
+| [`native-shell/`](native-shell) | The shell (`src/`), XP's programs (`apps/`), the session script and `extract.py` |
+| [`qt-style/`](qt-style) | The visual style reader (`msstyles`), and the Qt style and GTK module that draw with it |
+| [`bridge-wm/`](bridge-wm) | The window manager and the tray bridge |
+| [`greeter/`](greeter) | The Welcome screen, Windows Welcome (the OOBE) and their resource reader |
+| [`setup/`](setup) | The installer's three phases |
+
+More: [docs/native-shell.md](docs/native-shell.md) (the shell, part by part),
+[docs/reverse-status.md](docs/reverse-status.md) (what was studied in XP's files, and how),
+[docs/setup.md](docs/setup.md) (the installer).
 
 ## Caution
 
 > [!WARNING]
-> - **Obtain the Windows XP ISO yourself.** Neither this repository nor its scripts download any Microsoft files.
->   Follow Microsoft's license terms for the ISO and the files extracted from it.
-> - **Use at your own risk.** The authors are not responsible for data loss or any other problems.
-> - This is an unofficial project, not affiliated with Microsoft or the Wine project.
-> - Only the English and the Japanese XP SP3 (x86) have been tested. Other languages are set up like English XP and
->   might work, but have not been tested (`setup.sh` warns and goes on).
-
-## Ground rules
-
-- Binaries from Windows are never modified; differences are handled in Wine and around it.
-- Microsoft binaries are never disassembled. Behavior is studied through public APIs and our own probes on a real XP.
-- Microsoft files, extracted files and prefixes live only in `localres/` and `.local/`, which Git ignores.
-
-## Similar projects
-
-- [loss32](https://loss32.org/): a planned Linux distribution whose desktop is made only of Win32 software on Wine,
-  with parts of ReactOS. While Winedows runs XP's own shell on Debian, loss32 is built from free software only.
+> - **Get the Windows XP CD yourself.** Neither this repository nor its scripts download any Microsoft file.
+>   Follow Microsoft's licence terms for the CD and the files taken from it.
+> - Files taken from the CD stay in `.local/`, which Git ignores.
+> - **Use at your own risk.** This is an unofficial project, not affiliated with Microsoft.
 
 ## Credits
 
-- [mikuta0407](https://github.com/mikuta0407) wrote [win4wine](https://github.com/mikuta0407/win4wine), the base of
-  this project: the patched Wine, bridge-wm, the session, the greeters and the XP, ReactOS and Windows 7 shells.
-- [AshesTom](https://github.com/AshesTom): XP Explorer and its additions, XP's Display Properties, sounds, keyboard
-  layouts, XP's own notification area icons, the Start menu's left column, Internet Explorer 6 and Windows Media
-  Player 9, Arch Linux support, `xp.sh` and more.
+- [mikuta0407](https://github.com/mikuta0407) wrote [win4wine](https://github.com/mikuta0407/win4wine), which
+  Winedows started from: bridge-wm, the session and the greeters come from it.
+- [AshesTom](https://github.com/AshesTom): Winedows and its native shell.
 
 ## License
 
-[LGPL-2.1-or-later](LICENSE), the same as Wine. It covers only the code and patches in this repository,
-except `wayland/patches/labwc/` (GPL-2.0-only, as labwc) and `wayland/patches/wlroots/` (MIT, as wlroots).
-The Windows XP files, and the XP screens in the screenshots, are copyrighted by Microsoft.
-The ReactOS files that the ReactOS shell uses are under ReactOS's licenses (GPL-2.0-or-later; most of its DLLs LGPL-2.1-or-later).
+[LGPL-2.1-or-later](LICENSE). It covers only the code in this repository. The Windows XP files, and the XP screens
+in the screenshots, are copyrighted by Microsoft.
