@@ -8,8 +8,10 @@ class QString;
 
 namespace xpapp {
 
-// Before the QApplication exists
-void prepare();
+// Before the QApplication exists. WEB_PAGES: a program that shows web pages (iexplore, helpctr) keeps
+// the session's fontconfig rules, which smooth each face as its gasp table says: Chromium reads its
+// fonts' smoothing from fontconfig in this process, and XP's own rules would smooth all of it.
+void prepare(bool webPages = false);
 // After it: NAME is the program's WM_CLASS, as XP's taskbar tells programs apart by their file.
 // False, after saying so, when luna.msstyles was never extracted.
 bool start(QApplication &app, const char *name);

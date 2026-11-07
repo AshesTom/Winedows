@@ -225,13 +225,14 @@ QString escaped(const QString &text)
     return text.toHtmlEscaped();
 }
 
-// The pages' style: Verdana Bold headings and Tahoma 8 in white on the home page's blue, as on XP
+// The pages' style: Verdana Bold headings and Tahoma 8 in white on the home page's blue, as on XP (its
+// headings are 18 pixels: their widths are Verdana Bold's hdmx advances at 18 ppem)
 QString page(const QString &title, const QString &body)
 {
     return QStringLiteral(
                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>%1</title><style>"
                "body { margin: 5px; background: %2; color: white; font: 8pt Tahoma; cursor: default; }"
-               "h2 { font: bold 15pt Verdana; color: %3; margin: 0; white-space: nowrap; }"
+               "h2 { font: bold 18px Verdana; color: %3; margin: 0; white-space: nowrap; }"
                "a { color: white; text-decoration: none; } a:hover { text-decoration: underline; }"
                "ul { margin: 0; padding-left: 15px; } li { color: %4; margin: 0 0 4px 0; } li a { font-weight: bold; }"
                ".topics td { padding-bottom: 33px; vertical-align: middle; }"

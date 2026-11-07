@@ -20,11 +20,11 @@ QByteArray linuxFonts;
 bool swappedFonts = false;
 }
 
-void prepare()
+void prepare(bool webPages)
 {
     // XP's programs smooth each face as XP would (fontpolicy.h), which fontconfig must then let them
     // do; what they start goes back to the session's rules for Linux programs (start()).
-    if (const QByteArray xpFonts = qgetenv("WIN4WINE_XP_FONTCONFIG"); !xpFonts.isEmpty()) {
+    if (const QByteArray xpFonts = qgetenv("WIN4WINE_XP_FONTCONFIG"); !xpFonts.isEmpty() && !webPages) {
         linuxFonts = qgetenv("FONTCONFIG_FILE");
         qputenv("FONTCONFIG_FILE", xpFonts);
         swappedFonts = true;

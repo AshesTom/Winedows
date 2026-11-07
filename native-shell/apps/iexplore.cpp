@@ -11,7 +11,7 @@
 
 int main(int argc, char **argv)
 {
-    xpapp::prepare();
+    xpapp::prepare(true);
     InternetExplorer::registerSchemes();
     QApplication app(argc, argv);
     QCommandLineParser parser;
