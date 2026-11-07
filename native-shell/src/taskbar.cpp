@@ -732,10 +732,8 @@ void Taskbar::themeChanged()
         const QString spec = renderer ? renderer->property(part, QStringLiteral("font")).value_or(QLatin1String(fallback)) : QLatin1String(fallback);
         return theme()->font(spec);
     };
+    // Smoothed as the session's smoothing has it: under Standard, Franklin Gothic's gasp greys its 19 px
     m_startFont = renderer ? font(START_BUTTON, "Franklin Gothic Medium, 14, italic") : theme()->font(QStringLiteral("Tahoma, 8, bold"));
-    if (renderer) {
-        m_startFont.setStyleStrategy(QFont::StyleStrategy(QFont::PreferAntialias | QFont::NoSubpixelAntialias));
-    }
     m_taskFont = font(TASK_TOOLBAR, "Tahoma, 8");
     // The pressed (active) button's text is not bold on XP either.
     m_activeTaskFont = m_taskFont;

@@ -139,7 +139,7 @@ std::optional<QFont> logFont(const QByteArray &data)
     if (weight > 0)
         font.setWeight(QFont::Weight(qBound(1, int(weight), 1000)));
     font.setItalic(italic);
-    unsmoothedFont(font, font.pixelSize());
+    xpFontSmoothing(font, font.pixelSize());
     return font;
 }
 

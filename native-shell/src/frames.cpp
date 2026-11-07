@@ -204,7 +204,7 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
         const int side = qMin(inside.width(), inside.height());
         QFont glyphs(QStringLiteral("Marlett"));
         glyphs.setPixelSize(side);
-        w4w::unsmoothedFont(glyphs, side);
+        w4w::xpFontSmoothing(glyphs, side);
         painter.setFont(glyphs);
         const QRect cell(inside.x() + (inside.width() - side) / 2, inside.y() + (inside.height() - side) / 2, side, side);
         const QString glyph(marlett(button, look.maximized));

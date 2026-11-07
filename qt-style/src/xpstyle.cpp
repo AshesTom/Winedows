@@ -286,7 +286,7 @@ void XpStyle::polish(QApplication *application)
     // XP's fonts (Display Properties > Appearance), unless the user keeps Qt's.
     if (m_look.haveFonts && qEnvironmentVariable("WIN4WINE_QT_FONTS") != QLatin1String("0")) {
         for (QFont *font : {&m_look.messageFont, &m_look.menuFont, &m_look.statusFont})
-            unsmoothedFont(*font, font->pixelSize());
+            xpFontSmoothing(*font, font->pixelSize());
         application->setFont(m_look.messageFont);
         application->setFont(m_look.menuFont, "QMenu");
         application->setFont(m_look.menuFont, "QMenuBar");

@@ -96,10 +96,23 @@ assets=$root/.local/native-assets
 # XP's icons as an icon theme, made from the user's XP files the first time (native-shell/tools/icon_theme.py).
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import icon_theme; icon_theme.ensure(sys.argv[2], sys.argv[3])' \
     "$root/native-shell/tools" "$assets" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/win4wine-xp-icons" || true
-# XP's fonts for Linux programs too, Tahoma before the rest, as the supervisor's font_config does.
+# XP's font smoothing (Display Properties > Appearance > Effects), native-look.conf's font_smoothing:
+# none, standard (XP's default, and here) or cleartype. The shell and the XP style read it from the
+# environment; Linux programs from the fontconfig rules that tools/fontsmoothing.py makes from XP's
+# fonts' gasp tables.
+smoothing=$(sed -n 's/^[[:space:]]*font_smoothing[[:space:]]*=[[:space:]]*//p' \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/win4wine/native-look.conf" 2>/dev/null | tail -1 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)
+[[ $smoothing == none || $smoothing == cleartype ]] || smoothing=standard
+export WIN4WINE_FONT_SMOOTHING=$smoothing
+rules=$(python3 "$root/native-shell/tools/fontsmoothing.py" "$smoothing" "$assets/fonts" || true)
+[[ $smoothing == cleartype ]] || export FREETYPE_PROPERTIES=truetype:interpreter-version=35
+xp_rules=$(python3 "$root/native-shell/tools/fontsmoothing.py" --xp "$smoothing" || true)
+# XP's fonts for Linux programs too, Tahoma before the rest; XP's own programs read xp-fonts.conf
 fonts=$state/fontconfig
 mkdir -p "$fonts"
-cat > "$fonts/fonts.conf" <<EOF
+for file in fonts.conf xp-fonts.conf; do
+    [[ $file == fonts.conf ]] && these=$rules || these=$xp_rules
+    cat > "$fonts/$file" <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
@@ -108,9 +121,11 @@ cat > "$fonts/fonts.conf" <<EOF
   <alias binding="strong"><family>sans-serif</family><prefer><family>Tahoma</family></prefer></alias>
   <alias binding="strong"><family>Sans</family><prefer><family>Tahoma</family></prefer></alias>
   <alias binding="strong"><family>system-ui</family><prefer><family>Tahoma</family></prefer></alias>
+$these
 </fontconfig>
 EOF
-export FONTCONFIG_FILE=$fonts/fonts.conf
+done
+export FONTCONFIG_FILE=$fonts/fonts.conf WIN4WINE_XP_FONTCONFIG=$fonts/xp-fonts.conf
 # Turn Off Computer really turns it off, unless this session runs in a window (xp.sh native).
 export WIN4WINE_POWER=${WIN4WINE_POWER:-1}
 # Qt applications take XP's style when it is built (qt-style/build.sh).
@@ -119,8 +134,6 @@ if [[ -e $styles/styles/libwin4wine-xp.so ]]; then
     export QT_PLUGIN_PATH=$styles${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
     export QML_IMPORT_PATH=$styles/qml${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}
     export QT_STYLE_OVERRIDE=Win4WineXP QT_QPA_PLATFORMTHEME=gtk3
-    # Tahoma hinted as Windows hints it, as the shell does
-    export FREETYPE_PROPERTIES=truetype:interpreter-version=35
 fi
 # What asks for the administrator's rights (Date and Time, for one): a desktop's own agent, whichever is installed.
 if [[ ${1:-} != --inside ]]; then

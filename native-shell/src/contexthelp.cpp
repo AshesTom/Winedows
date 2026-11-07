@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "contexthelp.h"
 
+#include "fontpolicy.h"
 #include "xpfiles.h"
 #include "xpprogram.h"
 
@@ -587,15 +588,14 @@ protected:
     void keyPressEvent(QKeyEvent *) override { close(); }
 
 private:
-    // A TrueType face at the help file's 8 points: GDI's 11-pixel em, without smoothing, its
-    // baseline on the raster font's
+    // A TrueType face at the help file's 8 points: GDI's 11-pixel em, smoothed as the session has
+    // it, its baseline on the raster font's
     static QFont trueType(const Run &run)
     {
         QFont font(run.face);
         font.setPixelSize(11);
         font.setBold(run.bold);
-        font.setStyleStrategy(QFont::NoAntialias);
-        font.setHintingPreference(QFont::PreferFullHinting);
+        w4w::xpFontSmoothing(font, 11);
         return font;
     }
 

@@ -1097,7 +1097,7 @@ void Notepad::chooseFont()
             description->setText(QFontDatabase::isSmoothlyScalable(name) ? xpfiles::string(*m_dialogs, IDS_TRUETYPE) : QString());
         if (sample) {
             QFont font = chosenFont();
-            w4w::unsmoothedFont(font, font.pixelSize());
+            w4w::xpFontSmoothing(font, font.pixelSize());
             sample->setFont(font);
             sample->setText(sample->property("words").toString());
         }
@@ -1162,7 +1162,7 @@ void Notepad::applyFont()
     font.setPixelSize(qMax(1, qRound(m_points * ShellTheme::instance()->dpi() / 72.0)));
     font.setBold(m_bold);
     font.setItalic(m_italic);
-    w4w::unsmoothedFont(font, font.pixelSize());
+    w4w::xpFontSmoothing(font, font.pixelSize());
     m_edit->setFont(font);
     // The edit control's tab stops: every 32 dialog units, eight average characters
     m_edit->setTabStopDistance(8 * QFontMetricsF(font).averageCharWidth());

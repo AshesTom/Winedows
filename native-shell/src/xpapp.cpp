@@ -14,8 +14,21 @@
 
 namespace xpapp {
 
+namespace {
+// The session's fontconfig rules for Linux programs, while this program reads XP's own
+QByteArray linuxFonts;
+bool swappedFonts = false;
+}
+
 void prepare()
 {
+    // XP's programs smooth each face as XP would (fontpolicy.h), which fontconfig must then let them
+    // do; what they start goes back to the session's rules for Linux programs (start()).
+    if (const QByteArray xpFonts = qgetenv("WIN4WINE_XP_FONTCONFIG"); !xpFonts.isEmpty()) {
+        linuxFonts = qgetenv("FONTCONFIG_FILE");
+        qputenv("FONTCONFIG_FILE", xpFonts);
+        swappedFonts = true;
+    }
     // Only X11 windows can be EWMH's desktop and dock here. Tahoma is hinted
     // as Windows hints it, with FreeType's classic TrueType interpreter.
     qputenv("QT_QPA_PLATFORM", "xcb");
@@ -35,6 +48,9 @@ bool start(QApplication &app, const char *name)
     app.setApplicationName(QLatin1String(name));
 
     xpfiles::loadFonts();
+    // fontconfig has read its rules by now
+    if (swappedFonts)
+        qputenv("FONTCONFIG_FILE", linuxFonts);
     if (ShellTheme::lunaPath().isEmpty()) {
         fprintf(stderr, "%s: luna.msstyles not found. Run native-shell/extract.py on the XP ISO first.\n", name);
         return false;
