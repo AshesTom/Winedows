@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "captionanimation.h"
+#include "fontpolicy.h"
 
 #include "theme.h"
 
@@ -117,8 +118,8 @@ void run(const QRect &from, const QRect &to, const QString &title, const QImage 
         }
         x += 2;
         painter.setFont(style.captionFont);
-        painter.setPen(theme->system(QStringLiteral("captiontext"), style.activeText));
-        painter.drawText(QRect(x, 0, widest - x, height), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
+        w4w::drawGdiText(&painter, QRect(x, 0, widest - x, height), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title,
+                         theme->system(QStringLiteral("captiontext"), style.activeText));
     }
     new Strip(start, end, picture);
 }

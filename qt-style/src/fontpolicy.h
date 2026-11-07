@@ -2,6 +2,11 @@
 #pragma once
 
 #include <QFont>
+#include <QImage>
+#include <QPainter>
+
+#include <array>
+#include <cmath>
 #include <QHash>
 #include <QRawFont>
 #include <QStringList>
@@ -79,6 +84,45 @@ inline void xpFontSmoothing(QFont &font, int pixels, bool antialiased = false)
         font.setStyleStrategy(QFont::NoAntialias);
         break;
     }
+}
+
+// Text in PAINTER's font as GDI draws it under Standard smoothing: GDI blends its grey coverage with
+// a gamma of 2.2 and a little more weight, and drops the faintest edges (measured on XP SP3's title
+// bars against Qt's coverage of the same hinted glyphs: 0 under 40/255, then 255 * min(1, 1.15 a)^(1/2.2)).
+// Whole-pixel and ClearType text is drawn as it is.
+inline void drawGdiText(QPainter *painter, const QRect &rect, int flags, const QString &text, const QColor &colour)
+{
+    const QFont font = painter->font();
+    if (fontSmoothing() != Smoothing::Standard || (font.styleStrategy() & QFont::NoAntialias) || rect.isEmpty()) {
+        painter->setPen(colour);
+        painter->drawText(rect, flags, text);
+        return;
+    }
+    static const std::array<uchar, 256> contrast = [] {
+        std::array<uchar, 256> table{};
+        for (int a = 0; a < 256; ++a)
+            table[a] = a < 40 ? 0 : uchar(qRound(255 * std::pow(qMin(1.0, 1.15 * a / 255), 1 / 2.2)));
+        return table;
+    }();
+    const qreal ratio = painter->device() ? painter->device()->devicePixelRatioF() : 1.0;
+    QImage mask((QSizeF(rect.size()) * ratio).toSize(), QImage::Format_ARGB32_Premultiplied);
+    mask.setDevicePixelRatio(ratio);
+    mask.fill(Qt::transparent);
+    {
+        QPainter coverage(&mask);
+        coverage.setFont(font);
+        coverage.setPen(Qt::white);
+        coverage.drawText(QRect(QPoint(0, 0), rect.size()), flags, text);
+    }
+    const QRgb ink = colour.rgb();
+    for (int y = 0; y < mask.height(); ++y) {
+        auto *line = reinterpret_cast<QRgb *>(mask.scanLine(y));
+        for (int x = 0; x < mask.width(); ++x) {
+            const int a = contrast[qAlpha(line[x])];
+            line[x] = qRgba(qRed(ink) * a / 255, qGreen(ink) * a / 255, qBlue(ink) * a / 255, a);
+        }
+    }
+    painter->drawImage(rect.topLeft(), mask);
 }
 
 inline QFont themeFont(const QString &spec, int dpi)

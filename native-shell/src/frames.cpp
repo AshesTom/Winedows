@@ -130,11 +130,9 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
             painter.drawImage(rect.x() + ICON_X, rect.y() + ICON_Y, look.icon);
         if (look.active) {
             const QColor shadow = renderer->colour(windowPart("caption", 1), QStringLiteral("textshadowcolor")).value_or(QColor(10, 24, 131));
-            painter.setPen(shadow);
-            painter.drawText(titleRect.translated(1, 1), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
+            w4w::drawGdiText(&painter, titleRect.translated(1, 1), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title, shadow);
         }
-        painter.setPen(look.active ? style.activeText : style.inactiveText);
-        painter.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title);
+        w4w::drawGdiText(&painter, titleRect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, title, look.active ? style.activeText : style.inactiveText);
         for (FrameButton button : buttons) {
             if (!shown(button, look))
                 continue;
