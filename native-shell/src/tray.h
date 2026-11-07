@@ -37,6 +37,11 @@ public:
     using ClickHandler = std::function<bool(quint32 id, const char *op, QPoint at)>;
     void setOwnIcons(QObject *owner, const QList<TrayIcon> &icons, ClickHandler click);
 
+    // An icon's menu where XP's TrackPopupMenu(TPM_BOTTOMALIGN) puts it: its bottom-left corner at
+    // the pointer, over the taskbar too, on the pointer's left where the screen ends (XP SP3 in VMware:
+    // Safely Remove Hardware's two menus)
+    static void popupMenu(QMenu *menu, QPoint at);
+
     enum { MOD_CONTROL = 2, MOD_SHIFT = 4 };   // RegisterHotKey's, for hotkey()
 
 Q_SIGNALS:

@@ -9,7 +9,9 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QFile>
+#include <QGuiApplication>
 #include <QMenu>
+#include <QScreen>
 #include <QTimer>
 #include <QtEndian>
 
@@ -221,5 +223,25 @@ void Tray::showMenu(quint32 id, const QStringList &lines)
             command("event " + QByteArray::number(id) + ' ' + QByteArray::number(serial) + ' ' + item);
         });
     }
-    menu->popup(m_menuPoint.isNull() ? QCursor::pos() : m_menuPoint - QPoint(0, menu->sizeHint().height()));
+    if (m_menuPoint.isNull())
+        menu->popup(QCursor::pos());
+    else
+        popupMenu(menu, m_menuPoint);
+}
+
+void Tray::popupMenu(QMenu *menu, QPoint at)
+{
+    const QSize size = menu->sizeHint();
+    QPoint place = at - QPoint(0, size.height());
+    if (const QScreen *screen = QGuiApplication::screenAt(at)) {
+        const QRect room = screen->geometry();
+        if (place.x() + size.width() > room.right() + 1)
+            place.setX(at.x() - size.width());
+        place.setX(qMax(room.left(), place.x()));
+        if (place.y() < room.top())
+            place.setY(at.y());
+    }
+    menu->popup(place);
+    // QMenu keeps clear of the taskbar's strut; XP's menu goes over it.
+    menu->move(place);
 }

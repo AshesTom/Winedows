@@ -51,6 +51,7 @@ add_library(xpshell STATIC
     src/notifications.cpp src/notifications.h
     src/programs.cpp src/programs.h
     src/securitycenter.cpp src/securitycenter.h src/securitywindow.cpp
+    src/hotplug.cpp src/hotplug.h
     src/systemicons.cpp src/systemicons.h
     src/taskbar.cpp src/taskbar.h
     src/taskbarproperties.cpp src/taskbarproperties.h

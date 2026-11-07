@@ -29,11 +29,12 @@ const int CORNER_ROWS = 4;
 const int STEM = 20, STEM_SHOWN = 16, STEM_INSET = 15, ANCHOR_X = 7, ANCHOR_Y = 6;
 // The icon and the text 12 in from the border, the title row 7 down, the title 8 after its
 // icon, the text 5 under the title row and 9 over the border; the close button 4 down and
-// 5 in from the right, 8 after the title; the text keeps 12 from the right.
+// 5 in from the right, 8 after the title; the text keeps 16 from the right (XP SP3 in VMware: the
+// low-resolution and tour balloons, whose text sets their width).
 const int EDGE = 12, TOP = 7, ICON = 16, TITLE_GAP = 8, TEXT_GAP = 5, BOTTOM = 9;
-const int CLOSE = 18, CLOSE_TOP = 4, CLOSE_RIGHT = 5, CLOSE_GAP = 8, TEXT_RIGHT = 12;
-// The widest the text grows before it wraps
-const int TEXT_WIDTH = 250;
+const int CLOSE = 18, CLOSE_TOP = 4, CLOSE_RIGHT = 5, CLOSE_GAP = 8, TEXT_RIGHT = 16;
+// The widest the text grows before it wraps: explorer.exe's TTM_SETMAXTIPWIDTH for the tray's balloons (0x1017892)
+const int TEXT_WIDTH = 300;
 // user32.dll's small icons: OIC_INFORMATION, OIC_WARNING, OIC_ERROR
 const int ICON_INFO = 104, ICON_WARNING = 101, ICON_ERROR = 103;
 

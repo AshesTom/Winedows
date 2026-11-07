@@ -11,6 +11,7 @@
 #include <QMessageBox>
 #include "filebrowser.h"
 #include "frames.h"
+#include "hotplug.h"
 #include "notifications.h"
 #include "programs.h"
 #include "securitycenter.h"
@@ -156,6 +157,7 @@ int main(int argc, char **argv)
     Taskbar taskbar(&windows, &tray);
     NotificationServer notifications(&tray);
     securitycenter::Alerts securityAlerts(&tray);
+    hotplug::SafeRemoval safeRemoval(&tray);
     std::unique_ptr<FrameManager> frames;
     if (parser.isSet(QStringLiteral("frames")) && !ipc.isEmpty())
         frames = std::make_unique<FrameManager>(ipc);

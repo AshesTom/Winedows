@@ -265,7 +265,7 @@ void SystemIcons::showSoundMenu(QPoint at)
     QAction *open = menu->addAction(tr("&Open Volume Control"), this, [] { openVolumeControl(); });
     open->setFont(bold);
     menu->addAction(tr("&Adjust Audio Properties"), this, [] { controlpanel::open(QStringLiteral("sound")); });
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    Tray::popupMenu(menu, at);
 }
 
 // What is in reach, read ahead: a menu opens at once, whatever NetworkManager is doing.
@@ -296,7 +296,7 @@ void SystemIcons::showNetworks(QPoint at)
     if (!seen.isEmpty())
         menu->addSeparator();
     menu->addAction(tr("Open Network &Connections"), this, [] { controlpanel::open(QStringLiteral("network")); });
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    Tray::popupMenu(menu, at);
     refreshNetworks();
 }
 
@@ -307,7 +307,7 @@ void SystemIcons::showNetworkMenu(QPoint at)
     menu->addAction(tr("&View Available Wireless Networks"), this, [this, at] { showNetworks(at); });
     menu->addSeparator();
     menu->addAction(tr("Open Network &Connections"), this, [] { controlpanel::open(QStringLiteral("network")); });
-    menu->popup(at - QPoint(0, menu->sizeHint().height()));
+    Tray::popupMenu(menu, at);
 }
 
 void SystemIcons::connectTo(const QString &ssid, bool secured)
