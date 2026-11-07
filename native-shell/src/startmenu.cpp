@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #include "startmenu.h"
+#include "xpshortcuts.h"
 
 #include "applets.h"
 #include "balloon.h"
@@ -12,6 +13,8 @@
 #include "shellmenus.h"
 #include "xpdialog.h"
 #include <functional>
+#include <memory>
+
 #include <QTimer>
 #include <QSettings>
 #include <QPushButton>
@@ -107,7 +110,7 @@ const int RECENT_PROGRAMS = 6, LEFT_TOP = COLUMN_TOP, LEFT_LINE = 7;
 const int CLASSIC_EDGE = 2, CLASSIC_HEADER = 40, CLASSIC_TOP = 2, CLASSIC_BODY_END = 2, CLASSIC_MORE = 32,
           CLASSIC_LOGOFF = 37, CLASSIC_DIVIDER = 193, CLASSIC_NAME_X = 12, CLASSIC_ICON_Y = 7, CLASSIC_RIGHT_MARGIN = 7,
           CLASSIC_MORE_TEXT = 40;
-const int CASCADE_ROW = 23, CASCADE_ICON = 16;
+const int CASCADE_ROW = 23, CASCADE_ICON = 16, CASCADE_SEPARATOR = 8;
 // The classic Start menu, measured on XP's own (explorer.exe's menu 204 in a menu band): a 1-pixel border; the
 // edition's banner 21 wide down the left, at the bottom, the rest above it in the bitmap's top-left colour;
 // rows 32 tall, the words 42 after the banner; the Start Menu folder's items (32-pixel icons 2 after the
@@ -344,9 +347,14 @@ Cascade::Cascade(const QList<MenuEntry> &entries, QPoint corner, bool upward, bo
     int width = theme->scaled(10 + CASCADE_ICON + 8 + 22) + textWidth;
     const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
     width = qMin(width, screen.width() / 2);
-    const int height = qMin(int(entries.size()) * row + theme->scaled(6), screen.height());
-    for (int i = 0; i < entries.size(); ++i)
-        m_rects.append(QRect(theme->scaled(3), theme->scaled(3) + i * row, width - theme->scaled(6), row));
+    // A line is 8 rows, as XP's under the Start Menu's own shortcuts (measured on XP SP3)
+    int height = theme->scaled(3);
+    for (const MenuEntry &entry : entries) {
+        const int tall = entry.separator ? theme->scaled(CASCADE_SEPARATOR) : row;
+        m_rects.append(QRect(theme->scaled(3), height, width - theme->scaled(6), tall));
+        height += tall;
+    }
+    height = qMin(height + theme->scaled(3), screen.height());
     QPoint at = upward ? corner - QPoint(0, height) : corner;
     at.setY(qBound(screen.top(), at.y(), screen.bottom() + 1 - height));
     at.setX(qMin(at.x(), screen.right() + 1 - width));
@@ -454,6 +462,15 @@ void Cascade::paintEvent(QPaintEvent *)
     const int icon = theme->scaled(CASCADE_ICON);
     for (int i = 0; i < m_entries.size(); ++i) {
         const QRect r = m_rects[i];
+        if (m_entries[i].separator) {
+            // the Start panel's program list line, 6 in from the edge and on the separator's fourth row
+            const QRect line(theme->scaled(6), r.y() + theme->scaled(3), width() - theme->scaled(12), 1);
+            if (renderer)
+                renderer->draw(&painter, line, panelPart("proglistseparator"));
+            else
+                painter.fillRect(line, theme->system(QStringLiteral("btnshadow"), Qt::gray));
+            continue;
+        }
         const bool hot = i == m_hot && m_entries[i].enabled;
         if (hot) {
             if (renderer)
@@ -732,14 +749,10 @@ QString startMenuFolder()
 }
 
 namespace {
-// command 503, the Help and Support Center: Linux's own when it has one
+// command 503, the Help and Support Center: XP's (helpctr), or Linux's own
 void openHelpCenter()
 {
-    for (const char *name : {"khelpcenter", "yelp"})
-        if (const QString help = QStandardPaths::findExecutable(QLatin1String(name)); !help.isEmpty()) {
-            QProcess::startDetached(help, {});
-            return;
-        }
+    programs::openHelpCenter();
 }
 
 // The classic start menu's order of the Start Menu folder's entries, by file name; an empty list is
@@ -1457,67 +1470,90 @@ void StartPanel::paintEvent(QPaintEvent *)
 
 QList<MenuEntry> StartPanel::allPrograms() const
 {
+    // XP's: the Start Menu's own shortcuts, a line, then Programs' groups and its shortcuts, each by name.
+    // XP's groups and shortcuts (xpshortcuts.cpp) take in the Linux programs of the folders XP has too.
     ShellTheme *theme = ShellTheme::instance();
-    QList<MenuEntry> out;
-    const QIcon folderIcon(QPixmap::fromImage(theme->shellIcon(ICON_PROGRAMS, theme->scaled(CASCADE_ICON))));
-    auto folders = programs::folders();
-    // XP's own in Accessories, which it makes if Linux's programs did not
-    folders[QStringLiteral("Accessories")];
-    for (auto it = folders.cbegin(); it != folders.cend(); ++it) {
+    const int iconSize = theme->scaled(CASCADE_ICON);
+    const QIcon folderIcon(QPixmap::fromImage(theme->shellIcon(ICON_PROGRAMS, iconSize)));
+    const auto byName = [](QList<MenuEntry> &entries) {
+        std::sort(entries.begin(), entries.end(), [](const MenuEntry &a, const MenuEntry &b) { return a.text.compare(b.text, Qt::CaseInsensitive) < 0; });
+    };
+    const auto linuxEntry = [](const programs::Program &program) {
+        MenuEntry entry;
+        entry.text = program.name;
+        entry.icon = programs::iconOf(program);
+        entry.action = [program] { programs::launch(program); };
+        return entry;
+    };
+    // Linux's folders, those XP has by its group
+    QMap<QString, QList<programs::Program>> linuxFolders = programs::folders();
+    QHash<QString, QList<programs::Program>> intoGroup;
+    for (const auto &[folder, group] : {std::pair{"Accessories", "Accessories"}, {"Games", "Games"}, {"System Tools", "Accessories/System Tools"}})
+        intoGroup[QLatin1String(group)] = linuxFolders.take(QLatin1String(folder));
+    // Startup: the session's autostart entries
+    QList<programs::Program> startup;
+    for (const QFileInfo &file : QDir(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/autostart"))
+                                     .entryInfoList({QStringLiteral("*.desktop")}, QDir::Files))
+        if (const auto program = programs::fromFile(file.filePath()))
+            startup.append(*program);
+    intoGroup[QStringLiteral("Startup")] = startup;
+
+    // (Shared, for the groups' cascades open after this returns)
+    auto group = std::make_shared<std::function<QList<MenuEntry>(const QString &)>>();
+    *group = [=, weak = std::weak_ptr(group)](const QString &name) -> QList<MenuEntry> {
+        const auto self = weak.lock();
+        QList<MenuEntry> folders, items = xpshortcuts::entries(name, iconSize);
+        for (const QString &sub : xpshortcuts::groups(name)) {
+            MenuEntry folder;
+            folder.text = xpshortcuts::groupName(sub);
+            folder.icon = folderIcon;
+            folder.children = [self, sub] { return (*self)(sub); };
+            folders.append(folder);
+        }
+        for (const programs::Program &program : intoGroup.value(name))
+            items.append(linuxEntry(program));
+        byName(folders);
+        byName(items);
+        if (folders.isEmpty() && items.isEmpty()) {
+            // explorer.exe's word for an empty cascade, greyed
+            MenuEntry empty;
+            empty.text = tr("(Empty)");
+            empty.enabled = false;
+            items.append(empty);
+        }
+        return folders + items;
+    };
+
+    QList<MenuEntry> out = xpshortcuts::entries(QString(), iconSize);
+    byName(out);
+    MenuEntry line;
+    line.separator = true;
+    out.append(line);
+    QList<MenuEntry> folders, items = xpshortcuts::entries(QStringLiteral("Programs"), iconSize);
+    for (const QString &name : xpshortcuts::groups(QString())) {
+        MenuEntry folder;
+        folder.text = xpshortcuts::groupName(name);
+        folder.icon = folderIcon;
+        folder.children = [group, name] { return (*group)(name); };
+        folders.append(folder);
+    }
+    for (auto it = linuxFolders.cbegin(); it != linuxFolders.cend(); ++it) {
         MenuEntry folder;
         folder.text = it.key();
         folder.icon = folderIcon;
-        const QList<programs::Program> items = it.value();
-        const bool accessories = it.key() == QLatin1String("Accessories");
-        folder.children = [items, accessories] {
+        const QList<programs::Program> programs = it.value();
+        folder.children = [=] {
             QList<MenuEntry> entries;
-            for (const programs::Program &program : items) {
-                MenuEntry entry;
-                entry.text = program.name;
-                entry.icon = programs::iconOf(program);
-                entry.action = [program] { programs::launch(program); };
-                entries.append(entry);
-            }
-            if (accessories) {
-                MenuEntry prompt;
-                prompt.text = QObject::tr("Command Prompt");
-                if (const auto cmd = xpfiles::resources(xpfiles::find(QStringLiteral("cmd.exe"))))
-                    // Its one group, by the name cmd.exe gives it
-                    prompt.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*cmd, cmd->names(QStringLiteral("14")).value(0), ShellTheme::instance()->scaled(CASCADE_ICON))));
-                prompt.action = [] { programs::openCommandPrompt(QDir::homePath()); };
-                entries.append(prompt);
-                // Notepad and Calculator, by the names and icons of their files
-                const auto accessory = [&entries](const char *file, const QString &group, int nameId, std::function<void()> action) {
-                    const auto pe = xpfiles::resources(xpfiles::find(QLatin1String(file)));
-                    if (!pe)
-                        return;
-                    MenuEntry entry;
-                    entry.text = xpfiles::string(*pe, nameId);
-                    entry.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*pe, group, ShellTheme::instance()->scaled(CASCADE_ICON))));
-                    entry.action = std::move(action);
-                    entries.append(entry);
-                };
-                accessory("notepad.exe", QStringLiteral("2"), 9, [] { programs::openNotepad(); });
-                accessory("calc.exe", QStringLiteral("SC"), 83, [] { programs::openCalculator(); });
-                std::sort(entries.begin(), entries.end(), [](const MenuEntry &a, const MenuEntry &b) { return a.text.compare(b.text, Qt::CaseInsensitive) < 0; });
-            }
+            for (const programs::Program &program : programs)
+                entries.append(linuxEntry(program));
+            byName(entries);
             return entries;
         };
-        out.append(folder);
+        folders.append(folder);
     }
-#ifdef XP_MEDIA_PLAYER
-    // Windows Media Player, among XP's programs after the folders, by wmplayer.exe's name and icon
-    if (const auto pe = xpfiles::resources(xpfiles::find(QStringLiteral("wmplayer.exe"))); pe && !xpfiles::find(QStringLiteral("wmp.dll")).isEmpty()) {
-        MenuEntry player;
-        player.text = xpfiles::fileDescription(*pe);
-        if (player.text.isEmpty())
-            player.text = QStringLiteral("Windows Media Player");
-        player.icon = QIcon(QPixmap::fromImage(xpfiles::icon(*pe, pe->names(QStringLiteral("14")).value(0), theme->scaled(CASCADE_ICON))));
-        player.action = [] { programs::openMediaPlayer(); };
-        out.append(player);
-    }
-#endif
-    return out;
+    byName(folders);
+    byName(items);
+    return out + folders + items;
 }
 
 QList<MenuEntry> StartPanel::recentDocuments() const

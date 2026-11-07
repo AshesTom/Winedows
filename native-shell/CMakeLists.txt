@@ -26,6 +26,7 @@ add_library(xpshell STATIC
     src/controlpanel.cpp src/controlpanel.h
     src/desktop.cpp src/desktop.h
     src/desktopcleanup.cpp src/desktopcleanup.h
+    src/browserbands.h
     src/filebrowser.cpp src/filebrowser.h
     src/folderoptions.cpp src/folderoptions.h
     src/shellmenus.cpp src/shellmenus.h
@@ -50,6 +51,7 @@ add_library(xpshell STATIC
     src/xpdialog.cpp src/xpdialog.h
     src/notifications.cpp src/notifications.h
     src/programs.cpp src/programs.h
+    src/xpshortcuts.cpp src/xpshortcuts.h
     src/securitycenter.cpp src/securitycenter.h src/securitywindow.cpp
     src/hotplug.cpp src/hotplug.h
     src/systemicons.cpp src/systemicons.h
@@ -72,6 +74,21 @@ find_package(Qt6 QUIET COMPONENTS WebEngineWidgets)
 if(Qt6WebEngineWidgets_FOUND)
     target_link_libraries(xpshell PUBLIC Qt6::WebEngineWidgets)
     target_compile_definitions(xpshell PUBLIC XP_WEB_PAGES)
+endif()
+
+# Internet Explorer and the Help and Support Center, programs of their own beside the shell: only with Qt WebEngine
+if(Qt6WebEngineWidgets_FOUND)
+    add_library(iexplorelib STATIC src/internetexplorer.cpp src/internetexplorer.h src/helpcenter.cpp src/helpcenter.h)
+    target_link_libraries(iexplorelib PUBLIC xpshell)
+    add_executable(iexplore apps/iexplore.cpp)
+    target_link_libraries(iexplore PRIVATE iexplorelib)
+    target_compile_options(iexplore PRIVATE -Wall -Wextra)
+    # The Help and Support Center, its pages too in Qt WebEngine
+    add_executable(helpctr apps/helpctr.cpp)
+    target_link_libraries(helpctr PRIVATE iexplorelib)
+    target_compile_options(helpctr PRIVATE -Wall -Wextra)
+    install(TARGETS iexplore helpctr RUNTIME DESTINATION bin)
+    target_compile_definitions(xpshell PUBLIC XP_IEXPLORE)
 endif()
 
 # Notepad's Page Setup and Print; without the module they are greyed.

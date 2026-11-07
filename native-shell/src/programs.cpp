@@ -686,6 +686,33 @@ void openMediaPlayer(const QStringList &files)
     QProcess::startDetached(program, arguments, QDir::homePath());
 }
 
+void openInternetExplorer(const QString &address)
+{
+    const QString program = xpapp::sibling(QStringLiteral("iexplore"));
+    if (QFileInfo(program).isExecutable()) {
+        QProcess::startDetached(program, address.isEmpty() ? QStringList() : QStringList{QStringLiteral("--"), address}, QDir::homePath());
+        return;
+    }
+    if (!address.isEmpty())
+        open(address);
+    else if (const auto browser = defaultBrowser())
+        launch(*browser);
+}
+
+void openHelpCenter(const QString &topic)
+{
+    const QString program = xpapp::sibling(QStringLiteral("helpctr"));
+    if (QFileInfo(program).isExecutable()) {
+        QProcess::startDetached(program, topic.isEmpty() ? QStringList() : QStringList{QStringLiteral("-url"), topic}, QDir::homePath());
+        return;
+    }
+    for (const char *name : {"khelpcenter", "yelp"})
+        if (const QString help = QStandardPaths::findExecutable(QLatin1String(name)); !help.isEmpty()) {
+            QProcess::startDetached(help, {});
+            return;
+        }
+}
+
 void open(const QString &target)
 {
     // A Windows shortcut opens what it points at.

@@ -2,6 +2,8 @@
 #include "xpfiles.h"
 #include "fontpolicy.h"
 
+#include <algorithm>
+
 #include <QCoreApplication>
 #include <QDirIterator>
 #include <QFile>
@@ -52,6 +54,19 @@ std::optional<w4w::PeResources> resources(const QString &path)
     if (path.isEmpty() || !file.open(QIODevice::ReadOnly))
         return std::nullopt;
     return w4w::PeResources::parse(file.readAll());
+}
+
+QString iconGroupAt(const w4w::PeResources &pe, int index)
+{
+    QStringList groups = pe.names(QStringLiteral("14"));
+    std::sort(groups.begin(), groups.end(), [](const QString &a, const QString &b) {
+        bool aNumber = false, bNumber = false;
+        const uint aId = a.toUInt(&aNumber), bId = b.toUInt(&bNumber);
+        if (aNumber != bNumber)
+            return bNumber;
+        return aNumber ? aId < bId : a.compare(b, Qt::CaseInsensitive) < 0;
+    });
+    return groups.value(index);
 }
 
 QString string(const w4w::PeResources &pe, int id)

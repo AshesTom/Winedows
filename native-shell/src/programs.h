@@ -63,6 +63,10 @@ void openCommandPrompt(const QString &folder);
 void openNotepad(const QString &file = QString());
 void openCalculator();
 void openMediaPlayer(const QStringList &files = {});
+// XP's Internet Explorer on ADDRESS (its home page without one); the desktop's browser without it
+void openInternetExplorer(const QString &address = QString());
+// XP's Help and Support Center on TOPIC (an hcp:// address; its home page without one); Linux's help without it
+void openHelpCenter(const QString &topic = QString());
 // The icon theme for programs' icons: the one chosen in linux-look.conf, the
 // Plasma user's, or a common one that is installed.
 void useIconTheme();

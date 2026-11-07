@@ -34,6 +34,9 @@ QImage icon(const w4w::PeResources &pe, int group, int size, int maxBits = 32);
 // The same for a group by its name, as a number or as some files name them (IDI_APPICON).
 QImage icon(const w4w::PeResources &pe, const QString &group, int size, int maxBits = 32);
 std::optional<w4w::PeResources> resources(const QString &path);
+// The icon group at INDEX as Windows counts them (ExtractIcon, an INF's IconIndex): the resource
+// directory's order, names first, then IDs upwards
+QString iconGroupAt(const w4w::PeResources &pe, int index);
 
 // A theme's family, point size and style, fully hinted and monochrome at
 // every size: XP with font smoothing disabled.

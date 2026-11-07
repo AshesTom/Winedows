@@ -91,9 +91,28 @@ ICON_FILES = {
     # The Desktop Cleanup Wizard (fldrclnr.dll): its reminder, its pages and its words, and the welcome
     # pages' Verdana Bold title
     'fldrclnr.dll': 'system32', 'verdanab.ttf': 'fonts',
+    # Internet Explorer: its pages (res://shdoclc.dll), and the core fonts web pages ask for, as XP has them
+    'shdoclc.dll': 'ie',
+    **dict.fromkeys(('verdana.ttf', 'verdanai.ttf', 'verdanaz.ttf', 'georgia.ttf', 'georgiab.ttf', 'georgiai.ttf', 'georgiaz.ttf',
+                     'times.ttf', 'timesbd.ttf', 'timesi.ttf', 'timesbi.ttf', 'cour.ttf', 'courbd.ttf', 'couri.ttf', 'courbi.ttf',
+                     'comic.ttf', 'comicbd.ttf', 'webdings.ttf', 'trebucbi.ttf', 'trebucit.ttf'), 'fonts'),
     **dict.fromkeys(('finish.xml', 'inetopts.xml', 'inetpref.xml', 'inetsrch.xml', 'lcladv.xml', 'lclcomp.xml',
                      'lcldocs.xml', 'lclmm.xml', 'lclmode.xml', 'lclrfine.xml', 'lclsrch.xml'), 'srchasst/mui'),
 }
+# The Start menu's XP shortcuts (syssetup.inf's [StartMenuItems] and its sections, and the components'
+# ProfileItems): the files their names and icons come from. Without them the shortcut has no icon.
+PROGRAM_FILES = dict.fromkeys((
+    'wupdmgr.exe', 'msimn.exe', 'rcimlby.exe', 'rcbdyctl.dll', 'moviemk.exe', 'wab.exe', 'mspaint.exe', 'compatui.dll',
+    'mstsc.exe', 'mobsync.exe', 'wordpad.exe', 'accwiz.exe', 'magnify.exe', 'narrator.exe', 'osk.exe', 'utilman.exe',
+    'hypertrm.exe', 'hnetwiz.dll', 'sndrec32.exe', 'ntbackup.exe', 'charmap.exe', 'cleanmgr.exe', 'dfrgres.dll',
+    'migwiz.exe', 'mstask.dll', 'msinfo32.exe', 'rstrui.exe', 'freecell.exe', 'mshearts.exe', 'bckgzm.exe', 'chkrzm.exe',
+    'hrtzzm.exe', 'rvsezm.exe', 'shvlzm.exe', 'winmine.exe', 'pinball.exe', 'sol.exe', 'spider.exe', 'msnms.ico',
+    'xpsp1res.dll', 'helpctr.exe'), 'programs')
+ICON_FILES.update(PROGRAM_FILES)
+# Files only inside a cabinet of several files on the media: the cabinet they are in
+CAB_MEMBERS = {'msmsgs.exe': ('mmssetup.cab', 'programs')}
+# Cabinets whose files all go to a folder: the Help and Support Center's pages, pictures and database
+HELP_CABS = {'pchdt_w3.cab': 'helpctr', 'hscsp_w3.cab': 'helpctr/sp'}
 # Files whose name on the media is not the installed one's (LAYOUT.INF renames them)
 MEDIA_NAMES = {'tourstart.exe': 'tourstrt.exe'}
 # Windows Media Player's skins (Program Files\\Windows Media Player\\Skins): their 8.3 names on the media,
@@ -250,6 +269,28 @@ def extract(source, output):
         folder = FILES.get(target) or ICON_FILES.get(target) or OOBE_FILES[target]
         copy_file(iso, name, sector, size, output / folder / target)
         print(f'{folder}/{target}')
+    for cabinet, folder in HELP_CABS.items():
+        found = next(((n, s, z) for n, s, z in media if n in (cabinet, compressed(cabinet))), None)
+        if not found:
+            continue
+        with tempfile.TemporaryDirectory(prefix='xp-native-') as temp:
+            path = Path(temp) / cabinet
+            path.write_bytes(unpack(found[0], iso.read(found[1], found[2])))
+            (output / folder).mkdir(parents=True, exist_ok=True)
+            subprocess.run(['bsdtar', '-xf', str(path), '-C', str(output / folder)], check=False)
+            print(f'{folder}/ ({cabinet})')
+    for target, (cabinet, folder) in CAB_MEMBERS.items():
+        found = next(((s, z) for n, s, z in media if n == cabinet), None)
+        if not found:
+            continue
+        with tempfile.TemporaryDirectory(prefix='xp-native-') as temp:
+            path = Path(temp) / cabinet
+            path.write_bytes(iso.read(*found))
+            subprocess.run(['bsdtar', '-xf', str(path), '-C', temp, target], check=False)
+            if (Path(temp) / target).exists():
+                (output / folder).mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(Path(temp) / target, output / folder / target)
+                print(f'{folder}/{target}')
 
 
 # The system colours of a scheme, in the order of its COLORREFs (COLOR_SCROLLBAR to COLOR_MENUBAR), by
