@@ -110,10 +110,11 @@ void drawFrame(QPainter &painter, const QRect &rect, const FrameStyle &style, co
     for (FrameButton button : buttons)
         if (shown(button, look))
             titleEnd = qMin(titleEnd, frameButtonRect(button, rect, style, look.maximized).left() - 4);
-    // Without an icon (a dialog) XP starts the title 4 inside the frame, and 2 pixels lower than with one
-    // (its System Properties and message boxes, against the folder windows)
+    // Without an icon (a dialog) XP starts the title 4 inside the frame. Either way its words are 2 pixels
+    // under the caption's middle (measured on XP SP3: a folder window's and Help and Support's capitals 12
+    // under the frame's top, the Run dialog's 11, as XP centres them below the top border)
     const int titleX = look.icon.isNull() ? border + 4 : ICON_X + ICON_SIZE + TITLE_GAP;
-    const int titleDrop = look.icon.isNull() ? 2 : 0;
+    const int titleDrop = 2;
     const QRect titleRect(rect.x() + titleX, rect.y() + titleDrop, qMax(0, titleEnd - rect.x() - titleX), top);
     const QString title = QFontMetrics(font).elidedText(look.title, Qt::ElideRight, titleRect.width());
     painter.setFont(font);
