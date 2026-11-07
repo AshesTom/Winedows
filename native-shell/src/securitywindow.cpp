@@ -20,7 +20,6 @@
 #include <QPainter>
 #include <QPointer>
 #include <QProcess>
-#include <QProxyStyle>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -51,7 +50,7 @@ const int ICON_INTERNET_OPTIONS = 4487, ICON_UPDATES = 1, ICON_WINDOWS_FIREWALL 
 
 // Fonts, as xpsp2res.dll names them (17137 and on)
 const char BODY_FONT[] = "Tahoma, 8", HEADING_FONT[] = "Trebuchet MS, 13.5", TITLE_FONT[] = "Trebuchet MS, 19",
-           SUBTITLE_FONT[] = "Trebuchet MS, 11", PANE_FONT[] = "Trebuchet MS, 10.5, bold", MANAGE_FONT[] = "Tahoma, 10, bold",
+           SUBTITLE_FONT[] = "Trebuchet MS, 11", PANE_FONT[] = "Trebuchet MS, 10.5", MANAGE_FONT[] = "Tahoma, 10, bold",
            BAR_FONT[] = "Tahoma, 8";
 
 // Measured at 96 DPI on XP's window (client coordinates). Its first size:
@@ -68,23 +67,30 @@ const int RESOURCES_HEADER = 22, RESOURCES_LINK_X = 38, RESOURCES_BULLET_X = 28,
 const int BOX_CORNER[] = {9, 6, 4, 3, 2, 1, 1, 1};
 // The essentials' boxes: the top rows start 3, 1, 1 in, the bottom ones 4, 1, 1
 const int SECTION_TOP[] = {3, 1, 1}, SECTION_BOTTOM[] = {4, 1, 1};
-// In the page (the scrolled part, right of the pane): the margin, the heading's baseline, the text's
-const int PAGE_X = 10, PAGE_WIDTH = 475, HEADING_BASELINE = 34, INTRO_BASELINE = 50, LINE = 13, SECTIONS_TOP = 111, SECTION_GAP = 9;
-// In a box: its header, its icon's centre, title, status, separator and chevron; its text and button
-const int HEADER = 38, ICON_CENTRE_X = 21, TITLE_X = 40, TITLE_BASELINE = 23, STATUS_RIGHT = 435, DOT_GAP = 27, SEPARATOR_X = 443,
-          CHEVRON_X = 451, BODY_X = 12, BODY_BASELINE = 54, BODY_WIDTH = 450, BUTTON_X = 347, BUTTON_GAP = 9, BUTTON_WIDTH = 117, UPDATES_BUTTON_WIDTH = 148,
-          BUTTON_HEIGHT = 21, BUTTON_BOTTOM = 6;
+// In the page (the scrolled part, right of the pane): the margin on each side (the boxes and the text
+// take the rest of its width, as XP's do when the window grows), the heading's baseline, the text's
+// The boxes start 22 under the last line's baseline (111 at the window's first width, 99 maximized at 1024)
+const int PAGE_X = 10, HEADING_BASELINE = 34, INTRO_BASELINE = 50, LINE = 13, SECTIONS_GAP = 22, SECTION_GAP = 9;
+// In a box: its header, its icon's centre, title; its status, separator and chevron from its right side;
+// its text (as wide as the box but 22: XP maximized at 1024 keeps a 752-pixel line) and its button (11 in
+// from the right)
+const int HEADER = 38, ICON_CENTRE_X = 21, TITLE_X = 40, TITLE_BASELINE = 23, STATUS_FROM_RIGHT = 40, DOT_GAP = 27, SEPARATOR_FROM_RIGHT = 32,
+          CHEVRON_FROM_RIGHT = 24, BODY_X = 12, BODY_BASELINE = 54, BODY_NARROWER = 22, BUTTON_FROM_RIGHT = 11, BUTTON_GAP = 9, BUTTON_WIDTH = 117,
+          UPDATES_BUTTON_WIDTH = 148,
+          BUTTON_HEIGHT = 21, BUTTON_BOTTOM = 4;
 // "Manage security settings for:": its baseline under the last box, its icons' row, their links
 const int MANAGE_BASELINE = 27, MANAGE_ICONS = 20, MANAGE_ICON_X = 0, MANAGE_STEP = 175, MANAGE_TEXT_X = 41, MANAGE_TEXT_BASELINE = 21, PAGE_BOTTOM = 12;
 
+// A box's header goes from its colour at the left to the box's body colour at the right, across
+// whatever width the box has, the same on every row (XP SP3 in VMware, at two window widths)
 struct Look
 {
-    QColor topLeft, topRight, bottomLeft, bottomRight, border, body, title, word;
+    QColor header, border, body, title, word;
     int dot;
 };
-const Look ON_LOOK{{196, 214, 255}, {217, 228, 255}, {215, 227, 255}, {237, 241, 255}, {189, 202, 234}, {239, 243, 255}, {48, 72, 110}, {4, 124, 5}, PNG_DOT_ON};
-const Look OFF_LOOK{{204, 54, 2}, {229, 150, 117}, {210, 77, 29}, {235, 171, 143}, {231, 197, 151}, {255, 245, 231}, Qt::white, {186, 75, 20}, PNG_DOT_OFF};
-const Look UNKNOWN_LOOK{{241, 199, 21}, {247, 221, 123}, {242, 205, 48}, {249, 228, 151}, {231, 197, 151}, {255, 245, 227}, {112, 92, 51}, {112, 92, 51}, PNG_DOT_UNKNOWN};
+const Look ON_LOOK{{196, 214, 255}, {189, 202, 234}, {239, 243, 255}, {48, 72, 110}, {4, 124, 5}, PNG_DOT_ON};
+const Look OFF_LOOK{{204, 54, 2}, {231, 197, 151}, {255, 245, 231}, Qt::white, {186, 75, 20}, PNG_DOT_OFF};
+const Look UNKNOWN_LOOK{{241, 199, 21}, {231, 197, 151}, {255, 245, 227}, {112, 92, 51}, {112, 92, 51}, PNG_DOT_UNKNOWN};
 
 ShellTheme *theme()
 {
@@ -309,8 +315,6 @@ void frame(QPainter &painter, const QRegion &region, const QColor &border)
         painter.fillRect(r, border);
 }
 
-// The application's style, with the keyboard's cues always shown: the Security Center's
-// buttons underline their mnemonics on XP whether or not Alt was pressed.
 // wscui.cpl's small dialogs (Alert Settings, Recommendation): xpsp2res.dll's templates under a band
 // of the banner's blue with the Security Center's name (sub_4fadfa63: PNG 110, the font pair 17151,
 // a 3-row green rule). Measured on XP: the band's 41 rows, the shield 146 from the right and 8
@@ -473,15 +477,6 @@ void showAlertSettings(QWidget *parent)
 
 namespace {
 
-class CueStyle : public QProxyStyle
-{
-public:
-    int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget, QStyleHintReturn *data) const override
-    {
-        return hint == SH_UnderlineShortcut ? 1 : QProxyStyle::styleHint(hint, option, widget, data);
-    }
-};
-
 struct Section
 {
     QString name;
@@ -553,8 +548,6 @@ public:
             : status.updates == Off ? string(STRING_UPDATES_TURNED_OFF, "Automatic Updates is turned off.")
             : status.updates == CheckSettings ? string(STRING_UPDATES_NOT_CONFIGURED, "Automatic Updates is not yet configured for this computer.")
                                               : QObject::tr("This distribution's updates are not monitored here: keep it up to date with its package manager.");
-        // XP's "Click Turn on Automatic Updates" names a button this system's updates do not have.
-        updates.remove(QRegularExpression(QStringLiteral(" Click Turn on Automatic Updates[^.]*\\.")));
         m_essentials.append(essential(string(STRING_UPDATES, "Automatic Updates"), status.updates, word(status.updates),
                                       updates, PNG_UPDATES, status.updates != On && hasUpdates() ? std::function<void()>(openUpdates) : nullptr));
         QString virus = status.virus == On ? string(STRING_VIRUS_ON, "%1 reports that it is up to date and virus scanning is on.")
@@ -571,17 +564,19 @@ public:
     void relayout()
     {
         const QFont body = xpFont(BODY_FONT);
+        const int pageWidth = width() - 2 * scaled(PAGE_X);
+        m_laidOutWidth = width();
         m_links.clear();
         int last = 0;
-        m_intro = wrap(pieces(string(STRING_INTRO, "")), body, scaled(PAGE_X), scaled(INTRO_BASELINE), scaled(PAGE_WIDTH), scaled(LINE), &m_links, &last);
-        m_whatsNew = wrap(pieces(string(STRING_WHATS_NEW, "")), body, scaled(PAGE_X), last + scaled(LINE), scaled(PAGE_WIDTH), scaled(LINE), &m_links, nullptr);
-        int y = scaled(SECTIONS_TOP);
+        m_intro = wrap(pieces(string(STRING_INTRO, "")), body, scaled(PAGE_X), scaled(INTRO_BASELINE), pageWidth, scaled(LINE), &m_links, &last);
+        m_whatsNew = wrap(pieces(string(STRING_WHATS_NEW, "")), body, scaled(PAGE_X), last + scaled(LINE), pageWidth, scaled(LINE), &m_links, &last);
+        int y = last + scaled(SECTIONS_GAP);
         for (Section &e : m_essentials) {
             int height = scaled(HEADER);
             e.runs.clear();
             if (e.expanded) {
                 int lastLine = 0;
-                e.runs = wrap(e.text, body, scaled(PAGE_X + BODY_X), y + scaled(BODY_BASELINE), scaled(BODY_WIDTH), scaled(LINE), &m_links, &lastLine);
+                e.runs = wrap(e.text, body, scaled(PAGE_X + BODY_X), y + scaled(BODY_BASELINE), pageWidth - scaled(BODY_NARROWER), scaled(LINE), &m_links, &lastLine);
                 // The button's row is kept whether there is a button or not, as on XP.
                 const int buttonTop = lastLine + scaled(BUTTON_GAP);
                 height = buttonTop + scaled(BUTTON_HEIGHT + BUTTON_BOTTOM) - y + 1;
@@ -591,24 +586,21 @@ public:
                         // Automatic Updates' is "Turn on Automatic Updates", wider
                         e.button = new QPushButton(e.picture == PNG_UPDATES ? string(STRING_TURN_ON_UPDATES, "&Turn on Automatic Updates")
                                                                             : string(STRING_RECOMMENDATIONS, "&Recommendations..."), this);
-                        static CueStyle *cues = new CueStyle;
-                        e.button->setStyle(cues);
                         if (e.recommendations)
                             QObject::connect(e.button, &QPushButton::clicked, this, e.recommendations);
                     }
                     // The style draws a push button's face a pixel in from its sides and two from its top.
                     const int buttonWidth = scaled(e.picture == PNG_UPDATES ? UPDATES_BUTTON_WIDTH : BUTTON_WIDTH);
-                    e.button->setGeometry(QRect(scaled(PAGE_X + BUTTON_X + BUTTON_WIDTH) - buttonWidth, buttonTop, buttonWidth, scaled(BUTTON_HEIGHT)).adjusted(-1, -2, 1, 0));
+                    e.button->setGeometry(QRect(scaled(PAGE_X) + pageWidth - scaled(BUTTON_FROM_RIGHT) - buttonWidth, buttonTop, buttonWidth, scaled(BUTTON_HEIGHT)).adjusted(-1, -2, 1, 0));
                     e.button->show();
                 }
             } else if (e.button) {
                 e.button->hide();
             }
-            e.box = QRect(scaled(PAGE_X), y, scaled(PAGE_WIDTH), height);
+            e.box = QRect(scaled(PAGE_X), y, pageWidth, height);
             y += height + scaled(SECTION_GAP) - 1;
         }
         m_manageBaseline = y - scaled(SECTION_GAP) + 1 + scaled(MANAGE_BASELINE) - 1;
-        // Internet Options has nothing behind it here; the others where the system has their programs
         m_manage.clear();
         const int iconsTop = m_manageBaseline + scaled(MANAGE_ICONS);
         int x = scaled(PAGE_X);
@@ -616,10 +608,12 @@ public:
             m_manage.append({QRect(x + scaled(MANAGE_ICON_X), iconsTop, scaled(32), scaled(32)), icon, text, std::move(action)});
             x += scaled(MANAGE_STEP);
         };
+        // XP's order: Windows Firewall, Internet Options, Automatic Updates; each a link where the system has its program
+        const bool firewallTool = installed("firewall-config") || installed("gufw");
+        item(string(STRING_WINDOWS_FIREWALL, "Windows Firewall"), fileIcon("xpsp2res.dll", ICON_WINDOWS_FIREWALL, scaled(32)),
+             firewallTool ? std::function<void()>(openFirewallSettings) : nullptr);
         item(string(STRING_INTERNET_OPTIONS, "Internet Options"), fileIcon("inetcpl.cpl", ICON_INTERNET_OPTIONS, scaled(32)), nullptr);
         item(string(STRING_UPDATES, "Automatic Updates"), fileIcon("wuaucpl.cpl", ICON_UPDATES, scaled(32)), hasUpdates() ? std::function<void()>(openUpdates) : nullptr);
-        if (installed("firewall-config") || installed("gufw"))
-            item(string(STRING_WINDOWS_FIREWALL, "Windows Firewall"), fileIcon("xpsp2res.dll", ICON_WINDOWS_FIREWALL, scaled(32)), openFirewallSettings);
         setMinimumHeight(iconsTop + scaled(32) + scaled(PAGE_BOTTOM));
         resize(width(), minimumHeight());
         update();
@@ -661,7 +655,7 @@ protected:
         frame(painter, box, look.border);
         const QRect headerRect(e.box.left(), e.box.top(), e.box.width(), scaled(HEADER));
         const QRegion header = rows(headerRect, SECTION_TOP, 3, SECTION_BOTTOM, 3);
-        fillBilinear(painter, inner(header), headerRect.adjusted(1, 1, -1, -1), look.topLeft, look.topRight, look.bottomLeft, look.bottomRight);
+        fillBilinear(painter, inner(header), headerRect.adjusted(1, 1, -1, -1), look.header, look.body, look.header, look.body);
         frame(painter, header, look.border);
 
         const QImage picture = png(e.picture);
@@ -670,16 +664,22 @@ protected:
         painter.setPen(look.title);
         painter.drawText(QPoint(headerRect.left() + scaled(TITLE_X), headerRect.top() + scaled(TITLE_BASELINE)), e.name);
         const QFontMetrics metrics(painter.font());
-        const int wordLeft = headerRect.left() + scaled(STATUS_RIGHT) - metrics.horizontalAdvance(e.word);
+        const int wordLeft = headerRect.right() + 1 - scaled(STATUS_FROM_RIGHT) - metrics.horizontalAdvance(e.word);
         painter.setPen(look.word);
         painter.drawText(QPoint(wordLeft, headerRect.top() + scaled(TITLE_BASELINE)), e.word);
         const QImage dot = png(look.dot);
         painter.drawImage(QPoint(wordLeft - scaled(DOT_GAP), headerRect.top() + (headerRect.height() - dot.height()) / 2 - 1), dot);
-        painter.fillRect(QRect(headerRect.left() + scaled(SEPARATOR_X), headerRect.top() + scaled(14), 1, scaled(16)), look.border);
+        painter.fillRect(QRect(headerRect.right() + 1 - scaled(SEPARATOR_FROM_RIGHT), headerRect.top() + scaled(14), 1, scaled(16)), look.border);
         const QImage chevron = png(e.expanded ? PNG_COLLAPSE : PNG_EXPAND);
-        painter.drawImage(QPoint(headerRect.left() + scaled(CHEVRON_X), headerRect.top() + (headerRect.height() - chevron.height()) / 2), chevron);
+        painter.drawImage(QPoint(headerRect.right() + 1 - scaled(CHEVRON_FROM_RIGHT), headerRect.top() + (headerRect.height() - chevron.height()) / 2), chevron);
         if (e.expanded)
             drawRuns(painter, e.runs, xpFont(BODY_FONT), Qt::black, LINK, true);
+    }
+
+    void resizeEvent(QResizeEvent *) override
+    {
+        if (width() != m_laidOutWidth && !m_essentials.isEmpty())
+            relayout();
     }
 
     void mouseMoveEvent(QMouseEvent *event) override
@@ -750,7 +750,7 @@ private:
     QList<Run> m_intro, m_whatsNew;
     QList<QString> m_links;
     QList<Manage> m_manage;
-    int m_manageBaseline = 0, m_hotManage = -1;
+    int m_manageBaseline = 0, m_hotManage = -1, m_laidOutWidth = 0;
 };
 
 class Window : public QDialog
@@ -765,7 +765,7 @@ public:
         setMouseTracking(true);
         m_scroll = new QScrollArea(this);
         m_scroll->setFrameShape(QFrame::NoFrame);
-        m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+        m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_scroll->setWidgetResizable(true);
         m_page = new Page(m_scroll);
@@ -798,13 +798,16 @@ protected:
             const auto mix = [f](int a, int b) { return qRound(a + (b - a) * f); };
             painter.fillRect(x, scaled(BANNER), 1, scaled(BAND), QColor(mix(BAND_EDGE.red(), BAND_MIDDLE.red()), mix(BAND_EDGE.green(), BAND_MIDDLE.green()), mix(BAND_EDGE.blue(), BAND_MIDDLE.blue())));
         }
-        const QImage shield = png(PNG_BANNER);
-        painter.drawImage(w - scaled(224), scaled(5), shield);
-        painter.setPen(Qt::white);
+        // The shield 35 before the title's words, wherever their width puts them (XP SP3 in VMware: 227 from
+        // the right; 224 with Wine's narrower words)
+        const QString title = string(STRING_SECURITY_CENTER, "Security Center");
         painter.setFont(xpFont(TITLE_FONT));
-        painter.drawText(QRect(0, 0, w - scaled(14), scaled(37)), Qt::AlignRight | Qt::AlignBottom, string(STRING_SECURITY_CENTER, "Security Center"));
+        const int titleLeft = w - scaled(14) - painter.fontMetrics().horizontalAdvance(title);
+        painter.drawImage(titleLeft - scaled(35), scaled(5), png(PNG_BANNER));
+        painter.setPen(Qt::white);
+        painter.drawText(QRect(0, 0, w - scaled(14), scaled(35)), Qt::AlignRight | Qt::AlignBottom, title);
         painter.setFont(xpFont(SUBTITLE_FONT));
-        painter.drawText(QRect(0, 0, w - scaled(12), scaled(57)), Qt::AlignRight | Qt::AlignBottom, string(STRING_HELP_PROTECT, "Help protect your PC"));
+        painter.drawText(QRect(0, 0, w - scaled(12), scaled(55)), Qt::AlignRight | Qt::AlignBottom, string(STRING_HELP_PROTECT, "Help protect your PC"));
 
         // The left pane and its Resources box
         const int top = scaled(BANNER + BAND), bottom = height() - scaled(BAR);
@@ -824,7 +827,8 @@ protected:
             painter.fillRect(r, Qt::white);
         const QRect header(box.left(), box.top(), box.width(), scaled(RESOURCES_HEADER));
         const QRegion headerRegion = rows(header, BOX_CORNER, 8, BOX_CORNER, 0);
-        fillBilinear(painter, inner(headerRegion), header.adjusted(1, 1, -1, -1), QColor(202, 217, 254), QColor(222, 231, 254), QColor(214, 225, 254), QColor(233, 239, 254));
+        // as the essentials' headers: to the pane's colour at the right
+        fillBilinear(painter, inner(headerRegion), header.adjusted(1, 1, -1, -1), QColor(200, 216, 254), PANE_COLOUR, QColor(200, 216, 254), PANE_COLOUR);
         frame(painter, region, BOX_BORDER);
         painter.fillRect(QRect(box.left(), header.bottom(), box.width(), 1) & region.boundingRect(), BOX_BORDER);
         painter.drawImage(box.left() - scaled(6), box.top() - scaled(4), png(PNG_HELP));
@@ -945,7 +949,8 @@ private:
     QList<Run> m_resources, m_privacy;
     QList<int> m_bullets;
     QList<QString> m_links;
-    bool m_resourcesOpen = true, m_resourcesFocused = true;
+    // (No focus rectangle until the header is clicked: XP SP3 in VMware opens without one.)
+    bool m_resourcesOpen = true, m_resourcesFocused = false;
     int m_hotResource = -1;
 };
 
