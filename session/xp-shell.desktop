@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=XP Shell (Wine, X11)
-Comment=Windows XP shell on Wine with native X11 applications
-Exec=/usr/local/bin/xp-shell-session
-TryExec=/usr/local/bin/xp-shell-session
-Type=Application
-DesktopNames=XP-Shell;

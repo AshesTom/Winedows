@@ -63,7 +63,7 @@ cat > "$data/xp-notepad.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Notepad
-Exec=$shell --notepad %f
+Exec=$(dirname "$shell")/notepad %f
 NoDisplay=true
 MimeType=text/plain;
 EOF
@@ -73,7 +73,7 @@ cat > "$data/xp-picture-viewer.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Windows Picture and Fax Viewer
-Exec=$shell --picture %f
+Exec=$(dirname "$shell")/shimgvw %f
 NoDisplay=true
 MimeType=${pictures// /;};
 EOF
@@ -93,9 +93,9 @@ EOF
     for type in $pictures; do printf '%s=xp-picture-viewer.desktop\n' "$type"; done
 } > "$config/xp-shell-mimeapps.list"
 assets=$root/.local/native-assets
-# XP's icons as an icon theme, made from the user's XP files the first time (session/icon_theme.py).
+# XP's icons as an icon theme, made from the user's XP files the first time (native-shell/tools/icon_theme.py).
 python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import icon_theme; icon_theme.ensure(sys.argv[2], sys.argv[3])' \
-    "$root/session" "$assets" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/win4wine-xp-icons" || true
+    "$root/native-shell/tools" "$assets" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/win4wine-xp-icons" || true
 # XP's fonts for Linux programs too, Tahoma before the rest, as the supervisor's font_config does.
 fonts=$state/fontconfig
 mkdir -p "$fonts"

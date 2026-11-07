@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=XP Shell (Wine, Wayland)
-Comment=Windows XP shell on Wine with native Wayland and X11 applications, per-monitor scaling
-Exec=/usr/local/bin/xp-shell-wayland-session
-TryExec=/usr/local/bin/xp-shell-wayland-session
-Type=Application
-DesktopNames=XP-Shell;

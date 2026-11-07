@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=ReactOS Shell (Wine, X11)
-Comment=ReactOS's shell on Wine with native X11 applications
-Exec=/usr/local/bin/reactos-shell-session
-TryExec=/usr/local/bin/reactos-shell-session
-Type=Application
-DesktopNames=ReactOS-Shell;

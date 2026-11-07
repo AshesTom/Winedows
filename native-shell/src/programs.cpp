@@ -6,6 +6,7 @@
 #include "session.h"
 #include "contexthelp.h"
 #include "fileicons.h"
+#include "xpapp.h"
 #include "xpdialog.h"
 #include "xpfiles.h"
 
@@ -629,26 +630,26 @@ void useIconTheme()
 void openCommandPrompt(const QString &folder)
 {
     // A program of its own: what runs in it cannot take the shell down.
-    QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--console"), folder}, folder);
+    QProcess::startDetached(xpapp::sibling(QStringLiteral("cmd")), {folder}, folder);
 }
 
 void openNotepad(const QString &file)
 {
-    QStringList arguments{QStringLiteral("--notepad")};
+    QStringList arguments;
     if (!file.isEmpty())
         arguments << QStringLiteral("--") << file;
-    QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments, QDir::homePath());
+    QProcess::startDetached(xpapp::sibling(QStringLiteral("notepad")), arguments, QDir::homePath());
 }
 
 void openCalculator()
 {
-    QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--calc")}, QDir::homePath());
+    QProcess::startDetached(xpapp::sibling(QStringLiteral("calc")), {}, QDir::homePath());
 }
 
 void openMediaPlayer(const QStringList &files)
 {
     // wmplayer, beside the shell
-    const QString program = QFileInfo(QCoreApplication::applicationFilePath()).dir().filePath(QStringLiteral("wmplayer"));
+    const QString program = xpapp::sibling(QStringLiteral("wmplayer"));
     QStringList arguments;
     if (!files.isEmpty())
         arguments << QStringLiteral("--") << files;

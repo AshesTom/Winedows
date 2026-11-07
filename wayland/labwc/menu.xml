@@ -1,6 +1,0 @@
-<?xml version="1.0"?>
-<!-- No compositor menus: XP's desktop and frames have their own. -->
-<openbox_menu>
-  <menu id="root-menu" label="" />
-  <menu id="client-menu" label="" />
-</openbox_menu>

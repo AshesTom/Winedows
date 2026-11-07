@@ -1,5 +1,0 @@
-; dot3dlg.dll for XP's netshell.dll (netshell-dot3dlg.c)
-LIBRARY dot3dlg.dll
-EXPORTS
-Dot3ACOnBalloonClick=Dot3ACOnBalloonClick@12 @1
-Dot3ACCanShowBalloon=Dot3ACCanShowBalloon@24 @2

@@ -184,7 +184,7 @@ void Console::start(const QString &folder)
     size.ws_ypixel = ushort(ROWS * m_glyphHeight);
     // (Prepared before the fork: only what is safe runs between it and exec.)
     const QByteArray directory = QFile::encodeName(folder.isEmpty() ? QDir::homePath() : folder);
-    const QByteArray profile = QFile::encodeName(QDir::cleanPath(QCoreApplication::applicationDirPath() + QStringLiteral("/../../../session/xp-cmd.bashrc")));
+    const QByteArray profile = QFile::encodeName(QDir::cleanPath(QCoreApplication::applicationDirPath() + QStringLiteral("/../share/win4wine/xp-cmd.bashrc")));
     const QByteArray title = windowTitle().toUtf8();
     m_child = forkpty(&m_master, nullptr, nullptr, &size);
     if (m_child < 0) {

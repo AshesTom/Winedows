@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // XP's Command Prompt window as a Linux program: 80 x 25 in XP's raster font (vgaoem.fon of
 // the user's media) and the console's 16 colours, 300 lines of history, running bash with
-// session/xp-cmd.bashrc, the same prompt as the Wine session's. It understands what Linux's
+// native-shell/xp-cmd.bashrc, the same prompt as the Wine session's. It understands what Linux's
 // programs send to an xterm.
 #pragma once
 

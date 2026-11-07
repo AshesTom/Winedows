@@ -1,5 +1,0 @@
-[Desktop Entry]
-Name=ReactOS logon screen
-Comment=LightDM greeter drawn like ReactOS's logon dialogs
-Exec=/usr/local/share/win4wine/greeter/code/reactos-greeter.py
-Type=Application

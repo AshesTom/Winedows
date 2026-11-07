@@ -3,36 +3,35 @@
 // icons, the taskbar, the Start menu, Display Properties, the windows' frames. A window manager manages it as a desktop and a
 // dock: bridge-wm, or any other that follows EWMH.
 #include "applets.h"
-#include "calculator.h"
 #include "controlpanel.h"
 #include "desktop.h"
 #include "displayproperties.h"
-#include "console.h"
 #include "sounds.h"
 
 #include <QMessageBox>
 #include "filebrowser.h"
 #include "frames.h"
-#include "editmenu.h"
-#include "menushadow.h"
-#include "notepad.h"
 #include "notifications.h"
-#include "pictures.h"
 #include "programs.h"
 #include "securitycenter.h"
 #include "taskbar.h"
 #include "theme.h"
 #include "tray.h"
 #include "windowlist.h"
-#include "xpfiles.h"
+#include "xpapp.h"
 
 #include <QApplication>
-#include <QFileInfo>
 #include <QCommandLineParser>
 #include <QKeyEvent>
 #include <QScreen>
 
+#include <climits>
+#include <cstring>
 #include <memory>
+#include <string>
+#include <vector>
+
+#include <unistd.h>
 
 namespace {
 
@@ -89,22 +88,38 @@ protected:
     }
 };
 
+// XP's other programs are programs of their own beside it: explorer --notepad and the rest,
+// as earlier versions had them, run those.
+static void forward(int argc, char **argv)
+{
+    static const struct {
+        const char *option, *program;
+    } FORWARDED[] = {{"--notepad", "notepad"}, {"--calc", "calc"}, {"--console", "cmd"}, {"--picture", "shimgvw"}};
+    if (argc < 2)
+        return;
+    for (const auto &each : FORWARDED) {
+        if (strcmp(argv[1], each.option) != 0)
+            continue;
+        // beside this program, wherever it was started from
+        char self[PATH_MAX];
+        const ssize_t length = readlink("/proc/self/exe", self, sizeof self - 1);
+        std::string program = length > 0 ? std::string(self, size_t(length)) : std::string(argv[0]);
+        program = program.substr(0, program.rfind('/') + 1) + each.program;
+        std::vector<char *> arguments{const_cast<char *>(each.program)};
+        for (int i = 2; i < argc; ++i)
+            arguments.push_back(argv[i]);
+        arguments.push_back(nullptr);
+        execv(program.c_str(), arguments.data());
+        perror(program.c_str());
+        exit(1);
+    }
+}
+
 int main(int argc, char **argv)
 {
-    // Only X11 windows can be EWMH's desktop and dock here. Tahoma is hinted
-    // as Windows hints it, with FreeType's classic TrueType interpreter.
-    qputenv("QT_QPA_PLATFORM", "xcb");
-    qputenv("FREETYPE_PROPERTIES", "truetype:interpreter-version=35");
-    // This is a desktop of its own: the desktop's platform theme is not for it
-    // (Plasma's event filter crashed on the Start menu's cascades).
-    qputenv("QT_QPA_PLATFORMTHEME", "generic");
-    // (For the web pages of a folder window, set before the application exists.)
-    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
-    QCoreApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
+    forward(argc, argv);
+    xpapp::prepare();
     QApplication app(argc, argv);
-    menushadow::install();
-    editmenu::install();
-    app.setApplicationName(QStringLiteral("explorer"));
     app.setQuitOnLastWindowClosed(false);
 
     QCommandLineParser parser;
@@ -112,60 +127,16 @@ int main(int argc, char **argv)
     parser.addHelpOption();
     parser.addOption({QStringLiteral("ipc"), QStringLiteral("bridge-wm's IPC directory (tray icons, Windows key)"), QStringLiteral("dir")});
     parser.addOption({QStringLiteral("frames"), QStringLiteral("draw the Linux windows' frames (without Wine's proxy.exe; needs --ipc)")});
-    parser.addOption({QStringLiteral("console"), QStringLiteral("only XP's Command Prompt, in that folder"), QStringLiteral("folder")});
-    parser.addOption({QStringLiteral("notepad"), QStringLiteral("only XP's Notepad (the file, if any, is the first argument)")});
-    parser.addOption({QStringLiteral("calc"), QStringLiteral("only XP's Calculator")});
-    parser.addOption({QStringLiteral("picture"), QStringLiteral("only Windows Picture and Fax Viewer, on that picture"), QStringLiteral("file")});
-    parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("Notepad's file"), QStringLiteral("[file]"));
     parser.addOption({QStringLiteral("explore"), QStringLiteral("only a folder window, for other programs that open folders"), QStringLiteral("folder")});
     parser.addOption({QStringLiteral("applet"), QStringLiteral("only a Control Panel applet: display, folders, fonts, taskbar, network, programs, sound, system, mouse, keyboard, printers, users, datetime, security, winver"), QStringLiteral("id")});
     parser.process(app);
 
-    xpfiles::loadFonts();
-    if (ShellTheme::lunaPath().isEmpty()) {
-        fprintf(stderr, "explorer: luna.msstyles not found. Run native-shell/extract.py on the XP ISO first.\n");
+    if (!xpapp::start(app, "explorer"))
         return 1;
-    }
-    ShellTheme::ensureDefaultLook();
     ShellTheme *theme = ShellTheme::instance();
-    const auto applyFont = [theme] {
-        QApplication::setFont(theme->systemFont(QStringLiteral("msgboxfont")));
-    };
-    applyFont();
-    QObject::connect(theme, &ShellTheme::changed, &app, applyFont);
-    programs::useIconTheme();
-    QObject::connect(theme, &ShellTheme::changed, &app, [] { programs::useIconTheme(); });
     if (parser.isSet(QStringLiteral("applet"))) {
         app.setQuitOnLastWindowClosed(true);
         controlpanel::open(parser.value(QStringLiteral("applet")));
-        return app.exec();
-    }
-    // Each program its own WM_CLASS, as XP's taskbar tells programs apart by their file.
-    if (parser.isSet(QStringLiteral("console"))) {
-        app.setApplicationName(QStringLiteral("cmd"));
-        app.setQuitOnLastWindowClosed(true);
-        Console console(parser.value(QStringLiteral("console")));
-        console.show();
-        return app.exec();
-    }
-    if (parser.isSet(QStringLiteral("notepad")) || parser.isSet(QStringLiteral("calc"))) {
-        const bool notepad = parser.isSet(QStringLiteral("notepad"));
-        if (xpfiles::find(QLatin1String(notepad ? "notepad.exe" : "calc.exe")).isEmpty()) {
-            fprintf(stderr, "explorer: %s not found. Run native-shell/extract.py on the XP ISO again.\n", notepad ? "notepad.exe" : "calc.exe");
-            return 1;
-        }
-        app.setApplicationName(QLatin1String(notepad ? "notepad" : "calc"));
-        app.setQuitOnLastWindowClosed(true);
-        if (notepad)
-            (new Notepad(parser.positionalArguments().value(0)))->show();
-        else
-            (new Calculator)->show();
-        return app.exec();
-    }
-    if (parser.isSet(QStringLiteral("picture"))) {
-        app.setApplicationName(QStringLiteral("shimgvw"));
-        app.setQuitOnLastWindowClosed(true);
-        pictures::Viewer::open(QFileInfo(parser.value(QStringLiteral("picture"))).absoluteFilePath());
         return app.exec();
     }
     if (parser.isSet(QStringLiteral("explore"))) {

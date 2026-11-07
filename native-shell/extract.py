@@ -243,12 +243,12 @@ SYSTEM_COLOURS = ('scrollbar', 'background', 'activecaption', 'inactivecaption',
 
 def write_schemes(output):
     """schemes.conf: Windows Classic's colour schemes as XP's Appearance page lists them, made from the
-    user's HIVEDEF.INF and themeui.dll the way XP's themeui does at first logon (prefix/xp_schemes.py):
+    user's HIVEDEF.INF and themeui.dll the way XP's themeui does at first logon (tools/xp_schemes.py):
     a section [Scheme | Size] per scheme and size, in XP's order, with its 31 colours as "r g b"."""
     inf, themeui = output / 'inf/hivedef.inf', output / 'system/themeui.dll'
     if not inf.is_file() or not themeui.is_file():
         return
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'prefix'))
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'tools'))
     import xp_schemes
     texts = xp_schemes.strings(str(themeui))
     names = [(i, texts[i]) for i in xp_schemes.NAMES if texts.get(i)]

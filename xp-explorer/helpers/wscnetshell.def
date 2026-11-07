@@ -1,4 +1,0 @@
-; netshell.dll beside XP's Security Center service (wscnetshell.c).
-LIBRARY netshell.dll
-EXPORTS
-    NcFreeNetconProperties = NcFreeNetconProperties@4
