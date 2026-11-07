@@ -9,7 +9,9 @@ gauge (0x2379, 0x2fc1) while native-shell/extract.py takes the user's XP files a
 programs are built, then "This portion of Setup has completed successfully" (0x232f)
 and its countdown (0x300c) before the graphical phase.
 
-  textmode.py --media ISO --setup FOLDER --log FILE
+  textmode.py --media ISO --setup FOLDER --log FILE [--demo]
+--demo shows the same screens without extracting or building anything: the gauge runs
+over the names of the files extract.py would take, in about DEMO_SECONDS.
 Exit status: 0 done, 3 the user quit (F3, or ESC on the licence), 1 a step failed.
 """
 import argparse
@@ -36,6 +38,7 @@ WILL_CONTINUE, RESTART_KEY, REBOOT_IN = 0x2394, 0x2393, 0x300c
 ENTER, F3, F8, ESC, PAGE_DOWN, PAGE_UP, RESTART = 0x2712, 0x2711, 0x2769, 0x276a, 0x276b, 0x276c, 0x271e
 LEFT = 3                        # the body's margin, in columns
 COUNTDOWN = 15
+DEMO_SECONDS = 20
 
 
 class Screen:
@@ -198,6 +201,21 @@ def copy(screen, args):
     return True
 
 
+def demo_copy(screen):
+    """The copy gauge without the work: the names of the files native-shell/extract.py takes."""
+    sys.path.insert(0, str(ROOT / 'native-shell'))
+    import extract
+    names = sorted({**extract.FILES, **extract.ICON_FILES, **extract.OOBE_FILES})
+    title = xpsetup.key_label(screen.message(COPYING_GAUGE))
+    copying = xpsetup.key_label(screen.message(COPYING))
+    screen.page('')
+    screen.body(screen.message(COPY_WAIT))
+    for i, name in enumerate(names):
+        screen.gauge(title, 100 * (i + 1) // len(names), f'{copying} {name}')
+        time.sleep(DEMO_SECONDS / len(names))
+    return True
+
+
 def completed(screen):
     """0x232f, then the countdown setupdd.sys shows before it restarts; ENTER goes on at once."""
     text = '\n'.join((screen.message(COMPLETED).rstrip('\n'), '', screen.message(WILL_CONTINUE).rstrip('\n'),
@@ -214,10 +232,13 @@ def completed(screen):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--media', required=True, help='the Windows XP ISO')
+    parser.add_argument('--media', help='the Windows XP ISO (not needed once FOLDER holds its files)')
     parser.add_argument('--setup', required=True, type=Path, help="where XP's setup files are kept")
     parser.add_argument('--log', required=True)
+    parser.add_argument('--demo', action='store_true', help='the screens only: nothing is extracted or built')
     args = parser.parse_args()
+    if not args.media and not all((args.setup / name).is_file() for name in xpsetup.FILES):
+        parser.error('--media is needed the first time')
     folder = xpsetup.media(args.media, args.setup)
     text = xpsetup.messages(folder / 'usetup.exe')
     eula = (folder / 'eula.txt').read_bytes().decode('cp1252', errors='replace').replace('\r\n', '\n')
@@ -225,7 +246,7 @@ def main():
     try:
         if not welcome(screen) or not licence(screen, eula):
             return 3
-        if not copy(screen, args):
+        if not (demo_copy(screen) if args.demo else copy(screen, args)):
             return 1
         completed(screen)
         return 0

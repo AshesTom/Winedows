@@ -10,6 +10,14 @@ setup would show it. Every word and picture comes from the user's ISO; none of X
    `setup/install_files.py` copies the session to the prefix and registers it.
 3. **Windows Welcome** (`greeter/xp-native-oobe.py`) at the first logon, from `native-shell/session.sh`.
 
+## Demo
+
+`./install.sh --demo` shows every screen with nothing built, copied or registered: the copy gauge runs over
+the names of the files `extract.py` would take (about 20 s), the billboard over what `install_files.py`
+would print (about 40 s, its panels every 6 s instead of 36), then Windows Welcome, whose choices go to a
+folder thrown away afterwards. `--media` is needed only the first time. `./xp.sh setup-demo [ISO] [WxH]`
+does the same with the billboard and Windows Welcome in a 1024 × 768 window instead of full screen.
+
 ## Where each thing comes from
 
 | Part | Source | How it was read |

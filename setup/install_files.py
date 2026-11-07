@@ -13,6 +13,7 @@ list (/usr/share/xsessions, with sudo); --greeter makes XP's Welcome screen Ligh
 greeter (greeter/install.sh).
 
   install_files.py --prefix PREFIX [--system] [--greeter]
+  install_files.py --demo           the same lines, over about DEMO_SECONDS, with nothing copied
 """
 import argparse
 import os
@@ -37,6 +38,25 @@ DesktopNames=XP-Shell
 '''
 
 
+DEMO_SECONDS = 40
+
+
+def demo():
+    """What the billboard is told during an install, without the install."""
+    say('step 3')
+    count = sum(1 for _ in files(TREE))
+    for percent in range(0, 71, 2):
+        say(f'minutes {max(1, (70 - percent) // 20 + 1)}')
+        say(f'progress {percent} {"@54" if percent < 30 else "@205"}')
+        time.sleep(DEMO_SECONDS * 0.7 / 36)
+    for line in ('progress 72 @1164', 'minutes 1', 'step 4', 'progress 80 @1165', 'progress 88 @1165',
+                 'progress 96 @1168', 'progress 100 @1168'):
+        say(line)
+        time.sleep(DEMO_SECONDS * 0.3 / 7)
+    say(f'(demo: {count} files would have been copied)')
+    return 0
+
+
 def say(line):
     print(line, flush=True)
 
@@ -54,10 +74,15 @@ def files(tree):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--prefix', type=Path, required=True)
+    parser.add_argument('--prefix', type=Path)
+    parser.add_argument('--demo', action='store_true')
     parser.add_argument('--system', action='store_true')
     parser.add_argument('--greeter', action='store_true')
     args = parser.parse_args()
+    if args.demo:
+        return demo()
+    if not args.prefix:
+        parser.error('--prefix is needed')
     prefix = args.prefix.expanduser().resolve()
     if not (ROOT / '.local/native-shell/bin/explorer').is_file():
         sys.exit('Build it first: native-shell/build.sh')

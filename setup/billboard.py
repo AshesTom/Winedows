@@ -17,7 +17,7 @@ It runs COMMAND and follows what it prints:
   minutes M         the time left
 Its other lines go to the log. The billboard ends with the command, and exits with its status.
 
-  billboard.py --setup FOLDER --assets ASSETS --log FILE -- COMMAND...
+  billboard.py --setup FOLDER --assets ASSETS --log FILE [--panel-seconds N] -- COMMAND...
 """
 import argparse
 import io
@@ -117,7 +117,8 @@ class Fonts:
 
 
 class Billboard:
-    def __init__(self, setup, assets):
+    def __init__(self, setup, assets, panel_seconds=PANEL_SECONDS):
+        self.panel_seconds = panel_seconds
         self.winntbbu = Resources(setup / 'winntbbu.dll')
         self.strings = xpsetup.strings(setup / 'winntbbu.dll')
         self.syssetup = xpsetup.strings(setup / 'syssetup.dll')
@@ -242,7 +243,7 @@ class Billboard:
         return surface
 
     def tick(self):
-        if time.monotonic() - self.panel_time >= PANEL_SECONDS:
+        if time.monotonic() - self.panel_time >= self.panel_seconds:
             self.panel = (self.panel + 1) % len(PANELS)
             self.panel_time = time.monotonic()
             return True
@@ -271,12 +272,13 @@ def main():
     parser.add_argument('--setup', type=Path, required=True)
     parser.add_argument('--assets', type=Path, required=True)
     parser.add_argument('--log', required=True)
+    parser.add_argument('--panel-seconds', type=float, default=PANEL_SECONDS, help="each panel's time (XP's: 36)")
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     cache = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'win4wine/setup'
     welcome.use_fonts(args.assets, cache)
-    board = Billboard(args.setup, args.assets)
+    board = Billboard(args.setup, args.assets, args.panel_seconds)
 
     from Xlib import X, Xatom, display
     d = display.Display()
