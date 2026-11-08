@@ -227,11 +227,15 @@ Page build(const w4w::PeResources &pe, const QString &name, QWidget *parent)
             QString words;
             static const QRegularExpression anchor(QStringLiteral("<[Aa]([^>]*)>(.*?)</[Aa]>"));
             qsizetype at = 0;
-            for (auto it = anchor.globalMatch(text); it.hasNext();) {
+            int link = 0;
+            for (auto it = anchor.globalMatch(text); it.hasNext(); ++link) {
                 const QRegularExpressionMatch match = it.next();
                 words += text.mid(at, match.capturedStart() - at).toHtmlEscaped();
                 static const QRegularExpression idAttribute(QStringLiteral("ID=\\\"([^\\\"]*)\\\""), QRegularExpression::CaseInsensitiveOption);
-                const QString id = idAttribute.match(match.captured(1)).captured(1);
+                // (Qt takes an empty href for no link: one without an ID is named by its place, as SysLink's iLink.)
+                QString id = idAttribute.match(match.captured(1)).captured(1);
+                if (id.isEmpty())
+                    id = QString::number(link);
                 words += QStringLiteral("<a href=\"%1\" style=\"color:#000080; text-decoration:underline\">%2</a>")
                              .arg(id.toHtmlEscaped(), match.captured(2).toHtmlEscaped());
                 at = match.capturedEnd();

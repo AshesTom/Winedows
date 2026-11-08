@@ -33,6 +33,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
+#include <QMainWindow>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPointer>
@@ -41,6 +42,7 @@
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScreen>
 #include <QSettings>
 #include <QSlider>
 #include <QStandardPaths>
@@ -54,6 +56,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include <pwd.h>
 #include <unistd.h>
 // (A field of this C header is named as a C++ keyword.)
 #define explicit explicit_
@@ -234,9 +237,36 @@ void showSystem()
     sheet->show();
 }
 
-// "About Windows" (winver): shell32.dll's dialog, its banner and its line. The version line is
-// the system's that really runs here, as in System Properties. A program's (ShellAbout) has its
-// name in the caption and the first line, and its icon.
+// The version line's words, as shell32's About box makes them from GetVersionEx and BuildLab
+// ("Version 5.1 (Build 2600.xpsp.080413-2111 : Service Pack 3)"): here the kernel's release
+// ("6.17.9-2-cachyos": 6.17, build 9, then the rest) and the system's name for the service pack.
+QString versionLine()
+{
+    const QString release = QSysInfo::kernelVersion();
+    static const QRegularExpression parts(QStringLiteral("^(\\d+)\\.(\\d+)(?:\\.(\\d+))?(.*)$"));
+    const QRegularExpressionMatch match = parts.match(release);
+    if (!match.hasMatch())
+        return QObject::tr("Version %1 (%2)").arg(release, osName());
+    // shell32's string 60, "Version %d.%d (Build %d%s)%s": the build's lab, " ", and ": %s" of the CSD
+    return QStringLiteral("Version %1.%2 (Build %3%4 : %5)")
+        .arg(match.captured(1), match.captured(2), match.captured(3).isEmpty() ? QStringLiteral("0") : match.captured(3), match.captured(4), osName());
+}
+
+// RegisteredOwner: the account's full name, as XP's setup asks for one
+QString ownerName()
+{
+    if (const passwd *entry = getpwuid(getuid()); entry && entry->pw_gecos) {
+        const QString name = QString::fromLocal8Bit(entry->pw_gecos).section(QLatin1Char(','), 0, 0).trimmed();
+        if (!name.isEmpty())
+            return name;
+    }
+    return qEnvironmentVariable("USER");
+}
+
+// shell32's About box (ShellAbout, and winver through it), as its dialog procedure fills and paints
+// template 14352 (xpsp1res.dll's): in the caption and the first line the program, or "Windows"; its icon, which
+// winver gives none of, so that the control is hidden; the system's version; the owner; the memory.
+// A program's name "Title#Line" puts each part in its own place, as ShellAbout does.
 void showAbout(const QString &program = QString(), const QImage &programIcon = QImage())
 {
     static QPointer<QDialog> open;
@@ -254,43 +284,78 @@ void showAbout(const QString &program = QString(), const QImage &programIcon = Q
         dialog->setWindowModality(Qt::WindowModal);
     open = dialog;
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    const xpdialog::Page page = xpdialog::build(*shell, 14352, dialog);
-    const QString windows = program.isEmpty() ? QStringLiteral("Windows") : program;
-    dialog->setWindowTitle(QString(page.caption).replace(QLatin1String("%s"), windows));
-    const auto picture = [&](int id, int y) {
+    // ShellAbout takes the template from xpsp1res.dll when there is one (SP1 and later moved its
+    // lines left, with no room kept for the icon that winver has not), else its own.
+    const auto sp1 = xpfiles::resources(xpfiles::find(QStringLiteral("xpsp1res.dll")));
+    const xpdialog::Page page = xpdialog::build(sp1 ? *sp1 : *shell, 14352, dialog);
+    const QString application = program.isEmpty() ? QStringLiteral("Windows") : program;
+    QString line = application;
+    if (const qsizetype hash = application.indexOf(QLatin1Char('#')); hash >= 0) {
+        dialog->setWindowTitle(application.left(hash));
+        line = application.mid(hash + 1);
+    } else {
+        dialog->setWindowTitle(QString(page.caption).replace(QLatin1String("%s"), application));
+    }
+    // WM_PAINT: the edition's banner (Professional's 131, or 130 at 256 colours or fewer) stretched from
+    // 413 x 72 to the client's width, and under it its line (138, or 137), 413 x 5 stretched the same way.
+    const int width = dialog->width(), bannerHeight = 72 * width / 413;
+    const auto picture = [&](int id, int y, int height) {
         auto *label = new QLabel(dialog);
-        const QImage image = xpfiles::bitmap(*shell, id);
-        label->setPixmap(QPixmap::fromImage(image));
-        label->setGeometry(0, y, image.width(), image.height());
+        label->setPixmap(QPixmap::fromImage(xpfiles::bitmap(*shell, id)));
+        label->setScaledContents(true);
+        label->setGeometry(0, y, width, height);
     };
-    // Banner 131, then its line 138: 256 colours, as XP's at more than 16
-    picture(131, 0);
-    picture(138, 72);
+    picture(131, 0, bannerHeight);
+    picture(138, bannerHeight, 5 * width / 413);
     const auto label = [&](int id) { return qobject_cast<QLabel *>(page.controls.value(id)); };
-    if (QLabel *icon = label(12297); icon && !programIcon.isNull()) {
-        icon->setPixmap(QPixmap::fromImage(programIcon));
-    } else if (icon) {
-        if (const auto explorer = xpfiles::resources(xpfiles::find(QStringLiteral("explorer.exe"))))
-            icon->setPixmap(QPixmap::fromImage(xpfiles::icon(*explorer, 100, 32)));
+    if (QLabel *icon = label(12297)) {
+        // STM_SETICON with no icon hides the control.
+        if (programIcon.isNull())
+            icon->hide();
+        else
+            icon->setPixmap(QPixmap::fromImage(programIcon));
     }
     const auto fill = [&](int id, const QString &value) {
-        if (QLabel *line = label(id))
-            line->setText(value);
+        if (QLabel *control = label(id))
+            control->setText(value);
     };
-    if (QLabel *line = label(13568))
-        line->setText(line->text().replace(QLatin1String("%s"), windows));
-    fill(13579, QObject::tr("%1, Linux %2").arg(osName(), QSysInfo::kernelVersion()));
-    if (QLabel *line = label(13578))
-        line->setText(line->text().replace(QLatin1String("%s"), QStringLiteral("1985-2001")));
-    fill(13575, qEnvironmentVariable("USER"));
-    fill(13576, QSysInfo::machineHostName());
-    // XP's words for it: the whole number of KB
-    fill(13571, QObject::tr("%1 KB").arg(QLocale().toString(memoryBytes() / 1024)));
+    const auto format = [&](int id, const QString &value) {
+        if (QLabel *control = label(id))
+            control->setText(control->text().replace(QLatin1String("%s"), value));
+    };
+    format(13568, line);
+    fill(13579, versionLine());
+    // shell32's own year, a constant of its code (SP3: "Copyright © 2007 Microsoft Corporation")
+    format(13578, QStringLiteral("2007"));
+    fill(13575, ownerName());
+    // RegisteredOrganization: Linux has none.
+    fill(13576, QString());
+    // GlobalMemoryStatusEx's total, rounded to the nearest KB, with the locale's thousands
+    fill(13571, QObject::tr("%1 KB").arg(QLocale().toString((memoryBytes() + 512) / 1024)));
+    // The licence's link opens eula.txt, from the user's media, in Notepad.
+    if (QLabel *licence = label(13586)) {
+        QObject::connect(licence, &QLabel::linkActivated, dialog, [] {
+            const QString eula = xpfiles::find(QStringLiteral("eula.txt"));
+            if (!eula.isEmpty())
+                programs::openNotepad(eula);
+        });
+    }
     if (auto *ok = qobject_cast<QPushButton *>(page.controls.value(1))) {
         ok->setDefault(true);
         QObject::connect(ok, &QPushButton::clicked, dialog, &QDialog::accept);
     }
-    xpdialog::placeUpperLeft(dialog);
+    // The template's place, 20, 20 dialog units from the screen's corner (the window's, its dialog
+    // frame included: SM_CXFIXEDFRAME's 3 pixels, under a caption 1 shorter than a sizing frame's);
+    // a program's from its owner's client area, under its menu bar.
+    const FrameStyle &frame = ShellTheme::instance()->frame();
+    const int fixed = ShellTheme::instance()->scaled(3);
+    QPoint corner = QGuiApplication::primaryScreen()->geometry().topLeft();
+    if (QWidget *owner = dialog->parentWidget()) {
+        QWidget *window = owner->window();
+        const auto *main = qobject_cast<QMainWindow *>(window);
+        corner = window->mapToGlobal(QPoint(0, main && main->menuWidget() ? main->menuWidget()->height() : 0));
+    }
+    dialog->move(corner + QPoint(xpdialog::unitX(20) + fixed, xpdialog::unitY(20) + frame.top - frame.border + fixed));
     dialog->show();
     dialog->activateWindow();
 }

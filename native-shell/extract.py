@@ -86,6 +86,8 @@ ICON_FILES = {
     'notepad.exe': 'system32', 'calc.exe': 'system32', 'comdlg32.dll': 'system32', 'lucon.ttf': 'fonts',
     # The Security Center: its notification icon and balloon, and its window
     'wscntfy.exe': 'security', 'xpsp2res.dll': 'security', 'wscui.cpl': 'security', 'inetcpl.cpl': 'security',
+    # About Windows' licence link (I386's; the other eula.txt on the media is a supplemental one)
+    'eula.txt': 'system32',
     # The tour's reminder: its notification icon
     'tourstart.exe': 'system32',
     # The Desktop Cleanup Wizard (fldrclnr.dll): its reminder, its pages and its words, and the welcome
@@ -258,7 +260,7 @@ def extract(source, output):
             source = MEDIA_NAMES.get(target, target)
             if name in (source, compressed(source)):
                 # A plain copy over a compressed one; the setup files' first otherwise.
-                if target not in wanted or name == source:
+                if target not in wanted or name == source and (target != 'eula.txt' or size > wanted[target][2]):
                     wanted[target] = (name, sector, size)
     missing = sorted(set(FILES) - set(wanted))
     if missing:
