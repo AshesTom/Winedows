@@ -22,12 +22,15 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
 #include <QGroupBox>
 #include <QHash>
+#include <QHeaderView>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -36,6 +39,8 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QSettings>
 #include <QSlider>
 #include <QStandardPaths>
@@ -46,6 +51,7 @@
 #include <QTimeEdit>
 #include <QTimeZone>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include <unistd.h>
@@ -718,6 +724,397 @@ void showNetwork()
     dialog->show();
 }
 
+// Keyboard Shortcuts (Printers and Other Hardware): keys that run a command on the Linux
+// system, whatever window is active. It edits ~/.config/win4wine/shortcuts.tsv, one
+// "keys<TAB>command" per line, which bridge-wm/hotkeys.py reads again when it changes.
+// The dialogs are the Wine session's (bridge-wm/shortcuts.rc, in dialog units).
+
+struct Shortcut
+{
+    QString keys, command;
+};
+
+// Key names as hotkeys.py reads them
+const struct { int key; const char *name; } KEY_NAMES[] = {
+    {Qt::Key_Print, "Print"}, {Qt::Key_Space, "Space"}, {Qt::Key_Return, "Return"}, {Qt::Key_Enter, "Return"},
+    {Qt::Key_Tab, "Tab"}, {Qt::Key_Escape, "Escape"}, {Qt::Key_Backspace, "Backspace"}, {Qt::Key_Delete, "Delete"},
+    {Qt::Key_Insert, "Insert"}, {Qt::Key_Home, "Home"}, {Qt::Key_End, "End"}, {Qt::Key_PageUp, "PageUp"},
+    {Qt::Key_PageDown, "PageDown"}, {Qt::Key_Left, "Left"}, {Qt::Key_Right, "Right"}, {Qt::Key_Up, "Up"},
+    {Qt::Key_Down, "Down"}, {Qt::Key_Pause, "Pause"}, {Qt::Key_Menu, "Menu"},
+};
+// XP's own keys, which hotkeys.py leaves to the shell and bridge-wm
+const char *const RESERVED_KEYS[] = {"Win+E", "Win+R", "Win+D", "Win+M", "Win+F", "Win+L", "Win+U", "Win+Tab", "Win+Pause",
+                                     "Win+F1", "Alt+Tab", "Alt+Shift+Tab", "Alt+F4", "Ctrl+Escape", "Ctrl+Alt+Delete", "Win+Shift+M"};
+
+QString shortcutsPath()
+{
+    return settingsPath("shortcuts.tsv");
+}
+
+// "Win+Ctrl+Alt+Shift+S": the order the list shows and writes, from any spelling hotkeys.py takes
+QString normalKeys(const QString &keys)
+{
+    const QStringList parts = keys.simplified().remove(QLatin1Char(' ')).split(QLatin1Char('+'));
+    if (parts.isEmpty() || parts.last().isEmpty())
+        return keys;
+    bool win = false, ctrl = false, alt = false, shift = false;
+    for (int i = 0; i < parts.size() - 1; ++i) {
+        const QString part = parts[i].toLower();
+        if (part == QLatin1String("win") || part == QLatin1String("meta") || part == QLatin1String("super"))
+            win = true;
+        else if (part == QLatin1String("ctrl") || part == QLatin1String("control"))
+            ctrl = true;
+        else if (part == QLatin1String("alt"))
+            alt = true;
+        else if (part == QLatin1String("shift"))
+            shift = true;
+        else
+            return keys;
+    }
+    QString key = parts.last();
+    static const QHash<QString, QString> aliases{{QStringLiteral("esc"), QStringLiteral("Escape")}, {QStringLiteral("enter"), QStringLiteral("Return")},
+                                                 {QStringLiteral("del"), QStringLiteral("Delete")}, {QStringLiteral("ins"), QStringLiteral("Insert")},
+                                                 {QStringLiteral("pgup"), QStringLiteral("PageUp")}, {QStringLiteral("prior"), QStringLiteral("PageUp")},
+                                                 {QStringLiteral("pgdown"), QStringLiteral("PageDown")}, {QStringLiteral("next"), QStringLiteral("PageDown")},
+                                                 {QStringLiteral("printscreen"), QStringLiteral("Print")}};
+    if (key.size() == 1)
+        key = key.toUpper();
+    else if (aliases.contains(key.toLower()))
+        key = aliases.value(key.toLower());
+    else
+        for (const auto &each : KEY_NAMES)
+            if (key.compare(QLatin1String(each.name), Qt::CaseInsensitive) == 0)
+                key = QLatin1String(each.name);
+    QString out;
+    if (win)
+        out += QStringLiteral("Win+");
+    if (ctrl)
+        out += QStringLiteral("Ctrl+");
+    if (alt)
+        out += QStringLiteral("Alt+");
+    if (shift)
+        out += QStringLiteral("Shift+");
+    return out + key;
+}
+
+// As XP's hotkey control and the list show keys: "Win + Shift + S"
+QString spacedKeys(const QString &keys)
+{
+    return normalKeys(keys).split(QLatin1Char('+')).join(QStringLiteral(" + "));
+}
+
+QList<Shortcut> readShortcuts()
+{
+    QList<Shortcut> out;
+    QFile file(shortcutsPath());
+    if (!file.open(QIODevice::ReadOnly))
+        return out;
+    for (const QString &line : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'))) {
+        const int tab = line.indexOf(QLatin1Char('\t'));
+        if (line.trimmed().startsWith(QLatin1Char('#')) || tab <= 0 || line.mid(tab + 1).trimmed().isEmpty())
+            continue;
+        out.append({line.left(tab).trimmed(), line.mid(tab + 1).trimmed()});
+    }
+    return out;
+}
+
+bool writeShortcuts(const QList<Shortcut> &shortcuts)
+{
+    QDir().mkpath(QFileInfo(shortcutsPath()).absolutePath());
+    QSaveFile file(shortcutsPath());
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    QByteArray text = "# Keyboard shortcuts of the XP session: a key combination, a tab, a command.\n"
+                      "# Control Panel > Printers and Other Hardware > Keyboard Shortcuts edits this file.\n";
+    for (const Shortcut &shortcut : shortcuts)
+        text += shortcut.keys.toUtf8() + '\t' + shortcut.command.toUtf8() + '\n';
+    file.write(text);
+    return file.commit();
+}
+
+// comctl32's hotkey control: the keys pressed in it, "None" without. The Windows key is
+// bridge-wm's while it is down, so a check box beside it stands for it.
+class HotkeyEdit : public QLineEdit
+{
+public:
+    explicit HotkeyEdit(QWidget *parent)
+        : QLineEdit(parent)
+    {
+        setContextMenuPolicy(Qt::NoContextMenu);
+        show(QString());
+    }
+    QString keys() const { return m_keys; }
+    void setKeys(const QString &keys) { show(keys); }
+    std::function<void(bool)> windowsKey;
+
+protected:
+    bool event(QEvent *event) override
+    {
+        // Tab and the dialog's mnemonics too are keys of a shortcut here, as in XP's control.
+        if (event->type() == QEvent::ShortcutOverride) {
+            event->accept();
+            return true;
+        }
+        if (event->type() == QEvent::KeyPress) {
+            keyPressEvent(static_cast<QKeyEvent *>(event));
+            return true;
+        }
+        return QLineEdit::event(event);
+    }
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        const int key = event->key();
+        const Qt::KeyboardModifiers modifiers = event->modifiers();
+        QString name;
+        if ((key >= Qt::Key_A && key <= Qt::Key_Z) || (key >= Qt::Key_0 && key <= Qt::Key_9))
+            name = QChar(key);
+        else if (key >= Qt::Key_F1 && key <= Qt::Key_F24)
+            name = QStringLiteral("F%1").arg(key - Qt::Key_F1 + 1);
+        else if (key == Qt::Key_Backtab)
+            name = QStringLiteral("Tab");
+        else
+            for (const auto &each : KEY_NAMES)
+                if (each.key == key)
+                    name = QLatin1String(each.name);
+        if (name.isEmpty()) {
+            // A modifier alone, as XP's control shows it while it waits for the key
+            if (key == Qt::Key_Backspace || key == Qt::Key_Delete)
+                show(QString());
+            else
+                setText(spacedKeys(prefix(modifiers) + QStringLiteral("x")).chopped(1));
+            return;
+        }
+        // Backspace and Delete alone clear the control, as in XP.
+        if ((key == Qt::Key_Backspace || key == Qt::Key_Delete) && !(modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+            show(QString());
+            return;
+        }
+        if (modifiers & Qt::MetaModifier && windowsKey)
+            windowsKey(true);
+        show(prefix(modifiers & ~Qt::MetaModifier) + name);
+    }
+    void keyReleaseEvent(QKeyEvent *) override { show(m_keys); }
+
+private:
+    static QString prefix(Qt::KeyboardModifiers modifiers)
+    {
+        QString out;
+        if (modifiers & Qt::MetaModifier)
+            out += QStringLiteral("Win+");
+        if (modifiers & Qt::ControlModifier)
+            out += QStringLiteral("Ctrl+");
+        if (modifiers & Qt::AltModifier)
+            out += QStringLiteral("Alt+");
+        if (modifiers & Qt::ShiftModifier)
+            out += QStringLiteral("Shift+");
+        return out;
+    }
+    void show(const QString &keys)
+    {
+        m_keys = keys;
+        setText(keys.isEmpty() ? QObject::tr("None") : spacedKeys(keys));
+        setCursorPosition(text().size());
+    }
+
+    QString m_keys;
+};
+
+// A program for the command: a desktop file's Exec without its field codes, else the file, quoted
+QString commandOf(const QString &path)
+{
+    if (path.endsWith(QLatin1String(".desktop"))) {
+        QSettings entry(path, QSettings::IniFormat);
+        const QString exec = entry.value(QStringLiteral("Desktop Entry/Exec")).toString();
+        if (!exec.isEmpty())
+            return exec.split(QLatin1Char(' ')).filter(QRegularExpression(QStringLiteral("^(?!%[a-zA-Z]$)"))).join(QLatin1Char(' ')).trimmed();
+    }
+    return path.contains(QLatin1Char(' ')) ? QLatin1Char('\'') + path + QLatin1Char('\'') : path;
+}
+
+// IDD_ENTRY: a shortcut's keys and command. Whether it was accepted.
+bool editShortcut(QWidget *owner, Shortcut &shortcut, const QList<Shortcut> &others)
+{
+    using xpdialog::unitX, xpdialog::unitY;
+    QDialog dialog(owner);
+    dialog.setWindowTitle(QObject::tr("Shortcut"));
+    dialog.setFixedSize(unitX(250), unitY(98));
+    const auto place = [](QWidget *widget, int x, int y, int width, int height) { widget->setGeometry(unitX(x), unitY(y), unitX(width), unitY(height)); };
+    auto *keyLabel = new QLabel(QObject::tr("Shortcut &key:"), &dialog);
+    place(keyLabel, 7, 9, 56, 8);
+    auto *hotkey = new HotkeyEdit(&dialog);
+    place(hotkey, 66, 7, 110, 13);
+    keyLabel->setBuddy(hotkey);
+    auto *windows = new QCheckBox(QObject::tr("&Windows key"), &dialog);
+    place(windows, 182, 9, 62, 10);
+    hotkey->windowsKey = [windows](bool on) { windows->setChecked(on); };
+    auto *commandLabel = new QLabel(QObject::tr("&Command:"), &dialog);
+    place(commandLabel, 7, 31, 56, 8);
+    auto *command = new QLineEdit(shortcut.command, &dialog);
+    place(command, 66, 29, 120, 13);
+    commandLabel->setBuddy(command);
+    auto *browse = new QPushButton(QObject::tr("&Browse..."), &dialog);
+    place(browse, 191, 28, 53, 14);
+    auto *hint = new QLabel(QObject::tr("The command runs on the Linux system, as in a terminal (for example: spectacle -r)."), &dialog);
+    hint->setWordWrap(true);
+    hint->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    place(hint, 66, 46, 178, 18);
+    auto *ok = new QPushButton(QObject::tr("OK"), &dialog);
+    place(ok, 135, 77, 53, 14);
+    ok->setDefault(true);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), &dialog);
+    place(cancel, 191, 77, 53, 14);
+
+    QString keys = normalKeys(shortcut.keys);
+    if (keys.startsWith(QLatin1String("Win+"))) {
+        windows->setChecked(true);
+        keys = keys.mid(4);
+    }
+    hotkey->setKeys(keys);
+
+    QObject::connect(browse, &QPushButton::clicked, &dialog, [&] {
+        const QString chosen = QFileDialog::getOpenFileName(&dialog, QObject::tr("Browse"), QStringLiteral("/usr/share/applications"),
+                                                            QObject::tr("Programs (*.desktop);;All Files (*)"));
+        if (!chosen.isEmpty())
+            command->setText(commandOf(chosen));
+    });
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
+        const QString title = QObject::tr("Keyboard Shortcuts");
+        if (hotkey->keys().isEmpty()) {
+            QMessageBox::warning(&dialog, title, QObject::tr("Press the keys of the shortcut in the Shortcut key box."));
+            return;
+        }
+        if (command->text().trimmed().isEmpty()) {
+            QMessageBox::warning(&dialog, title, QObject::tr("Type the command that the shortcut runs."));
+            return;
+        }
+        const QString chosen = normalKeys((windows->isChecked() ? QStringLiteral("Win+") : QString()) + hotkey->keys());
+        for (const char *reserved : RESERVED_KEYS)
+            if (chosen == normalKeys(QLatin1String(reserved))) {
+                QMessageBox::warning(&dialog, title, QObject::tr("%1 is a key of Windows. Choose another shortcut key.").arg(spacedKeys(chosen)));
+                return;
+            }
+        for (const Shortcut &other : others)
+            if (normalKeys(other.keys) == chosen
+                && QMessageBox::question(&dialog, title, QObject::tr("%1 already starts \"%2\". Replace it?").arg(spacedKeys(chosen), other.command)) != QMessageBox::Yes)
+                return;
+        shortcut = {chosen, command->text().trimmed()};
+        dialog.accept();
+    });
+    return dialog.exec() == QDialog::Accepted;
+}
+
+// IDD_MAIN
+void showShortcuts()
+{
+    using xpdialog::unitX, xpdialog::unitY;
+    auto *dialog = new QDialog;
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QObject::tr("Keyboard Shortcuts"));
+    dialog->setFixedSize(unitX(290), unitY(206));
+    const auto place = [](QWidget *widget, int x, int y, int width, int height) { widget->setGeometry(unitX(x), unitY(y), unitX(width), unitY(height)); };
+    auto *text = new QLabel(QObject::tr("Shortcut keys start a program or run a command, whatever window is active. Press the keys of a shortcut to run its command."), dialog);
+    text->setWordWrap(true);
+    text->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    place(text, 7, 7, 276, 18);
+    auto *list = new QTreeWidget(dialog);
+    place(list, 7, 30, 276, 128);
+    list->setRootIsDecorated(false);
+    list->setAllColumnsShowFocus(true);
+    list->setHeaderLabels({QObject::tr("Shortcut key"), QObject::tr("Command")});
+    list->header()->setSectionsMovable(false);
+    list->setColumnWidth(0, unitX(90));
+    auto *add = new QPushButton(QObject::tr("&New..."), dialog);
+    place(add, 116, 163, 53, 14);
+    auto *edit = new QPushButton(QObject::tr("&Edit..."), dialog);
+    place(edit, 173, 163, 53, 14);
+    auto *remove = new QPushButton(QObject::tr("&Remove"), dialog);
+    place(remove, 230, 163, 53, 14);
+    auto *ok = new QPushButton(QObject::tr("OK"), dialog);
+    place(ok, 116, 185, 53, 14);
+    ok->setDefault(true);
+    auto *cancel = new QPushButton(QObject::tr("Cancel"), dialog);
+    place(cancel, 173, 185, 53, 14);
+    auto *apply = new QPushButton(QObject::tr("&Apply"), dialog);
+    place(apply, 230, 185, 53, 14);
+    apply->setEnabled(false);
+
+    auto shortcuts = std::make_shared<QList<Shortcut>>(readShortcuts());
+    const auto fill = [=](int current) {
+        list->clear();
+        for (const Shortcut &shortcut : std::as_const(*shortcuts))
+            list->addTopLevelItem(new QTreeWidgetItem({spacedKeys(shortcut.keys), shortcut.command}));
+        if (current >= 0 && current < list->topLevelItemCount())
+            list->setCurrentItem(list->topLevelItem(current));
+        edit->setEnabled(list->currentItem());
+        remove->setEnabled(list->currentItem());
+    };
+    fill(0);
+    QObject::connect(list, &QTreeWidget::currentItemChanged, dialog, [=](QTreeWidgetItem *item) {
+        edit->setEnabled(item);
+        remove->setEnabled(item);
+    });
+    // A shortcut new or changed: those with the same keys go.
+    const auto store = [=](int index, const Shortcut &shortcut) {
+        int at = index;
+        for (int i = int(shortcuts->size()) - 1; i >= 0; --i)
+            if (i != index && normalKeys(shortcuts->at(i).keys) == shortcut.keys) {
+                shortcuts->removeAt(i);
+                if (i < at)
+                    --at;
+            }
+        if (at < 0) {
+            shortcuts->append(shortcut);
+            at = int(shortcuts->size()) - 1;
+        } else
+            (*shortcuts)[at] = shortcut;
+        fill(at);
+        apply->setEnabled(true);
+    };
+    QObject::connect(add, &QPushButton::clicked, dialog, [=] {
+        Shortcut shortcut;
+        if (editShortcut(dialog, shortcut, *shortcuts))
+            store(-1, shortcut);
+    });
+    const auto change = [=] {
+        const int index = list->indexOfTopLevelItem(list->currentItem());
+        if (index < 0)
+            return;
+        Shortcut shortcut = shortcuts->at(index);
+        QList<Shortcut> others = *shortcuts;
+        others.removeAt(index);
+        if (editShortcut(dialog, shortcut, others))
+            store(index, shortcut);
+    };
+    QObject::connect(edit, &QPushButton::clicked, dialog, change);
+    QObject::connect(list, &QTreeWidget::itemDoubleClicked, dialog, change);
+    QObject::connect(remove, &QPushButton::clicked, dialog, [=] {
+        const int index = list->indexOfTopLevelItem(list->currentItem());
+        if (index < 0)
+            return;
+        shortcuts->removeAt(index);
+        fill(qMin(index, int(shortcuts->size()) - 1));
+        apply->setEnabled(true);
+    });
+    const auto save = [=] {
+        if (!apply->isEnabled())
+            return true;
+        if (!writeShortcuts(*shortcuts)) {
+            QMessageBox::critical(dialog, QObject::tr("Keyboard Shortcuts"), QObject::tr("The shortcuts could not be saved."));
+            return false;
+        }
+        apply->setEnabled(false);
+        return true;
+    };
+    QObject::connect(apply, &QPushButton::clicked, dialog, save);
+    QObject::connect(ok, &QPushButton::clicked, dialog, [=] {
+        if (save())
+            dialog->accept();
+    });
+    QObject::connect(cancel, &QPushButton::clicked, dialog, &QDialog::reject);
+    dialog->show();
+}
+
 } // namespace
 
 namespace applets {
@@ -746,6 +1143,8 @@ void open(const QString &id)
         showMouse();
     else if (id == QLatin1String("keyboard"))
         showKeyboard();
+    else if (id == QLatin1String("shortcuts"))
+        showShortcuts();
     else if (id == QLatin1String("users"))
         showUsers();
     else if (id == QLatin1String("folders"))

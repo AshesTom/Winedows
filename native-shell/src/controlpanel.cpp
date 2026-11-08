@@ -87,6 +87,8 @@ QList<Applet> applets()
     add("system", cplString("sysdm.cpl", 1, "System"), QT_TR_NOOP("See information about your computer system."), cplIcon("sysdm.cpl", 1, 16), Performance);
     add("mouse", cplString("main.cpl", 100, "Mouse"), QT_TR_NOOP("Customize your mouse settings, such as the button configuration and pointer speed."), cplIcon("main.cpl", 100, 3), Hardware);
     add("keyboard", cplString("main.cpl", 102, "Keyboard"), QT_TR_NOOP("Customize your keyboard settings, such as the cursor blink rate and the character repeat rate."), cplIcon("main.cpl", 104, 3), Hardware);
+    // Shortcut keys for programs, which bridge-wm takes whatever window is active (applets.cpp)
+    add("shortcuts", QObject::tr("Keyboard Shortcuts"), QT_TR_NOOP("Start programs with shortcut keys, from any window."), cplIcon("main.cpl", 104, 3), Hardware);
     if (installed("system-config-printer"))
         add("printers", xpfiles::shellString(9319, "Printers and Faxes"), QT_TR_NOOP("Shows installed printers and fax printers."), fileicons::shell(fileicons::Printer), Hardware);
     add("users", cplString("nusrmgr.cpl", 101, "User Accounts"), QT_TR_NOOP("Change your picture on the Welcome screen and the Start menu."), cplIcon("nusrmgr.cpl", 200, 269), Users);
