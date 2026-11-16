@@ -676,6 +676,11 @@ void openCalculator()
     QProcess::startDetached(xpapp::sibling(QStringLiteral("calc")), {}, QDir::homePath());
 }
 
+void openGame(const QString &program)
+{
+    QProcess::startDetached(xpapp::sibling(program), {}, QDir::homePath());
+}
+
 void openMediaPlayer(const QStringList &files)
 {
     // wmplayer, beside the shell

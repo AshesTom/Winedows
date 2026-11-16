@@ -267,7 +267,7 @@ QString ownerName()
 // template 14352 (xpsp1res.dll's): in the caption and the first line the program, or "Windows"; its icon, which
 // winver gives none of, so that the control is hidden; the system's version; the owner; the memory.
 // A program's name "Title#Line" puts each part in its own place, as ShellAbout does.
-void showAbout(const QString &program = QString(), const QImage &programIcon = QImage())
+void showAbout(const QString &program = QString(), const QImage &programIcon = QImage(), const QString &other = QString())
 {
     static QPointer<QDialog> open;
     if (open) {
@@ -327,6 +327,7 @@ void showAbout(const QString &program = QString(), const QImage &programIcon = Q
     fill(13579, versionLine());
     // shell32's own year, a constant of its code (SP3: "Copyright © 2007 Microsoft Corporation")
     format(13578, QStringLiteral("2007"));
+    fill(13581, other);
     fill(13575, ownerName());
     // RegisteredOrganization: Linux has none.
     fill(13576, QString());
@@ -1225,9 +1226,9 @@ void open(const QString &id)
             windows.insert(id, widget);
 }
 
-void about(const QString &program, const QImage &icon)
+void about(const QString &program, const QImage &icon, const QString &other)
 {
-    showAbout(program, icon);
+    showAbout(program, icon, other);
 }
 
 void applyInputSettings()

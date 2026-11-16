@@ -34,6 +34,12 @@ add_library(xpshell STATIC
     src/fileops.cpp src/fileops.h
     src/fileproperties.cpp src/fileproperties.h
     src/foldercustomize.cpp src/foldercustomize.h
+    src/minesweeper.cpp src/minesweeper.h
+    src/cards.cpp src/cards.h
+    src/solitaire.cpp src/solitaire.h
+    src/freecell.cpp src/freecell.h
+    src/spider.cpp src/spider.h
+    src/hearts.cpp src/hearts.h
     src/notepad.cpp src/notepad.h
     src/pictures.cpp src/pictures.h
     src/searchcompanion.cpp src/searchcompanion.h
@@ -135,9 +141,14 @@ add_executable(notepad apps/notepad.cpp)
 add_executable(calc apps/calc.cpp)
 add_executable(cmd apps/cmd.cpp)
 add_executable(shimgvw apps/shimgvw.cpp)
-foreach(program explorer notepad calc cmd shimgvw)
+add_executable(winmine apps/winmine.cpp)
+add_executable(sol apps/sol.cpp)
+add_executable(freecell apps/freecell.cpp)
+add_executable(spider apps/spider.cpp)
+add_executable(mshearts apps/mshearts.cpp)
+foreach(program explorer notepad calc cmd shimgvw winmine sol freecell spider mshearts)
     target_link_libraries(${program} PRIVATE xpshell)
     target_compile_options(${program} PRIVATE -Wall -Wextra)
 endforeach()
-install(TARGETS explorer notepad calc cmd shimgvw RUNTIME DESTINATION bin)
+install(TARGETS explorer notepad calc cmd shimgvw winmine sol freecell spider mshearts RUNTIME DESTINATION bin)
 install(FILES xp-cmd.bashrc DESTINATION share/win4wine)

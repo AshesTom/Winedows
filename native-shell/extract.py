@@ -109,7 +109,9 @@ PROGRAM_FILES = dict.fromkeys((
     'hypertrm.exe', 'hnetwiz.dll', 'sndrec32.exe', 'ntbackup.exe', 'charmap.exe', 'cleanmgr.exe', 'dfrgres.dll',
     'migwiz.exe', 'mstask.dll', 'msinfo32.exe', 'rstrui.exe', 'freecell.exe', 'mshearts.exe', 'bckgzm.exe', 'chkrzm.exe',
     'hrtzzm.exe', 'rvsezm.exe', 'shvlzm.exe', 'winmine.exe', 'pinball.exe', 'sol.exe', 'spider.exe', 'msnms.ico',
-    'xpsp1res.dll', 'helpctr.exe'), 'programs')
+    'xpsp1res.dll', 'helpctr.exe',
+    # The games' cards (Solitaire, FreeCell and Hearts draw theirs from cards.dll)
+    'cards.dll'), 'programs')
 ICON_FILES.update(PROGRAM_FILES)
 # Files only inside a cabinet of several files on the media: the cabinet they are in
 CAB_MEMBERS = {'msmsgs.exe': ('mmssetup.cab', 'programs')}

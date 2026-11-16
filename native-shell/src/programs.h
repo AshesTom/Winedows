@@ -62,6 +62,8 @@ void openCommandPrompt(const QString &folder);
 // XP's Notepad (with FILE, if any) and Calculator, each a program of its own
 void openNotepad(const QString &file = QString());
 void openCalculator();
+// A game of XP's by its file's name (winmine, sol), each a program of its own
+void openGame(const QString &program);
 void openMediaPlayer(const QStringList &files = {});
 // XP's Internet Explorer on ADDRESS (its home page without one); the desktop's browser without it
 void openInternetExplorer(const QString &address = QString());

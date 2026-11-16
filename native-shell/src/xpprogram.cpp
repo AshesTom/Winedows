@@ -89,8 +89,13 @@ int qtKey(int vk)
 
 QHash<int, QAction *> fillMenuBar(QMenuBar *bar, const w4w::PeResources &pe, int id)
 {
+    return fillMenuBar(bar, pe, QString::number(id));
+}
+
+QHash<int, QAction *> fillMenuBar(QMenuBar *bar, const w4w::PeResources &pe, const QString &name)
+{
     QHash<int, QAction *> actions;
-    const QByteArray data = pe.find(QStringLiteral("4"), QString::number(id));
+    const QByteArray data = pe.find(QStringLiteral("4"), name);
     Reader r(data);
     // MENUHEADER: version 0 and the offset of the items
     if (r.u16() != 0)
@@ -107,9 +112,11 @@ QHash<int, QAction *> fillMenuBar(QMenuBar *bar, const w4w::PeResources &pe, int
                 const int command = r.u16();
                 const QString text = r.text();
                 if (command == 0 && text.isEmpty()) {
-                    menu->addSeparator();
+                    if (menu)
+                        menu->addSeparator();
                 } else {
-                    QAction *action = menu->addAction(text);
+                    // A command of the bar itself (Spider's "Deal!")
+                    QAction *action = menu ? menu->addAction(text) : bar->addAction(text);
                     action->setCheckable(flags & MF_CHECKED);
                     action->setChecked(flags & MF_CHECKED);
                     action->setEnabled(!(flags & MF_GRAYED));

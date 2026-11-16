@@ -19,6 +19,7 @@ namespace {
 enum Action {
     None, Notepad, Calculator, CommandPrompt, MediaPlayer, Browser, WindowsExplorer, NetworkConnections, SecurityCenter,
     Help, ProgramAccess, Sound,
+    Game,   // a program beside the shell named as XP's file is
 };
 
 struct Shortcut
@@ -83,17 +84,17 @@ const Shortcut SHORTCUTS[] = {
     {"Accessories/System Tools", "shell32.dll", 22063, "System Information", "msinfo32.exe", 0, None, nullptr},
     {"Accessories/System Tools", nullptr, 0, "System Restore", "rstrui.exe", 0, None, nullptr},
     // Games
-    {"Games", "shell32.dll", 22030, "FreeCell", "freecell.exe", 0, None, nullptr},
-    {"Games", nullptr, 0, "Hearts", "mshearts.exe", 0, None, nullptr},
+    {"Games", "shell32.dll", 22030, "FreeCell", "freecell.exe", 0, Game, nullptr},
+    {"Games", nullptr, 0, "Hearts", "mshearts.exe", 0, Game, nullptr},
     {"Games", nullptr, 0, "Internet Backgammon", "bckgzm.exe", 0, None, nullptr},
     {"Games", nullptr, 0, "Internet Checkers", "chkrzm.exe", 0, None, nullptr},
     {"Games", nullptr, 0, "Internet Hearts", "hrtzzm.exe", 0, None, nullptr},
     {"Games", nullptr, 0, "Internet Reversi", "rvsezm.exe", 0, None, nullptr},
     {"Games", nullptr, 0, "Internet Spades", "shvlzm.exe", 0, None, nullptr},
-    {"Games", "shell32.dll", 22045, "Minesweeper", "winmine.exe", 0, None, nullptr},
+    {"Games", "shell32.dll", 22045, "Minesweeper", "winmine.exe", 0, Game, nullptr},
     {"Games", "shell32.dll", 22057, "Pinball", "pinball.exe", 0, None, nullptr},
-    {"Games", "shell32.dll", 22060, "Solitaire", "sol.exe", 0, None, nullptr},
-    {"Games", nullptr, 0, "Spider Solitaire", "spider.exe", 0, None, nullptr},
+    {"Games", "shell32.dll", 22060, "Solitaire", "sol.exe", 0, Game, nullptr},
+    {"Games", nullptr, 0, "Spider Solitaire", "spider.exe", 0, Game, nullptr},
 };
 
 // The groups under Programs and their words in shell32.dll (syssetup.inf's [StartMenuGroups])
@@ -154,6 +155,10 @@ std::function<void()> actionOf(const Shortcut &shortcut)
     case Help: return [target] { programs::openHelpCenter(target); };
     case ProgramAccess: return [] { applets::open(QStringLiteral("programs")); };
     case Sound: return [] { applets::open(QStringLiteral("sound")); };
+    case Game: {
+        const QString program = QString::fromLatin1(shortcut.iconFile).section(QLatin1Char('.'), 0, 0);
+        return [program] { programs::openGame(program); };
+    }
     case None: break;
     }
     // A program XP has and this session does not port yet: a shortcut that does nothing
