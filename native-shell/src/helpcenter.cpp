@@ -2,6 +2,7 @@
 #include "helpcenter.h"
 
 #include "browserbands.h"
+#include "fontpolicy.h"
 #include "programs.h"
 #include "theme.h"
 #include "xpfiles.h"
@@ -217,6 +218,20 @@ Topic topic(const QString &node)
                     words.chop(1);
                 return cache[node] = {node, words, QString()};
             }
+    // Some records keep their title away from their ID: any words of the database with those letters
+    static const QHash<QString, QString> byLetters = [] {
+        QHash<QString, QString> found;
+        for (QString words : wordsAt(data, 0, data.size())) {
+            while (!words.isEmpty() && !words.back().isLetterOrNumber() && !QStringLiteral(".?)").contains(words.back()))
+                words.chop(1);
+            const QString key = QString(words).remove(notWord);
+            if (key.size() >= 3 && !found.contains(key))
+                found.insert(key, words);
+        }
+        return found;
+    }();
+    if (const QString title = byLetters.value(letters); !title.isEmpty())
+        return cache[node] = {node, title, QString()};
     return cache[node] = {node, QString(node).replace(QLatin1Char('_'), QLatin1Char(' ')).simplified(), QString()};
 }
 
@@ -225,21 +240,45 @@ QString escaped(const QString &text)
     return text.toHtmlEscaped();
 }
 
-// The pages' style: Verdana Bold headings and Tahoma 8 in white on the home page's blue, as on XP (its
-// headings are 18 pixels: their widths are Verdana Bold's hdmx advances at 18 ppem)
+// A heading as XP draws it: Arial Bold 22 px (matched pixel by pixel on XP SP3's home page), hinted
+// whole by its TrueType instructions and greyed by GDI's Standard smoothing (fontpolicy.h). Chromium
+// smooths its own outlines, so the headings are pictures of the shell's text in the page.
+QString heading(QString text)
+{
+    text = QString(text).remove(QRegularExpression(QStringLiteral("<[^>]*>"))).simplified();
+    QFont font(QStringLiteral("Arial"));
+    font.setBold(true);
+    font.setPixelSize(22);
+    w4w::xpFontSmoothing(font, 22);
+    const QFontMetrics metrics(font);
+    QImage image(metrics.horizontalAdvance(text) + 2, metrics.height(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    {
+        QPainter painter(&image);
+        painter.setFont(font);
+        w4w::drawGdiText(&painter, image.rect(), Qt::AlignLeft | Qt::AlignTop | Qt::TextSingleLine, text, QColor(QLatin1String(HEADING_COLOUR)));
+    }
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    return QStringLiteral("<img style='display: block' alt='%1' src='data:image/png;base64,%2'>").arg(escaped(text), QString::fromLatin1(png.toBase64()));
+}
+
+// The pages' style: Tahoma 8 in white on the home page's blue, as on XP; the headings are pictures (heading())
 QString page(const QString &title, const QString &body)
 {
     return QStringLiteral(
                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>%1</title><style>"
                "body { margin: 5px; background: %2; color: white; font: 8pt Tahoma; cursor: default; }"
-               "h2 { font: bold 18px Verdana; color: %3; margin: 0; white-space: nowrap; }"
+               "h2 { margin: 0; line-height: 0; }"
                "a { color: white; text-decoration: none; } a:hover { text-decoration: underline; }"
-               "ul { margin: 0; padding-left: 15px; } li { color: %4; margin: 0 0 4px 0; } li a { font-weight: bold; }"
-               ".topics td { padding-bottom: 33px; vertical-align: middle; }"
-               ".link { margin-bottom: 15px; } .link img { width: 16px; height: 16px; vertical-align: middle; margin-right: 6px; }"
+               "ul { margin: 0; padding-left: 15px; } li { color: %3; margin: 0 0 5px 0; } li a { font-weight: bold; }"
+               ".topics td { padding-bottom: 28px; vertical-align: middle; }"
+               ".link { margin: 0 0 16px 4px; } .link img { width: 16px; height: 16px; vertical-align: middle; margin-right: 6px; }"
                "p { margin: 0 0 8px 0; }"
-               "</style></head><body>%5</body></html>")
-        .arg(escaped(title), QLatin1String(PAGE_COLOUR), QLatin1String(HEADING_COLOUR), QLatin1String(BULLET_COLOUR), body);
+               "</style></head><body>%4</body></html>")
+        .arg(escaped(title), QLatin1String(PAGE_COLOUR), QLatin1String(BULLET_COLOUR), body);
 }
 
 QString homePage()
@@ -247,7 +286,7 @@ QString homePage()
     const HomeWords &words = homeWords();
     QString left = QStringLiteral("<table class='topics' cellspacing=0 cellpadding=0>");
     for (int bucket = 0; bucket < 4; ++bucket) {
-        left += QStringLiteral("<tr><td style='width: 66px; padding-left: 16px'><img src='%1' width=48 height=48></td><td><ul>").arg(picture(BUCKET_ICONS[bucket]));
+        left += QStringLiteral("<tr><td style='width: 66px; padding-left: 13px'><img src='%1' width=48 height=48></td><td style='padding-right: 12px'><ul>").arg(picture(BUCKET_ICONS[bucket]));
         for (const QString &node : BUCKETS[bucket])
             left += QStringLiteral("<li><a href='hcp://topic/%1'>%2</a></li>").arg(node, escaped(topic(node).title));
         left += QStringLiteral("</ul></td></tr>");
@@ -260,29 +299,29 @@ QString homePage()
             .arg(href, escaped(words.title.value(key, words.title.value(key + QStringLiteral("_a")))), arrow,
                  homeWord(key + QStringLiteral("_b"), fallback).replace(QLatin1String("<ID"), QLatin1String("<span")).replace(QLatin1String("</ID>"), QLatin1String("</span>")));
     };
-    QString right = QStringLiteral("<h2 style='margin-bottom: 18px'>%1</h2>").arg(homeWord(QStringLiteral("locRightTitle"), "Ask for assistance"));
+    QString right = QStringLiteral("<h2 style='margin-bottom: 14px'>%1</h2>").arg(heading(homeWord(QStringLiteral("locRightTitle"), "Ask for assistance")));
     right += link("center_RA", "Invite a friend to connect to your computer with <B>Remote Assistance</B>", QStringLiteral("hcp://page/remote-assistance"));
     right += link("center_PSS", "Get <B>support</B>, or find information in <B>Windows XP newsgroups</B>", QStringLiteral("hcp://page/support"));
-    right += QStringLiteral("<h2 style='margin: 4px 0 18px 0'>%1</h2>").arg(homeWord(QStringLiteral("locRightTitle2"), "Pick a task"));
+    right += QStringLiteral("<h2 style='margin: 26px 0 14px 0'>%1</h2>").arg(heading(homeWord(QStringLiteral("locRightTitle2"), "Pick a task")));
     right += link("center_UPDATE", "Keep your computer up-to-date with <B>Windows Update</B>", QStringLiteral("hcp://action/windowsupdate"));
     right += link("center_COMPAT", "Find <B>compatible hardware and software</B> for Windows XP", QStringLiteral("hcp://action/compatibility"));
     right += link("center_SR", "Undo changes to your computer with <B>System Restore</B>", QStringLiteral("hcp://page/system-restore"));
     right += link("center_TOOLS", "Use <B>Tools</B> to view your computer information and diagnose problems", QStringLiteral("hcp://page/tools"));
-    right += QStringLiteral("<h2 style='margin: 12px 0 18px 0'>%1</h2><div>%2</div>")
-                 .arg(homeWord(QStringLiteral("idNews_Title"), "Did you know?"),
+    right += QStringLiteral("<h2 style='margin: 23px 0 16px 0'>%1</h2><div>%2</div>")
+                 .arg(heading(homeWord(QStringLiteral("idNews_Title"), "Did you know?")),
                       homeWord(QStringLiteral("locNotConnected"), "").replace(QLatin1String("javascript:OpenConnWizard()"), QLatin1String("hcp://page/new-connection"))
                           .replace(QLatin1String("class='sys-link-homepage sys-font-body-bold'"), QLatin1String("style='font-weight: bold'")));
     const QString body = QStringLiteral("<table width='100%' cellspacing=0 cellpadding=0><tr>"
-                                        "<td width='40%' valign=top><h2 style='padding-left: 13px; margin: 9px 0 20px 0'>%1</h2>%2</td>"
-                                        "<td width='60%' valign=top style='padding-top: 9px'>%3</td></tr></table>")
-                             .arg(homeWord(QStringLiteral("locLeftTitle"), "Pick a Help topic"), left, right);
+                                        "<td width='40%' valign=top><h2 style='padding-left: 9px; margin: 3px 0 15px 0'>%1</h2>%2</td>"
+                                        "<td width='60%' valign=top style='padding-top: 3px'><div style='margin-left: -6px'>%3</div></td></tr></table>")
+                             .arg(heading(homeWord(QStringLiteral("locLeftTitle"), "Pick a Help topic")), left, right);
     return page(QStringLiteral("Help and Support Home Page"), body);
 }
 
 QString topicPage(const QString &node)
 {
     const Topic t = topic(node);
-    QString body = QStringLiteral("<h2 style='margin: 9px 0 14px 13px'>%1</h2><div style='margin-left: 13px'>").arg(escaped(t.title));
+    QString body = QStringLiteral("<h2 style='margin: 9px 0 14px 13px'>%1</h2><div style='margin-left: 13px'>").arg(heading(t.title));
     if (!t.description.isEmpty())
         body += QStringLiteral("<p>%1</p>").arg(escaped(t.description));
     body += QStringLiteral("<p>%1</p></div>").arg(QObject::tr("The topics of this subject are in Windows XP's help files, which this Help and Support Center does not show yet."));
@@ -291,7 +330,7 @@ QString topicPage(const QString &node)
 
 QString searchPage(const QString &query)
 {
-    QString body = QStringLiteral("<h2 style='margin: 9px 0 14px 13px'>%1</h2><div style='margin-left: 13px'>").arg(QObject::tr("Search Results"));
+    QString body = QStringLiteral("<h2 style='margin: 9px 0 14px 13px'>%1</h2><div style='margin-left: 13px'>").arg(heading(QObject::tr("Search Results")));
     int found = 0;
     const QStringList words = query.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     for (const Topic &t : topics()) {
@@ -309,7 +348,7 @@ QString searchPage(const QString &query)
 // A part of the Help and Support Center that is not ported yet: its title and what it does
 QString placeholderPage(const QString &title, const QString &what)
 {
-    return page(title, QStringLiteral("<h2 style='margin: 9px 0 14px 13px'>%1</h2><div style='margin-left: 13px'><p>%2</p></div>").arg(escaped(title), escaped(what)));
+    return page(title, QStringLiteral("<h2 style='margin: 9px 0 14px 13px'>%1</h2><div style='margin-left: 13px'><p>%2</p></div>").arg(heading(title), escaped(what)));
 }
 
 // hcp://: the pages above, made when asked for
