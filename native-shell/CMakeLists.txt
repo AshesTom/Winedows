@@ -7,6 +7,8 @@ project(explorer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+# The programs share libxpshell.so beside them in lib/, found from bin/ wherever the session is installed.
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets DBus)
 find_package(PkgConfig REQUIRED)
@@ -14,7 +16,7 @@ pkg_check_modules(XCB REQUIRED IMPORTED_TARGET xcb xcb-xkb xcb-screensaver)
 
 # Everything the shell's programs share; each program is a main() of its own over it, as XP's
 # explorer.exe, notepad.exe, calc.exe and cmd.exe are files of their own.
-add_library(xpshell STATIC
+add_library(xpshell SHARED
     src/xpapp.cpp src/xpapp.h
     src/acs.cpp src/acs.h
     src/applets.cpp src/applets.h
@@ -151,4 +153,5 @@ foreach(program explorer notepad calc cmd shimgvw winmine sol freecell spider ms
     target_compile_options(${program} PRIVATE -Wall -Wextra)
 endforeach()
 install(TARGETS explorer notepad calc cmd shimgvw winmine sol freecell spider mshearts RUNTIME DESTINATION bin)
+install(TARGETS xpshell LIBRARY DESTINATION lib)
 install(FILES xp-cmd.bashrc DESTINATION share/win4wine)

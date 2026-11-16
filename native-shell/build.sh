@@ -8,5 +8,5 @@ generator=()
 command -v ninja >/dev/null && generator=(-G Ninja)
 cmake -S "$root/native-shell" -B "$build" "${generator[@]}" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$install" >/dev/null
 cmake --build "$build" -j"${JOBS:-$(nproc)}"
-cmake --install "$build" >/dev/null
+cmake --install "$build" --strip >/dev/null
 echo "Built $install/bin/explorer"

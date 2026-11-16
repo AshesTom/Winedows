@@ -345,6 +345,16 @@ def main():
     args = parser.parse_args()
     extract(args.source.resolve(strict=True), args.output.resolve())
     write_schemes(args.output.resolve())
+    strip_code(args.output.resolve())
+
+
+def strip_code(output):
+    """Each program and library taken reduced to its resources (tools/pe_strip.py): the shell reads
+    nothing else of them, and that halves what is kept."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'tools'))
+    import pe_strip
+    saved = sum(pe_strip.strip_file(p) for p in output.rglob('*') if p.is_file() and not p.is_symlink())
+    print(f'{saved / 1e6:.0f} MB of code left out')
 
 
 if __name__ == '__main__':
